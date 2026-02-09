@@ -48,21 +48,19 @@ def get_target_blobs(bucket, area, sel_acc, store_name):
     
     target_norm = normalize_text(base_pattern)
     
-    # エリア配下のフォルダ一覧を取得して正規化比較
-    all_blobs = list(bucket.list_blobs(prefix=f"{area}/", delimiter='/'))
-    prefixes = [folder for folder in all_blobs.owner if folder] # list_blobsの副作用でフォルダ擬きを取得
-    
-    # delimiterを使ったフォルダ取得が環境により不安定なため、prefixスキャンで絞り込み
+    # エリア配下のオブジェクトを全件取得（一度にリスト化）
     full_list = list(bucket.list_blobs(prefix=f"{area}/"))
     
     matched_blobs = []
     for blob in full_list:
-        # パスの中のフォルダ部分を抽出して正規化比較
+        # パス: エリア/フォルダ名/ファイル名
         path_parts = blob.name.split('/')
-        if len(path_parts) >= 3:
+        if len(path_parts) >= 2:
+            # フォルダ名の部分（例: "店名 【A】"）を取り出して正規化
             folder_part = path_parts[1]
             if normalize_text(folder_part) == target_norm:
                 matched_blobs.append(blob)
+                
     return matched_blobs
 
 def parse_to_datetime(t_str):
@@ -363,3 +361,4 @@ def main():
 
 if __name__ == "__main__":
     main()
+
