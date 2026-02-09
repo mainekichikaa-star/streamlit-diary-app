@@ -36,7 +36,8 @@ def normalize_text(s):
 
 def get_target_blobs(bucket, area, sel_acc, store_name):
     """
-    GCS上のフォルダを全角・半角スペース問わず検索する
+    GCS上のフォルダを全角・半角スペース問わず検索し、
+    その配下にある「ファイル」のみを抽出して返す
     """
     suffix = "【A】" if "A" in sel_acc else "【B】"
     if "デリじゃ" in sel_acc:
@@ -48,17 +49,23 @@ def get_target_blobs(bucket, area, sel_acc, store_name):
     
     target_norm = normalize_text(base_pattern)
     
-    # エリア配下のオブジェクトを全件取得（一度にリスト化）
+    # prefixを指定して絞り込み（list化して確実に取得）
     full_list = list(bucket.list_blobs(prefix=f"{area}/"))
     
     matched_blobs = []
     for blob in full_list:
-        # パス: エリア/フォルダ名/ファイル名
+        # blob.name の例: "富山/M.O.M 【A】/0501_松浦.jpg"
         path_parts = blob.name.split('/')
-        if len(path_parts) >= 2:
-            # フォルダ名の部分（例: "店名 【A】"）を取り出して正規化
-            folder_part = path_parts[1]
-            if normalize_text(folder_part) == target_norm:
+        
+        # 階層が足りない（フォルダ自身など）場合はスキップ
+        if len(path_parts) < 3:
+            continue
+            
+        # フォルダ名の部分（例: "M.O.M 【A】"）を抽出して比較
+        folder_part = path_parts[1]
+        if normalize_text(folder_part) == target_norm:
+            # ファイル名が存在する場合のみ追加
+            if path_parts[2]:
                 matched_blobs.append(blob)
                 
     return matched_blobs
@@ -361,4 +368,5 @@ def main():
 
 if __name__ == "__main__":
     main()
+
 
