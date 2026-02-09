@@ -11,10 +11,10 @@ try:
     SHEET_ID = st.secrets["google_resources"]["spreadsheet_id"]
     ACCOUNT_STATUS_SHEET_ID = "1_GmWjpypap4rrPGNFYWkwcQE1SoK3QOMJlozEhkBwVM"
     
-    # バケット名を指定のものに変更
-    GCS_BUCKET_NAME = "hamamatsu-auto-poster" 
+    # 【修正】正しいバケット名に更新
+    GCS_BUCKET_NAME = "hamamatsu-auto-poster-images" 
     
-    # 【重要】シート名のルールをご提示いただいた「投稿駅ちかA」等に合わせる修正
+    # 【修正】シート名の正式名称に合わせた選択肢
     ACCOUNT_OPTIONS = ["駅ちかA", "デリじゃB", "駅ちかC", "デリじゃD"]
     SHEET_MAP = {opt: f"投稿{opt}" for opt in ACCOUNT_OPTIONS}
     
@@ -86,14 +86,13 @@ st.markdown("""
 def main():
     st.title("📸 写メ日記投稿データ管理")
 
-    # 元のタブ構成（Tab 2: 店舗アカウント状況）に戻しています
+    # 元の構成（Tab2が店舗アカウント状況）に戻しました
     tab1, tab2, tab3 = st.tabs(["📝 日記編集・画像管理", "📊 店舗アカウント状況", "🔍 データ不備チェック"])
 
     # =========================================================================
     # TAB 1: 日記編集・画像管理
     # =========================================================================
     with tab1:
-        # (中略: タブ1の内部処理はご提示いただいたものと同じです)
         with st.expander("📖 使い方（クリックで開閉）", expanded=False):
             st.markdown("### データの更新について\nこのアプリはAPI制限を避けるため、データをキャッシュしています。最新にするには右上の **「🔄 更新」** を押してください。")
             
@@ -154,7 +153,10 @@ def main():
                     all_matched_blobs = []
                     for folder in target_folders:
                         prefix = f"{sel_area}/{folder}/"
-                        all_matched_blobs.extend(list(bucket.list_blobs(prefix=prefix)))
+                        try:
+                            blobs = list(bucket.list_blobs(prefix=prefix))
+                            all_matched_blobs.extend(blobs)
+                        except: pass
                     
                     if all_matched_blobs:
                         from io import BytesIO
@@ -256,7 +258,6 @@ def main():
     # =========================================================================
     with tab2:
         st.markdown("## 📊 店舗アカウント状況")
-        # (以下、店舗アカウント状況のロジック)
         combined_data = []
         acc_summary = {}; acc_counts = {}
         try:
@@ -286,7 +287,6 @@ def main():
                             for shop in sorted(shops):
                                 st.checkbox(f"{shop}", key=f"move_{acc_code}_{area_name}_{shop}")
             
-            # (以下、移動ロジック)
             selected_shops = [{"acc": k.split('_')[1], "area": k.split('_')[2], "shop": k.split('_')[3].split(" : ")[-1]} for k, v in st.session_state.items() if k.startswith("move_") and v]
             if selected_shops:
                 if st.button("🚀 選択した店舗を【落ち店】へ移動する", type="primary", use_container_width=True):
@@ -330,7 +330,7 @@ def main():
                                     new_name = f"【落ち店】/{item['shop']}/{file_name}"
                                     bucket.copy_blob(b, bucket, new_name)
                                     b.delete()
-                            st.success("🎉 移動完了！")
+                            st.success("🎉 移動完了！ 最新データにするには更新ボタンを押してください。")
                             st.session_state.confirm_move = False
                         except Exception as e:
                             st.error(f"エラー: {e}")
