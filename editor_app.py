@@ -6,23 +6,25 @@ import urllib.parse
 import re
 from google.cloud import storage
 
+# --- 写メ日記投稿データ管理 ---
+
 # --- 1. 定数・設定 ---
 try:
-    # 日記登録用シート ID (編集用)
+    # 日記登録用シート ID
     SHEET_ID = "168X-3PJmQi07mP_FRkyhTHVtUNp5BsCM0rFgabABQUY"
-    # 写メ日記アカウント状況用 ID (閲覧・移動用)
+    # アカウント状況用 ID
     ACCOUNT_STATUS_SHEET_ID = "1hlGAbImOpxREC25JW7xeApoYC-cJEt4O2Qz9xZT2EHE"
     
-    # 正しいバケット名
+    # GCSバケット名
     GCS_BUCKET_NAME = "hamamatsu-auto-poster-images"
     
-    # ご指示通りのアカウント選択肢
+    # アカウント選択肢
     ACCOUNT_OPTIONS = ["駅ちかA", "駅ちかB", "デリじゃA", "デリじゃB", "デイズA", "デイズB"]
     SHEET_MAP = {opt: f"投稿{opt}" for opt in ACCOUNT_OPTIONS}
     
-    # 標準の列とデイズ専用の列
-    DF_COLS = ["エリア", "店名", "媒体", "投稿時間", "女の子の名前", "タイトル", "本文"]
-    DAYS_COLS = ["エリア", "店名", "投稿時間", "女の子の名前", "女の子URL", "タイトル", "本文", "投稿ステータス"]
+    # 全シート共通の列定義 (ご指示通り: 本文の次がステータス)
+    # 0:エリア, 1:店名, 2:投稿時間, 3:女の子の名前, 4:タイトル, 5:本文, 6:投稿ステータス
+    DF_COLS = ["エリア", "店名", "投稿時間", "女の子の名前", "タイトル", "本文", "投稿ステータス"]
     
 except KeyError:
     st.error("🚨 secrets.tomlの設定を確認してください。")
@@ -36,9 +38,7 @@ def normalize_text(s):
 def get_target_folder_name(sel_acc, store_name):
     """
     GCSのフォルダ命名規則に基づいた名前を生成
-    駅ちかA -> 店名 【A】
-    デリじゃA -> デリじゃ 店名 【A】
-    デイズA -> デイズ 店名 【A】
+    空白は半角。アカウント種別によって接頭辞をつける。
     """
     suffix = "【A】" if "A" in sel_acc else "【B】"
     if "デリじゃ" in sel_acc:
@@ -97,7 +97,6 @@ st.markdown("""
     .filter-panel { background-color: #f1f3f6; padding: 12px 20px; border-radius: 10px; margin-top: 5px !important; margin-bottom: 15px; border: 1px solid #d1d5db; }
     .stTextArea textarea { font-size: 15px; line-height: 1.6; }
     .diary-divider { border-bottom: 2px solid #eee; padding-bottom: 30px; margin-bottom: 30px; }
-    .stTabs [data-baseweb="tab-list"] { gap: 8px; }
     .error-card { background-color: #fff1f1; border-left: 5px solid #ff4b4b; padding: 10px; margin-bottom: 10px; border-radius: 5px; }
     </style>
 """, unsafe_allow_html=True)
@@ -111,9 +110,6 @@ def main():
     # TAB 1: 日記編集・画像管理
     # =========================================================================
     with tab1:
-        with st.expander("📖 使い方（クリックで開閉）", expanded=False):
-            st.markdown("### データの更新について\nこのアプリはAPI制限を避けるため、データをキャッシュしています。最新にするには右上の **「🔄 更新」** を押してください。")
-            
         st.markdown('<div class="filter-panel">', unsafe_allow_html=True)
         c1, c2, c3, c4, c5, c6 = st.columns([1, 1, 1, 1.5, 1, 0.8])
         
@@ -132,17 +128,16 @@ def main():
             st.warning("有効なデータがありません。")
             st.markdown('</div>', unsafe_allow_html=True)
         else:
-            is_days = "デイズ" in sel_acc
-            current_cols = DAYS_COLS if is_days else DF_COLS
-            col_limit = len(current_cols)
-
+            # データ読み込みとDF化（全アカウント共通列数）
             full_df = pd.DataFrame(data[1:])
-            full_df = full_df.iloc[:, :col_limit]
-            while full_df.shape[1] < col_limit: full_df[full_df.shape[1]] = ""
-            full_df.columns = current_cols
+            # 必要な列数（7列）に制限
+            full_df = full_df.iloc[:, :7]
+            while full_df.shape[1] < 7: full_df[full_df.shape[1]] = ""
+            full_df.columns = DF_COLS
             full_df['__row__'] = range(2, len(data) + 1)
+            
+            # 空行の除外
             full_df = full_df[full_df["店名"].str.strip() != ""]
-            full_df = full_df[full_df["女の子の名前"].str.strip() != ""]
 
             with c2:
                 areas = sorted(full_df["エリア"].unique())
@@ -162,23 +157,19 @@ def main():
             with c5:
                 st.write("")
                 if sel_store != "未選択":
-                    # 命名規則に基づいたフォルダパス
                     folder_name = get_target_folder_name(sel_acc, sel_store)
                     prefix = f"{sel_area}/{folder_name}/"
                     bucket = GCS_CLIENT.bucket(GCS_BUCKET_NAME)
-                    
                     try:
-                        all_matched_blobs = list(bucket.list_blobs(prefix=prefix))
-                        if all_matched_blobs:
+                        blobs = list(bucket.list_blobs(prefix=prefix))
+                        if blobs:
                             from io import BytesIO
                             import zipfile
                             buf = BytesIO()
                             with zipfile.ZipFile(buf, "w") as zf:
-                                for blob in all_matched_blobs:
-                                    if search_query and normalize_text(search_query) not in normalize_text(blob.name):
-                                        continue
-                                    zf.writestr(blob.name.split('/')[-1], blob.download_as_bytes())
-                            st.download_button(label="📥 画像一括保存", data=buf.getvalue(), file_name=f"{sel_store}_images.zip", mime="application/zip", use_container_width=True)
+                                for b in blobs:
+                                    zf.writestr(b.name.split('/')[-1], b.download_as_bytes())
+                            st.download_button("📥 画像一括保存", buf.getvalue(), f"{sel_store}.zip", use_container_width=True)
                         else:
                             st.button("📥 画像なし", disabled=True, use_container_width=True)
                     except:
@@ -188,9 +179,7 @@ def main():
 
             st.markdown('</div>', unsafe_allow_html=True)
 
-            if sel_store == "未選択":
-                st.info("💡 パネルからエリアと店舗を選択してください。")
-            else:
+            if sel_store != "未選択":
                 target_df = full_df[(full_df["エリア"] == sel_area) & (full_df["店名"] == sel_store)]
                 if search_query:
                     q = normalize_text(search_query)
@@ -198,12 +187,12 @@ def main():
 
                 st.subheader(f"📊 {sel_store} ({len(target_df)} 件)")
                 bucket = GCS_CLIENT.bucket(GCS_BUCKET_NAME)
-                st.write("---")
 
                 for idx, row in target_df.iterrows():
                     folder_name = get_target_folder_name(sel_acc, sel_store)
                     prefix = f"{sel_area}/{folder_name}/"
                     
+                    # 画像検索
                     current_blobs = list(bucket.list_blobs(prefix=prefix))
                     base_time = parse_to_datetime(row["投稿時間"])
                     name_norm = normalize_text(row["女の子の名前"])
@@ -218,14 +207,13 @@ def main():
                         col_txt, col_img, col_ops = st.columns([2.5, 1, 1])
 
                         with col_txt:
+                            # 列のインデックスに基づき正確に代入 (タイトル:4, 本文:5)
                             new_title = st.text_input("タイトル", row["タイトル"], key=f"ti_{idx}")
                             new_body = st.text_area("本文", row["本文"], key=f"bo_{idx}", height=400)
                             if st.button("💾 内容を保存", key=f"sv_{idx}", type="primary"):
                                 ws = GC.open_by_key(SHEET_ID).worksheet(SHEET_MAP[sel_acc])
-                                t_idx = list(current_cols).index("タイトル") + 1
-                                b_idx = list(current_cols).index("本文") + 1
-                                ws.update_cell(row['__row__'], t_idx, new_title)
-                                ws.update_cell(row['__row__'], b_idx, new_body)
+                                ws.update_cell(row['__row__'], 5, new_title) # 5列目: タイトル
+                                ws.update_cell(row['__row__'], 6, new_body)  # 6列目: 本文
                                 st.toast(f"{row['女の子の名前']} の日記を保存しました")
 
                         with col_img:
@@ -266,26 +254,23 @@ def main():
         
         data_tab2 = get_full_sheet_data(SHEET_ID, SHEET_MAP[sel_acc_tab2])
         if data_tab2 and len(data_tab2) > 1:
-            is_days_t2 = "デイズ" in sel_acc_tab2
-            cols_t2 = DAYS_COLS if is_days_t2 else DF_COLS
-            df2 = pd.DataFrame(data_tab2[1:])
-            df2 = df2.iloc[:, :len(cols_t2)]
-            while df2.shape[1] < len(cols_t2): df2[df2.shape[1]] = ""
-            df2.columns = cols_t2
+            df2 = pd.DataFrame(data_tab2[1:], columns=DF_COLS + [f"extra_{i}" for i in range(len(data_tab2[0])-7)])
             df2 = df2[df2["店名"].str.strip() != ""]
             
             bucket = GCS_CLIENT.bucket(GCS_BUCKET_NAME)
-            all_blobs = []
-            for area in df2["エリア"].unique():
-                all_blobs.extend(list(bucket.list_blobs(prefix=f"{area}/")))
             
             missing_images = []
             for _, row in df2.iterrows():
                 b_time = parse_to_datetime(row["投稿時間"])
                 n_norm = normalize_text(row["女の子の名前"])
-                s_norm = normalize_text(row["店名"])
-                store_blobs = [b.name for b in all_blobs if s_norm in normalize_text(b.name)]
-                matched = [img for img in store_blobs if (n_norm in normalize_text(img) or normalize_text(img) in n_norm) and is_time_match(b_time, img.split('/')[-1])]
+                
+                # チェック時も命名規則通りのフォルダを探す
+                folder_name = get_target_folder_name(sel_acc_tab2, row["店名"])
+                prefix = f"{row['エリア']}/{folder_name}/"
+                
+                blobs = list(bucket.list_blobs(prefix=prefix))
+                matched = [img.name for img in blobs if (n_norm in normalize_text(img.name) or normalize_text(img.name) in n_norm) and is_time_match(b_time, img.name.split('/')[-1])]
+                
                 if not matched and row["女の子の名前"].strip() != "":
                     missing_images.append(row)
             
@@ -336,7 +321,7 @@ def main():
                             for shop in sorted(shops):
                                 st.checkbox(f"{shop}", key=f"move_{acc_code}_{area_name}_{shop}")
             
-            # --- 移動機能 ---
+            # 移動機能
             selected_shops = [{"acc": k.split('_')[1], "area": k.split('_')[2], "shop": k.split('_')[3]} for k, v in st.session_state.items() if k.startswith("move_") and v]
             if selected_shops:
                 if st.button("🚀 選択した店舗を【落ち店】へ移動する", type="primary", use_container_width=True):
@@ -350,14 +335,15 @@ def main():
                             for row_idx in range(len(main_data), 0, -1):
                                 row = main_data[row_idx-1]
                                 if len(row) >= 2 and row[1] == item['shop']:
-                                    ws_stock.append_row([None, None, row[5], row[6]], value_input_option='USER_ENTERED')
+                                    # 落ち店へ追加
+                                    ws_stock.append_row([None, None, row[4], row[5]], value_input_option='USER_ENTERED')
                                     time.sleep(1.0)
                                     ws_main.delete_rows(row_idx)
                             
-                            # アカウントシート側も削除
+                            # ステータスシート側
                             status_sprs = GC.open_by_key(ACCOUNT_STATUS_SHEET_ID)
-                            acc_sheet_name = "デイズアカウント" if "デイズ" in item['acc'] else ("デリじゃアカウント" if "デリじゃ" in item['acc'] else "駅ちかアカウント")
-                            ws_link = status_sprs.worksheet(acc_sheet_name)
+                            sheet_type = "デイズアカウント" if "デイズ" in item['acc'] else ("デリじゃアカウント" if "デリじゃ" in item['acc'] else "駅ちかアカウント")
+                            ws_link = status_sprs.worksheet(sheet_type)
                             link_data = ws_link.get_all_values()
                             for row_idx in range(len(link_data), 0, -1):
                                 if len(link_data[row_idx-1]) >= 2 and link_data[row_idx-1][1] == item['shop']:
