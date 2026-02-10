@@ -84,192 +84,183 @@ def main():
 
     tab1, tab2, tab3 = st.tabs(["📝 日記編集・画像管理", "🔍 データ不備チェック", "📊 店舗アカウント状況"])
 
-   # =========================================================================
-# TAB 1: 日記編集・画像管理
-# =========================================================================
-with tab1:
-    with st.expander("📖 使い方（クリックで開閉）", expanded=False):
-        st.markdown("### データの更新について\nこのアプリはAPI制限を避けるため、データをキャッシュしています。最新にするには右上の **「🔄 更新」** を押してください。")
+    # =========================================================================
+    # TAB 1: 日記編集・画像管理
+    # =========================================================================
+    with tab1:
+        with st.expander("📖 使い方（クリックで開閉）", expanded=False):
+            st.markdown("### データの更新について\nこのアプリはAPI制限を避けるため、データをキャッシュしています。最新にするには右上の **「🔄 更新」** を押してください.")
+            
+        st.markdown('<div class="filter-panel">', unsafe_allow_html=True)
+        c1, c2, c3, c4, c5, c6 = st.columns([1, 1, 1, 1.5, 1, 0.8])
         
-    st.markdown('<div class="filter-panel">', unsafe_allow_html=True)
-    c1, c2, c3, c4, c5, c6 = st.columns([1, 1, 1, 1.5, 1, 0.8])
-    
-    with c1:
-        sel_acc = st.selectbox("👤 アカウント", ACCOUNT_OPTIONS, index=0, key="acc_tab1")
-    
-    with c6:
-        st.write("") 
-        if st.button("🔄 更新", key="btn_reload_tab1", use_container_width=True):
-            st.cache_data.clear()
-            st.rerun()
-    
-    data = get_full_sheet_data(SHEET_ID, SHEET_MAP[sel_acc])
-    
-    if not data or len(data) <= 1:
-        st.warning("有効なデータがありません。")
-        st.markdown('</div>', unsafe_allow_html=True)
-    else:
-        full_df = pd.DataFrame(data[1:])
-        full_df = full_df.iloc[:, :7]
-        while full_df.shape[1] < 7: full_df[full_df.shape[1]] = ""
-        full_df.columns = DF_COLS
-        full_df['__row__'] = range(2, len(data) + 1)
-        full_df = full_df[full_df["店名"].str.strip() != ""]
-        full_df = full_df[full_df["女の子の名前"].str.strip() != ""]
-
-        with c2:
-            areas = sorted(full_df["エリア"].unique())
-            sel_area = st.selectbox("📍 エリア", ["未選択"] + areas)
+        with c1:
+            sel_acc = st.selectbox("👤 アカウント", ACCOUNT_OPTIONS, index=0, key="acc_tab1")
         
-        sel_store = "未選択"
-        with c3:
-            if sel_area != "未選択":
-                stores = sorted(full_df[full_df["エリア"] == sel_area]["店名"].unique())
-                sel_store = st.selectbox("🏢 店舗", ["未選択"] + stores)
-            else:
-                st.selectbox("🏢 店舗", ["エリアを選択"], disabled=True)
-                
-        with c4:
-            search_query = st.text_input("🔍 検索", placeholder="キーワード入力...")
-
-        with c5:
-            st.write("")
-            if sel_store != "未選択":
-                store_data_for_zip = full_df[(full_df["エリア"] == sel_area) & (full_df["店名"] == sel_store)]
-                target_folders = set()
-                for _, r in store_data_for_zip.iterrows():
-                    m_type = str(r["媒体"]).strip()
-                    if m_type == "デリじゃ":
-                        target_folders.add(f"デリじゃ {sel_store}")
-                    else:
-                        target_folders.add(sel_store)
-
-                bucket = GCS_CLIENT.bucket(GCS_BUCKET_NAME)
-                all_matched_blobs = []
-                
-                for folder in target_folders:
-                    prefix = f"{sel_area}/{folder}/"
-                    all_matched_blobs.extend(list(bucket.list_blobs(prefix=prefix)))
-                
-                if all_matched_blobs:
-                    from io import BytesIO
-                    import zipfile
-                    buf = BytesIO()
-                    with zipfile.ZipFile(buf, "w") as zf:
-                        for blob in all_matched_blobs:
-                            if search_query and normalize_text(search_query) not in normalize_text(blob.name):
-                                continue
-                            try:
-                                f_bytes = blob.download_as_bytes()
-                                arc_name = blob.name.replace(f"{sel_area}/", "")
-                                zf.writestr(arc_name, f_bytes)
-                            except: pass
-                    
-                    st.download_button(
-                        label="📥 画像一括保存",
-                        data=buf.getvalue(),
-                        file_name=f"{sel_store}_images.zip",
-                        mime="application/zip",
-                        use_container_width=True
-                    )
-                else:
-                    st.button("📥 画像なし", disabled=True, use_container_width=True)
-            else:
-                st.button("📥 店舗選択", disabled=True, use_container_width=True)
-
-        st.markdown('</div>', unsafe_allow_html=True)
-
-        if sel_store == "未選択":
-            st.info("💡 パネルからエリアと店舗を選択してください。")
+        with c6:
+            st.write("") 
+            if st.button("🔄 更新", key="btn_reload_tab1", use_container_width=True):
+                st.cache_data.clear()
+                st.rerun()
+        
+        data = get_full_sheet_data(SHEET_ID, SHEET_MAP[sel_acc])
+        
+        if not data or len(data) <= 1:
+            st.warning("有効なデータがありません。")
+            st.markdown('</div>', unsafe_allow_html=True)
         else:
-            target_df = full_df[(full_df["エリア"] == sel_area) & (full_df["店名"] == sel_store)]
-            if search_query:
-                q = normalize_text(search_query)
-                target_df = target_df[
-                    target_df["女の子の名前"].apply(normalize_text).str.contains(q) |
-                    target_df["タイトル"].apply(normalize_text).str.contains(q) |
-                    target_df["本文"].apply(normalize_text).str.contains(q) |
-                    target_df["投稿時間"].str.contains(q)
-                ]
+            full_df = pd.DataFrame(data[1:])
+            full_df = full_df.iloc[:, :7]
+            while full_df.shape[1] < 7: full_df[full_df.shape[1]] = ""
+            full_df.columns = DF_COLS
+            full_df['__row__'] = range(2, len(data) + 1)
+            full_df = full_df[full_df["店名"].str.strip() != ""]
+            full_df = full_df[full_df["女の子の名前"].str.strip() != ""]
 
-            st.subheader(f"📊 {sel_store} ({len(target_df)} 件)")
-            bucket = GCS_CLIENT.bucket(GCS_BUCKET_NAME)
-            st.write("---")
-
-            for idx, row in target_df.iterrows():
-                media_type = str(row["媒体"]).strip()
-                target_folder = f"デリじゃ {sel_store}" if media_type == "デリじゃ" else sel_store
-                
-                prefix = f"{sel_area}/{target_folder}/"
-                current_blobs = list(bucket.list_blobs(prefix=prefix))
-                
-                base_time = parse_to_datetime(row["投稿時間"])
-                name_norm = normalize_text(row["女の子の名前"])
-                matched_files = [
-                    img.name for img in current_blobs 
-                    if (name_norm in normalize_text(img.name.split('/')[-1]) or normalize_text(img.name.split('/')[-1]) in name_norm) 
-                    and is_time_match(base_time, img.name.split('/')[-1])
-                ]
-
-                with st.container():
-                    st.markdown(f"#### 👤 {row['女の子の名前']} / ⏰ {row['投稿時間']} / 📱 {row['媒体']}")
-                    col_txt, col_img, col_ops = st.columns([2.5, 1, 1])
-
-                    with col_txt:
-                        # --- 【変更箇所】投稿時間の入力欄を追加 ---
-                        new_time = st.text_input("投稿時間", row["投稿時間"], key=f"tm_{idx}")
-                        new_title = st.text_input("タイトル", row["タイトル"], key=f"ti_{idx}")
-                        new_body = st.text_area("本文", row["本文"], key=f"bo_{idx}", height=300)
-
-                        if st.button("💾 内容を保存", key=f"sv_{idx}", type="primary"):
-                            ws = GC.open_by_key(SHEET_ID).worksheet(SHEET_MAP[sel_acc])
-                            
-                            # --- 【変更箇所】スプレッドシートの更新（投稿時間を含む） ---
-                            # ※投稿時間が左から5番目の列の場合。違う場合は「5」を書き換えてください。
-                            ws.update_cell(row['__row__'], 5, new_time)
-                            ws.update_cell(row['__row__'], 6, new_title)
-                            ws.update_cell(row['__row__'], 7, new_body)
-
-                            # --- 【変更箇所】投稿時間が変わった場合、GCSの画像もリネームする ---
-                            if new_time != row["投稿時間"] and matched_files:
-                                for old_path in matched_files:
-                                    old_filename = old_path.split('/')[-1]
-                                    # ファイル名の中の旧時間を新時間に置換
-                                    new_filename = old_filename.replace(row["投稿時間"], new_time)
-                                    new_path = f"{sel_area}/{target_folder}/{new_filename}"
-                                    
-                                    # GCS上でのリネーム処理（コピーして削除）
-                                    old_blob = bucket.blob(old_path)
-                                    bucket.copy_blob(old_blob, bucket, new_path)
-                                    old_blob.delete()
-                            
-                            st.toast(f"{row['女の子の名前']} の日記を更新しました")
-                            st.rerun()
-
-                    with col_img:
-                        if matched_files:
-                            for m_path in matched_files:
-                                st.image(get_cached_url(m_path), use_container_width=True)
-                                with st.popover("🗑️ 削除"):
-                                    if st.button("実行する", key=f"del_{idx}_{m_path}"):
-                                        bucket.blob(m_path).delete()
-                                        st.rerun()
-                        else:
-                            st.error("🚨 画像なし")
-
-                    with col_ops:
-                        up_file = st.file_uploader("📥 画像追加", type=["jpg","png","jpeg"], key=f"up_{idx}")
-                        if up_file:
-                            if st.button("🚀 アップ", key=f"u_btn_{idx}"):
-                                ext = up_file.name.split('.')[-1]
-                                # アップロード時も編集後の時間を反映
-                                final_time = new_time if new_time else row['投稿時間']
-                                new_blob_name = f"{sel_area}/{target_folder}/{final_time}_{row['女の子の名前']}.{ext}"
-                                blob = bucket.blob(new_blob_name)
-                                blob.upload_from_string(up_file.getvalue(), content_type=up_file.type)
-                                st.rerun()
+            with c2:
+                areas = sorted(full_df["エリア"].unique())
+                sel_area = st.selectbox("📍 エリア", ["未選択"] + areas)
+            
+            sel_store = "未選択"
+            with c3:
+                if sel_area != "未選択":
+                    stores = sorted(full_df[full_df["エリア"] == sel_area]["店名"].unique())
+                    sel_store = st.selectbox("🏢 店舗", ["未選択"] + stores)
+                else:
+                    st.selectbox("🏢 店舗", ["エリアを選択"], disabled=True)
                     
-                    st.markdown("<div class='diary-divider'></div>", unsafe_allow_html=True)
+            with c4:
+                search_query = st.text_input("🔍 検索", placeholder="キーワード入力...")
+
+            with c5:
+                st.write("")
+                if sel_store != "未選択":
+                    store_data_for_zip = full_df[(full_df["エリア"] == sel_area) & (full_df["店名"] == sel_store)]
+                    target_folders = set()
+                    for _, r in store_data_for_zip.iterrows():
+                        m_type = str(r["媒体"]).strip()
+                        if m_type == "デリじゃ":
+                            target_folders.add(f"デリじゃ {sel_store}")
+                        else:
+                            target_folders.add(sel_store)
+
+                    bucket = GCS_CLIENT.bucket(GCS_BUCKET_NAME)
+                    all_matched_blobs = []
+                    
+                    for folder in target_folders:
+                        prefix = f"{sel_area}/{folder}/"
+                        all_matched_blobs.extend(list(bucket.list_blobs(prefix=prefix)))
+                    
+                    if all_matched_blobs:
+                        from io import BytesIO
+                        import zipfile
+                        buf = BytesIO()
+                        with zipfile.ZipFile(buf, "w") as zf:
+                            for blob in all_matched_blobs:
+                                if search_query and normalize_text(search_query) not in normalize_text(blob.name):
+                                    continue
+                                try:
+                                    f_bytes = blob.download_as_bytes()
+                                    arc_name = blob.name.replace(f"{sel_area}/", "")
+                                    zf.writestr(arc_name, f_bytes)
+                                except: pass
+                        
+                        st.download_button(
+                            label="📥 画像一括保存",
+                            data=buf.getvalue(),
+                            file_name=f"{sel_store}_images.zip",
+                            mime="application/zip",
+                            use_container_width=True
+                        )
+                    else:
+                        st.button("📥 画像なし", disabled=True, use_container_width=True)
+                else:
+                    st.button("📥 店舗選択", disabled=True, use_container_width=True)
+
+            st.markdown('</div>', unsafe_allow_html=True)
+
+            if sel_store == "未選択":
+                st.info("💡 パネルからエリアと店舗を選択してください。")
+            else:
+                target_df = full_df[(full_df["エリア"] == sel_area) & (full_df["店名"] == sel_store)]
+                if search_query:
+                    q = normalize_text(search_query)
+                    target_df = target_df[
+                        target_df["女の子の名前"].apply(normalize_text).str.contains(q) |
+                        target_df["タイトル"].apply(normalize_text).str.contains(q) |
+                        target_df["本文"].apply(normalize_text).str.contains(q) |
+                        target_df["投稿時間"].str.contains(q)
+                    ]
+
+                st.subheader(f"📊 {sel_store} ({len(target_df)} 件)")
+                bucket = GCS_CLIENT.bucket(GCS_BUCKET_NAME)
+                st.write("---")
+
+                for idx, row in target_df.iterrows():
+                    media_type = str(row["媒体"]).strip()
+                    target_folder = f"デリじゃ {sel_store}" if media_type == "デリじゃ" else sel_store
+                    
+                    prefix = f"{sel_area}/{target_folder}/"
+                    current_blobs = list(bucket.list_blobs(prefix=prefix))
+                    
+                    base_time = parse_to_datetime(row["投稿時間"])
+                    name_norm = normalize_text(row["女の子の名前"])
+                    matched_files = [
+                        img.name for img in current_blobs 
+                        if (name_norm in normalize_text(img.name.split('/')[-1]) or normalize_text(img.name.split('/')[-1]) in name_norm) 
+                        and is_time_match(base_time, img.name.split('/')[-1])
+                    ]
+
+                    with st.container():
+                        st.markdown(f"#### 👤 {row['女の子の名前']} / ⏰ {row['投稿時間']} / 📱 {row['媒体']}")
+                        col_txt, col_img, col_ops = st.columns([2.5, 1, 1])
+
+                        with col_txt:
+                            new_time = st.text_input("投稿時間", row["投稿時間"], key=f"tm_{idx}")
+                            new_title = st.text_input("タイトル", row["タイトル"], key=f"ti_{idx}")
+                            new_body = st.text_area("本文", row["本文"], key=f"bo_{idx}", height=300)
+
+                            if st.button("💾 内容を保存", key=f"sv_{idx}", type="primary"):
+                                ws = GC.open_by_key(SHEET_ID).worksheet(SHEET_MAP[sel_acc])
+                                ws.update_cell(row['__row__'], 5, new_time)
+                                ws.update_cell(row['__row__'], 6, new_title)
+                                ws.update_cell(row['__row__'], 7, new_body)
+
+                                if new_time != row["投稿時間"] and matched_files:
+                                    for old_path in matched_files:
+                                        old_filename = old_path.split('/')[-1]
+                                        new_filename = old_filename.replace(row["投稿時間"], new_time)
+                                        new_path = f"{sel_area}/{target_folder}/{new_filename}"
+                                        old_blob = bucket.blob(old_path)
+                                        bucket.copy_blob(old_blob, bucket, new_path)
+                                        old_blob.delete()
+                                
+                                st.toast(f"{row['女の子の名前']} の日記を更新しました")
+                                st.rerun()
+
+                        with col_img:
+                            if matched_files:
+                                for m_path in matched_files:
+                                    st.image(get_cached_url(m_path), use_container_width=True)
+                                    with st.popover("🗑️ 削除"):
+                                        if st.button("実行する", key=f"del_{idx}_{m_path}"):
+                                            bucket.blob(m_path).delete()
+                                            st.rerun()
+                            else:
+                                st.error("🚨 画像なし")
+
+                        with col_ops:
+                            up_file = st.file_uploader("📥 画像追加", type=["jpg","png","jpeg"], key=f"up_{idx}")
+                            if up_file:
+                                if st.button("🚀 アップ", key=f"u_btn_{idx}"):
+                                    ext = up_file.name.split('.')[-1]
+                                    final_time = new_time if new_time else row['投稿時間']
+                                    new_blob_name = f"{sel_area}/{target_folder}/{final_time}_{row['女の子の名前']}.{ext}"
+                                    blob = bucket.blob(new_blob_name)
+                                    blob.upload_from_string(up_file.getvalue(), content_type=up_file.type)
+                                    st.rerun()
+                        
+                        st.markdown("<div class='diary-divider'></div>", unsafe_allow_html=True)
                         
     # =========================================================================
     # TAB 2: データ不備チェック
@@ -409,5 +400,6 @@ with tab1:
 
 if __name__ == "__main__":
     main()
+
 
 
