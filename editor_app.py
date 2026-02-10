@@ -150,13 +150,20 @@ def main():
             st.warning("有効なデータがありません。")
             st.markdown('</div>', unsafe_allow_html=True)
         else:
-            full_df = pd.DataFrame(data[1:])
-            full_df = full_df.iloc[:, :7]
+            # --- 【修正点1】デイズの列ズレ補正ロジック ---
+            raw_df = pd.DataFrame(data[1:])
+            if "デイズ" in sel_acc:
+                # デイズは 0:エリア, 1:店名, 2:投稿時間, 3:名前, 4:URL(skip), 5:タイトル, 6:本文, 7:ステータス
+                # 4列目を除外して取得
+                full_df = raw_df[[0, 1, 2, 3, 5, 6, 7]]
+            else:
+                full_df = raw_df.iloc[:, :7]
+            
             while full_df.shape[1] < 7: full_df[full_df.shape[1]] = ""
             full_df.columns = DF_COLS
             full_df['__row__'] = range(2, len(data) + 1)
             full_df = full_df[full_df["店名"].str.strip() != ""]
-
+            
             with c2:
                 areas = sorted(full_df["エリア"].unique())
                 sel_area = st.selectbox("📍 エリア", ["未選択"] + areas)
@@ -218,14 +225,17 @@ def main():
                         col_txt, col_img, col_ops = st.columns([2.5, 1, 1])
 
                         with col_txt:
-                            new_title = st.text_input("タイトル", row["タイトル"], key=f"ti_{idx}")
-                            new_body = st.text_area("本文", row["本文"], key=f"bo_{idx}", height=400)
-                            if st.button("💾 内容を保存", key=f"sv_{idx}", type="primary"):
-                                ws = GC.open_by_key(SHEET_ID).worksheet(SHEET_MAP[sel_acc])
-                                ws.update_cell(row['__row__'], 5, new_title) # 5列目: タイトル
-                                ws.update_cell(row['__row__'], 6, new_body)  # 6列目: 本文
-                                st.toast(f"{row['女の子の名前']} の日記を保存しました")
-
+                        new_title = st.text_input("タイトル", row["タイトル"], key=f"ti_{idx}")
+                        new_body = st.text_area("本文", row["本文"], key=f"bo_{idx}", height=400)
+                        
+                        if st.button("💾 内容を保存", key=f"sv_{idx}", type="primary"):
+                            ws = GC.open_by_key(SHEET_ID).worksheet(SHEET_MAP[sel_acc])
+                            # --- 【修正点2】デイズなら書き込み列を+1する ---
+                            offset = 1 if "デイズ" in sel_acc else 0
+                            ws.update_cell(row['__row__'], 5 + offset, new_title) # タイトル
+                            ws.update_cell(row['__row__'], 6 + offset, new_body)  # 本文
+                            st.toast(f"{row['女の子の名前']} の日記を保存しました")
+                            
                         with col_img:
                             if matched_files:
                                 for m_path in matched_files:
@@ -273,7 +283,14 @@ def main():
         
         data_tab2 = get_full_sheet_data(SHEET_ID, SHEET_MAP[sel_acc_tab2])
         if data_tab2 and len(data_tab2) > 1:
-            df2 = pd.DataFrame(data_tab2[1:], columns=DF_COLS + [f"extra_{i}" for i in range(len(data_tab2[0])-7)])
+            # --- 【修正点3】Tab2側もデイズの列ズレを補正 ---
+            raw_df2 = pd.DataFrame(data_tab2[1:])
+            if "デイズ" in sel_acc_tab2:
+                df2 = raw_df2[[0, 1, 2, 3, 5, 6, 7]]
+            else:
+                df2 = raw_df2.iloc[:, :7]
+            
+            df2.columns = DF_COLS
             df2 = df2[df2["店名"].str.strip() != ""]
             bucket = GCS_CLIENT.bucket(GCS_BUCKET_NAME)
             
@@ -368,5 +385,6 @@ def main():
 
 if __name__ == "__main__":
     main()
+
 
 
