@@ -224,17 +224,17 @@ def main():
                         st.markdown(f"#### 👤 {row['女の子の名前']} / ⏰ {row['投稿時間']} / 📱 {sel_acc}")
                         col_txt, col_img, col_ops = st.columns([2.5, 1, 1])
 
-                        with col_txt:
-                        new_title = st.text_input("タイトル", row["タイトル"], key=f"ti_{idx}")
-                        new_body = st.text_area("本文", row["本文"], key=f"bo_{idx}", height=400)
-                        
-                        if st.button("💾 内容を保存", key=f"sv_{idx}", type="primary"):
-                            ws = GC.open_by_key(SHEET_ID).worksheet(SHEET_MAP[sel_acc])
-                            # --- 【修正点2】デイズなら書き込み列を+1する ---
-                            offset = 1 if "デイズ" in sel_acc else 0
-                            ws.update_cell(row['__row__'], 5 + offset, new_title) # タイトル
-                            ws.update_cell(row['__row__'], 6 + offset, new_body)  # 本文
-                            st.toast(f"{row['女の子の名前']} の日記を保存しました")
+                       with col_txt:
+                            new_title = st.text_input("タイトル", row["タイトル"], key=f"ti_{idx}")
+                            new_body = st.text_area("本文", row["本文"], key=f"bo_{idx}", height=400)
+                            
+                            if st.button("💾 内容を保存", key=f"sv_{idx}", type="primary"):
+                                ws = GC.open_by_key(SHEET_ID).worksheet(SHEET_MAP[sel_acc])
+                                # デイズならURL列がある分、書き込み先を+1する
+                                offset = 1 if "デイズ" in sel_acc else 0
+                                ws.update_cell(row['__row__'], 5 + offset, new_title) # タイトル
+                                ws.update_cell(row['__row__'], 6 + offset, new_body)  # 本文
+                                st.toast(f"{row['女の子の名前']} の日記を保存しました")
                             
                         with col_img:
                             if matched_files:
@@ -385,6 +385,7 @@ def main():
 
 if __name__ == "__main__":
     main()
+
 
 
 
