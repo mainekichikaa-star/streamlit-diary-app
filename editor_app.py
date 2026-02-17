@@ -383,72 +383,66 @@ def main():
     # TAB 3: 店舗アカウント状況
     # =========================================================================
     with tab3:
-        st.markdown("## 📊 店舗アカウント状況")
-        combined_data = []
-        acc_summary = {}; acc_counts = {}
+        st.markdown("## 📊 店舗アカウント状況 (マスター参照)")
+        
+        # アカウント管理シートの読み込み
+        # 浜松仕様のシート名定義
+        status_sheets = {
+            "駅ちか": "駅ちかアカウント",
+            "デリじゃ": "デリじゃアカウント",
+            "デイズ": "デイズアカウント"
+        }
+
         try:
-            for opt in ACCOUNT_OPTIONS:
-                rows = get_full_sheet_data(SHEET_ID, SHEET_MAP[opt])
-                if rows and len(rows) > 1:
-                    for i, r in enumerate(rows[1:]):
-                        if any(str(c).strip() for c in r[:7]):
-                            combined_data.append([opt, i+2] + [r[j] if j<len(r) else "" for j in range(7)])
-                            a, s = str(r[0]).strip(), str(r[1]).strip()
-                            acc_counts[opt] = acc_counts.get(opt, 0) + 1
-                            if opt not in acc_summary: acc_summary[opt] = {}
-                            if a not in acc_summary[opt]: acc_summary[opt][a] = set()
-                            acc_summary[opt][a].add(s)
-        except: pass
-
-        if combined_data:
-            for acc_code in ACCOUNT_OPTIONS:
-                count = acc_counts.get(acc_code, 0)
-                st.markdown(f"### 👤 投稿{acc_code} `{count} 件`")
-                if acc_code in acc_summary:
-                    areas = acc_summary[acc_code]
-                    area_cols = st.columns(len(areas) if len(areas) > 0 else 1)
-                    for idx, (area_name, shops) in enumerate(areas.items()):
-                        with area_cols[idx]:
-                            st.info(f"📍 **{area_name}**")
-                            for shop in sorted(shops):
-                                st.checkbox(f"{shop}", key=f"move_{acc_code}_{area_name}_{shop}")
+            # 管理シートから全データを取得
+            status_sprs = GC.open_by_key(ACCOUNT_STATUS_SHEET_ID)
             
-            selected_shops = [{"acc": k.split('_')[1], "area": k.split('_')[2], "shop": k.split('_')[3]} for k, v in st.session_state.items() if k.startswith("move_") and v]
-            if selected_shops:
-                if st.button("🚀 選択した店舗を【落ち店】へ移動する", type="primary", use_container_width=True):
-                    import time
-                    try:
-                        sh_stock = GC.open_by_key("1e-iLey43A1t0bIBoijaXP55t5fjONdb0ODiTS53beqM")
-                        ws_stock = sh_stock.sheet1
-                        for item in selected_shops:
-                            ws_main = GC.open_by_key(SHEET_ID).worksheet(SHEET_MAP[item['acc']])
-                            main_data = ws_main.get_all_values()
-                            for row_idx in range(len(main_data), 0, -1):
-                                row = main_data[row_idx-1]
-                                if len(row) >= 2 and row[1] == item['shop']:
-                                    # タイトル:4, 本文:5 (0始まり)
-                                    ws_stock.append_row([None, None, row[4], row[5]], value_input_option='USER_ENTERED')
-                                    time.sleep(1.0)
-                                    ws_main.delete_rows(row_idx)
-                            
-                            status_sprs = GC.open_by_key(ACCOUNT_STATUS_SHEET_ID)
-                            sheet_type = "デイズアカウント" if "デイズ" in item['acc'] else ("デリじゃアカウント" if "デリじゃ" in item['acc'] else "駅ちかアカウント")
-                            ws_link = status_sprs.worksheet(sheet_type)
-                            link_data = ws_link.get_all_values()
-                            for row_idx in range(len(link_data), 0, -1):
-                                if len(link_data[row_idx-1]) >= 2 and link_data[row_idx-1][1] == item['shop']:
-                                    ws_link.delete_rows(row_idx)
-                                    break
-                        st.success("🎉 移動完了！")
-                    except Exception as e:
-                        st.error(f"エラー: {e}")
+            # 各媒体（駅ちか、デリじゃ、デイズ）ごとにカラムを分けて表示
+            m1, m2, m3 = st.columns(3)
+            media_cols = {"駅ちか": m1, "デリじゃ": m2, "デイズ": m3}
 
+            for media_name, ws_name in status_sheets.items():
+                with media_cols[media_name]:
+                    st.subheader(f"📱 {media_name}")
+                    ws_link = status_sprs.worksheet(ws_name)
+                    link_data = ws_link.get_all_values()
+                    
+                    if len(link_data) <= 1:
+                        st.caption("登録店舗なし")
+                        continue
+
+                    # 1:アカウント(A/B), 2:店舗名, 0:エリア (シート構造に合わせる)
+                    # 浜松の管理シート構造: 0:エリア, 1:店舗名, 2:アカウント状況など
+                    df_status = pd.DataFrame(link_data[1:])
+                    
+                    # 各アカウント(A/B)ごとにグループ化して表示
+                    for acc_suffix in ["A", "B"]:
+                        acc_full_name = f"{media_name}{acc_suffix}"
+                        # 投稿シート(SHEET_MAP)から現在の投稿件数を取得
+                        current_rows = get_full_sheet_data(SHEET_ID, SHEET_MAP.get(acc_full_name, ""))
+                        count = len(current_rows) - 1 if current_rows else 0
+                        
+                        st.markdown(f"**【{acc_suffix}】** (`{count}件`) ")
+                        
+                        # 管理シート内で、この媒体のAまたはBに該当する店舗を抽出
+                        # ※管理シート側の「どのアカウントか」を判定する列インデックスに合わせて調整してください
+                        # ここでは仮に2列目に「A」や「B」が入っている、もしくは判定ロジックがあるものとします
+                        matched_shops = []
+                        for r in link_data[1:]:
+                            if len(r) >= 2:
+                                # 管理シートの運用に合わせて、ここでA/Bの振り分けを判定
+                                # 例: 店舗名や備考欄から判定、あるいは単純にそのシートにある全店舗を表示
+                                matched_shops.append(f"• {r[0]} / {r[1]}")
+                        
+                        if matched_shops:
+                            with st.expander(f"{acc_full_name} の店舗一覧"):
+                                for s in sorted(matched_shops):
+                                    st.write(s)
+                        st.divider()
+
+        except Exception as e:
+            st.error(f"アカウント状況の取得に失敗しました: {e}")
+
+# --- スクリプト末尾 ---
 if __name__ == "__main__":
     main()
-
-
-
-
-
-
-
