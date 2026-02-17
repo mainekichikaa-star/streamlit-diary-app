@@ -399,47 +399,46 @@ def main():
                 with cols[i]:
                     st.markdown(f"### 📱 {media_name}")
                     
-                    # --- 【修正】写メ日記登録シートから実数を集計 ---
+                    # --- 高速集計ロジック ---
                     for suffix in ["A", "B"]:
                         acc_key = f"{media_name}{suffix}"
-                        # SHEET_MAPから対象シートの全データを取得
                         raw_data = get_full_sheet_data(SHEET_ID, SHEET_MAP.get(acc_key, ""))
                         
+                        actual_count = 0
                         if raw_data and len(raw_data) > 1:
-                            # 2行目以降で「店名（1列目）」が入力されている行のみをカウント
-                            valid_rows = [r for r in raw_data[1:] if len(r) > 1 and str(r[1]).strip() != ""]
-                            actual_count = len(valid_rows)
-                        else:
-                            actual_count = 0
+                            # リストをPandas DataFrameに変換して一括集計（これが一番速いです）
+                            temp_df = pd.DataFrame(raw_data[1:])
+                            if not temp_df.empty:
+                                # 1列目（B列:店名）が空でない行をカウント
+                                # 念のため、列が存在するか確認してからカウント
+                                if temp_df.shape[1] > 1:
+                                    actual_count = temp_df[temp_df[1].str.strip() != ""].shape[0]
                         
                         st.write(f"{acc_key}")
                         st.markdown(f"## {actual_count} 件")
                     
                     st.divider()
 
-                    # --- 【修正】店舗リストを最初から全表示 ---
+                    # --- 店舗リストの表示 ---
                     st.markdown("##### 📍 登録店舗一覧")
                     ws_link = status_sprs.worksheet(ws_name)
                     link_data = ws_link.get_all_values()
                     
                     if len(link_data) > 1:
-                        # エリアごとにグループ化
-                        area_map = {}
-                        for r in link_data[1:]:
-                            if len(r) >= 2:
-                                area, shop = r[0].strip(), r[1].strip()
-                                if not area: area = "その他"
-                                if area not in area_map: area_map[area] = []
-                                area_map[area].append(shop)
-                        
-                        # エリア名と店舗名をプレーンテキストで表示
-                        for area_name, shops in area_map.items():
-                            st.markdown(f"**【{area_name}】**")
-                            for s in sorted(shops):
-                                st.text(f"  • {s}")
-                            st.write("") # スペース
+                        # DataFrameで一気に処理して表示を安定させる
+                        link_df = pd.DataFrame(link_data[1:])
+                        if not link_df.empty:
+                            # 0:エリア, 1:店名
+                            area_groups = link_df.groupby(0)
+                            for area_name, group in area_groups:
+                                st.markdown(f"**【{area_name}】**")
+                                for shop_name in sorted(group[1].tolist()):
+                                    if shop_name.strip():
+                                        st.text(f"  • {shop_name}")
+                                st.write("")
                     else:
                         st.caption("管理シートに登録がありません")
 
         except Exception as e:
-            st.error(f"データの取得中にエラーが発生しました: {e}")
+            # 真っ白になるのを防ぐため、エラー内容を画面に出す
+            st.error(f"表示エラーが発生しました。データ量が多い可能性があります。: {e}")
