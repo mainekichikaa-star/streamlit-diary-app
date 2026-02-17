@@ -225,17 +225,39 @@ def main():
                         col_txt, col_img, col_ops = st.columns([2.5, 1, 1])
 
                         with col_txt:
-                            # この下の行のインデント（半角スペース）が重要です
+                            # --- 投稿時間・タイトル・本文の入力 ---
+                            new_time = st.text_input("投稿時間", row["投稿時間"], key=f"tm_{idx}")
                             new_title = st.text_input("タイトル", row["タイトル"], key=f"ti_{idx}")
                             new_body = st.text_area("本文", row["本文"], key=f"bo_{idx}", height=400)
                             
                             if st.button("💾 内容を保存", key=f"sv_{idx}", type="primary"):
                                 ws = GC.open_by_key(SHEET_ID).worksheet(SHEET_MAP[sel_acc])
-                                # デイズならURL列がある分、書き込み先を+1する
+                                
+                                # 1. GCS画像のリネーム（投稿時間が変更された場合）
+                                if new_time != row["投稿時間"] and matched_files:
+                                    for old_path in matched_files:
+                                        folder_part = "/".join(old_path.split('/')[:-1]) + "/"
+                                        old_filename = old_path.split('/')[-1]
+                                        # ファイル名の先頭の時間を置換 (例: 0900_名前.jpg -> 1000_名前.jpg)
+                                        new_filename = old_filename.replace(row["投稿時間"], new_time, 1)
+                                        new_path = f"{folder_part}{new_filename}"
+                                        
+                                        # GCS上でコピー＆削除（リネーム）
+                                        bucket.copy_blob(bucket.blob(old_path), bucket, new_path)
+                                        bucket.blob(old_path).delete()
+
+                                # 2. スプレッドシートの更新
+                                # 投稿時間は共通で3列目(C列)
+                                ws.update_cell(row['__row__'], 3, new_time)
+                                
+                                # デイズならURL列がある分、書き込み先を+1する (タイトル:5+offset, 本文:6+offset)
                                 offset = 1 if "デイズ" in sel_acc else 0
-                                ws.update_cell(row['__row__'], 5 + offset, new_title) # タイトル
-                                ws.update_cell(row['__row__'], 6 + offset, new_body)  # 本文
-                                st.toast(f"{row['女の子の名前']} の日記を保存しました")
+                                ws.update_cell(row['__row__'], 5 + offset, new_title)
+                                ws.update_cell(row['__row__'], 6 + offset, new_body)
+                                
+                                st.toast(f"{row['女の子の名前']} のデータを更新しました")
+                                st.cache_data.clear()
+                                st.rerun()
 
                         with col_img:
                             if matched_files:
@@ -244,6 +266,7 @@ def main():
                                     with st.popover("🗑️ 削除"):
                                         if st.button("実行する", key=f"del_{idx}_{m_path}"):
                                             bucket.blob(m_path).delete()
+                                            st.cache_data.clear()
                                             st.rerun()
                             else:
                                 st.error("🚨 画像なし")
@@ -252,17 +275,17 @@ def main():
                             up_file = st.file_uploader("📥 画像追加", type=["jpg","png","jpeg"], key=f"up_{idx}")
                             if up_file:
                                 if st.button("🚀 アップ", key=f"u_btn_{idx}"):
-                                    # フォルダ名が動的なため、既存ファイルがある場合はそのパス、ない場合は標準形式で生成
                                     if store_blobs:
                                         folder_path = "/".join(store_blobs[0].name.split('/')[:-1]) + "/"
                                     else:
-                                        # フォルダが空の場合のデフォルト（半角スペース）
                                         suffix = "【A】" if "A" in sel_acc else "【B】"
                                         f_name = f"デリじゃ {sel_store} {suffix}" if "デリじゃ" in sel_acc else (f"デイズ {sel_store} {suffix}" if "デイズ" in sel_acc else f"{sel_store} {suffix}")
                                         folder_path = f"{sel_area}/{f_name}/"
                                     
-                                    blob_name = f"{folder_path}{row['投稿時間']}_{row['女の子の名前']}.jpg"
+                                    # 現在入力されている時間でアップロード
+                                    blob_name = f"{folder_path}{new_time}_{row['女の子の名前']}.jpg"
                                     bucket.blob(blob_name).upload_from_string(up_file.getvalue(), content_type="image/jpeg")
+                                    st.cache_data.clear()
                                     st.rerun()
                         
                         st.markdown("<div class='diary-divider'></div>", unsafe_allow_html=True)
@@ -386,6 +409,7 @@ def main():
 
 if __name__ == "__main__":
     main()
+
 
 
 
