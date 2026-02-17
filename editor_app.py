@@ -379,13 +379,12 @@ def main():
             else:
                 st.success("✅ 全ての日記に画像が紐付いています！")
 
-    # =========================================================================
+   # =========================================================================
     # TAB 3: 店舗アカウント状況
     # =========================================================================
     with tab3:
         st.markdown("## 📊 店舗アカウント状況")
         
-        # 管理シートの定義
         status_sheets = {
             "駅ちか": "駅ちかアカウント",
             "デリじゃ": "デリじゃアカウント",
@@ -394,35 +393,37 @@ def main():
 
         try:
             status_sprs = GC.open_by_key(ACCOUNT_STATUS_SHEET_ID)
-            
-            # 媒体ごとに横並びで表示
             cols = st.columns(3)
             
             for i, (media_name, ws_name) in enumerate(status_sheets.items()):
                 with cols[i]:
                     st.markdown(f"### 📱 {media_name}")
                     
-                    # --- 投稿件数の取得 ---
-                    # Aアカウント
-                    rows_a = get_full_sheet_data(SHEET_ID, SHEET_MAP.get(f"{media_name}A", ""))
-                    count_a = len(rows_a) - 1 if rows_a else 0
-                    
-                    # Bアカウント
-                    rows_b = get_full_sheet_data(SHEET_ID, SHEET_MAP.get(f"{media_name}B", ""))
-                    count_b = len(rows_b) - 1 if rows_b else 0
-                    
-                    # 件数表示
-                    st.metric(label=f"{media_name}A", value=f"{count_a} 件")
-                    st.metric(label=f"{media_name}B", value=f"{count_b} 件")
+                    # --- 【修正】写メ日記登録シートから実数を集計 ---
+                    for suffix in ["A", "B"]:
+                        acc_key = f"{media_name}{suffix}"
+                        # SHEET_MAPから対象シートの全データを取得
+                        raw_data = get_full_sheet_data(SHEET_ID, SHEET_MAP.get(acc_key, ""))
+                        
+                        if raw_data and len(raw_data) > 1:
+                            # 2行目以降で「店名（1列目）」が入力されている行のみをカウント
+                            valid_rows = [r for r in raw_data[1:] if len(r) > 1 and str(r[1]).strip() != ""]
+                            actual_count = len(valid_rows)
+                        else:
+                            actual_count = 0
+                        
+                        st.write(f"{acc_key}")
+                        st.markdown(f"## {actual_count} 件")
                     
                     st.divider()
 
-                    # --- 管理シートに基づく店舗リスト表示 ---
+                    # --- 【修正】店舗リストを最初から全表示 ---
+                    st.markdown("##### 📍 登録店舗一覧")
                     ws_link = status_sprs.worksheet(ws_name)
                     link_data = ws_link.get_all_values()
                     
                     if len(link_data) > 1:
-                        # エリアごとに店舗をまとめる
+                        # エリアごとにグループ化
                         area_map = {}
                         for r in link_data[1:]:
                             if len(r) >= 2:
@@ -431,17 +432,14 @@ def main():
                                 if area not in area_map: area_map[area] = []
                                 area_map[area].append(shop)
                         
-                        # エリアごとに展開表示
+                        # エリア名と店舗名をプレーンテキストで表示
                         for area_name, shops in area_map.items():
-                            with st.expander(f"📍 {area_name} ({len(shops)}店舗)"):
-                                for s in sorted(shops):
-                                    st.write(f"• {s}")
+                            st.markdown(f"**【{area_name}】**")
+                            for s in sorted(shops):
+                                st.text(f"  • {s}")
+                            st.write("") # スペース
                     else:
                         st.caption("管理シートに登録がありません")
 
         except Exception as e:
             st.error(f"データの取得中にエラーが発生しました: {e}")
-
-# --- スクリプト末尾 ---
-if __name__ == "__main__":
-    main()
