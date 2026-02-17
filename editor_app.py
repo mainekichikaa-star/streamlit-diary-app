@@ -383,10 +383,9 @@ def main():
     # TAB 3: 店舗アカウント状況
     # =========================================================================
     with tab3:
-        st.markdown("## 📊 店舗アカウント状況 (マスター参照)")
+        st.markdown("## 📊 店舗アカウント状況")
         
-        # アカウント管理シートの読み込み
-        # 浜松仕様のシート名定義
+        # 管理シートの定義
         status_sheets = {
             "駅ちか": "駅ちかアカウント",
             "デリじゃ": "デリじゃアカウント",
@@ -394,54 +393,54 @@ def main():
         }
 
         try:
-            # 管理シートから全データを取得
             status_sprs = GC.open_by_key(ACCOUNT_STATUS_SHEET_ID)
             
-            # 各媒体（駅ちか、デリじゃ、デイズ）ごとにカラムを分けて表示
-            m1, m2, m3 = st.columns(3)
-            media_cols = {"駅ちか": m1, "デリじゃ": m2, "デイズ": m3}
+            # 媒体ごとに横並びで表示
+            cols = st.columns(3)
+            
+            for i, (media_name, ws_name) in enumerate(status_sheets.items()):
+                with cols[i]:
+                    st.markdown(f"### 📱 {media_name}")
+                    
+                    # --- 投稿件数の取得 ---
+                    # Aアカウント
+                    rows_a = get_full_sheet_data(SHEET_ID, SHEET_MAP.get(f"{media_name}A", ""))
+                    count_a = len(rows_a) - 1 if rows_a else 0
+                    
+                    # Bアカウント
+                    rows_b = get_full_sheet_data(SHEET_ID, SHEET_MAP.get(f"{media_name}B", ""))
+                    count_b = len(rows_b) - 1 if rows_b else 0
+                    
+                    # 件数表示
+                    st.metric(label=f"{media_name}A", value=f"{count_a} 件")
+                    st.metric(label=f"{media_name}B", value=f"{count_b} 件")
+                    
+                    st.divider()
 
-            for media_name, ws_name in status_sheets.items():
-                with media_cols[media_name]:
-                    st.subheader(f"📱 {media_name}")
+                    # --- 管理シートに基づく店舗リスト表示 ---
                     ws_link = status_sprs.worksheet(ws_name)
                     link_data = ws_link.get_all_values()
                     
-                    if len(link_data) <= 1:
-                        st.caption("登録店舗なし")
-                        continue
-
-                    # 1:アカウント(A/B), 2:店舗名, 0:エリア (シート構造に合わせる)
-                    # 浜松の管理シート構造: 0:エリア, 1:店舗名, 2:アカウント状況など
-                    df_status = pd.DataFrame(link_data[1:])
-                    
-                    # 各アカウント(A/B)ごとにグループ化して表示
-                    for acc_suffix in ["A", "B"]:
-                        acc_full_name = f"{media_name}{acc_suffix}"
-                        # 投稿シート(SHEET_MAP)から現在の投稿件数を取得
-                        current_rows = get_full_sheet_data(SHEET_ID, SHEET_MAP.get(acc_full_name, ""))
-                        count = len(current_rows) - 1 if current_rows else 0
-                        
-                        st.markdown(f"**【{acc_suffix}】** (`{count}件`) ")
-                        
-                        # 管理シート内で、この媒体のAまたはBに該当する店舗を抽出
-                        # ※管理シート側の「どのアカウントか」を判定する列インデックスに合わせて調整してください
-                        # ここでは仮に2列目に「A」や「B」が入っている、もしくは判定ロジックがあるものとします
-                        matched_shops = []
+                    if len(link_data) > 1:
+                        # エリアごとに店舗をまとめる
+                        area_map = {}
                         for r in link_data[1:]:
                             if len(r) >= 2:
-                                # 管理シートの運用に合わせて、ここでA/Bの振り分けを判定
-                                # 例: 店舗名や備考欄から判定、あるいは単純にそのシートにある全店舗を表示
-                                matched_shops.append(f"• {r[0]} / {r[1]}")
+                                area, shop = r[0].strip(), r[1].strip()
+                                if not area: area = "その他"
+                                if area not in area_map: area_map[area] = []
+                                area_map[area].append(shop)
                         
-                        if matched_shops:
-                            with st.expander(f"{acc_full_name} の店舗一覧"):
-                                for s in sorted(matched_shops):
-                                    st.write(s)
-                        st.divider()
+                        # エリアごとに展開表示
+                        for area_name, shops in area_map.items():
+                            with st.expander(f"📍 {area_name} ({len(shops)}店舗)"):
+                                for s in sorted(shops):
+                                    st.write(f"• {s}")
+                    else:
+                        st.caption("管理シートに登録がありません")
 
         except Exception as e:
-            st.error(f"アカウント状況の取得に失敗しました: {e}")
+            st.error(f"データの取得中にエラーが発生しました: {e}")
 
 # --- スクリプト末尾 ---
 if __name__ == "__main__":
