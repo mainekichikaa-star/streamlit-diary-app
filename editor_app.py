@@ -379,66 +379,68 @@ def main():
             else:
                 st.success("✅ 全ての日記に画像が紐付いています！")
 
-   # =========================================================================
+  # =========================================================================
     # TAB 3: 店舗アカウント状況
     # =========================================================================
     with tab3:
         st.markdown("## 📊 店舗アカウント状況")
         
+        # 管理シートの定義
         status_sheets = {
             "駅ちか": "駅ちかアカウント",
             "デリじゃ": "デリじゃアカウント",
             "デイズ": "デイズアカウント"
         }
 
-        try:
-            status_sprs = GC.open_by_key(ACCOUNT_STATUS_SHEET_ID)
-            cols = st.columns(3)
-            
-            for i, (media_name, ws_name) in enumerate(status_sheets.items()):
-                with cols[i]:
-                    st.markdown(f"### 📱 {media_name}")
-                    
-                    # --- 高速集計ロジック ---
-                    for suffix in ["A", "B"]:
-                        acc_key = f"{media_name}{suffix}"
-                        raw_data = get_full_sheet_data(SHEET_ID, SHEET_MAP.get(acc_key, ""))
+        # 読み込みボタン（自動読み込みで真っ白になるのを防ぐため、明示的に実行させる）
+        if st.button("📊 統計データを読み込む / 更新", key="load_stats_btn"):
+            try:
+                status_sprs = GC.open_by_key(ACCOUNT_STATUS_SHEET_ID)
+                cols = st.columns(3)
+                
+                for i, (media_name, ws_name) in enumerate(status_sheets.items()):
+                    with cols[i]:
+                        st.markdown(f"### 📱 {media_name}")
                         
-                        actual_count = 0
-                        if raw_data and len(raw_data) > 1:
-                            # リストをPandas DataFrameに変換して一括集計（これが一番速いです）
-                            temp_df = pd.DataFrame(raw_data[1:])
-                            if not temp_df.empty:
-                                # 1列目（B列:店名）が空でない行をカウント
-                                # 念のため、列が存在するか確認してからカウント
-                                if temp_df.shape[1] > 1:
-                                    actual_count = temp_df[temp_df[1].str.strip() != ""].shape[0]
+                        # --- 各アカウントの投稿件数算出 ---
+                        for suffix in ["A", "B"]:
+                            acc_key = f"{media_name}{suffix}"
+                            try:
+                                # 特定のシートのみを都度取得（全体取得関数ではなく直で呼ぶ）
+                                sheet_id_map = SHEET_MAP.get(acc_key, "")
+                                if sheet_id_map:
+                                    target_ws = GC.open_by_key(SHEET_ID).worksheet(sheet_id_map)
+                                    # 全データではなく「B列（店名）」のデータだけ取得して軽量化
+                                    col_b = target_ws.col_values(2) # 2列目 = 店名
+                                    # ヘッダーを除き、空文字でないものをカウント
+                                    actual_count = len([x for x in col_b[1:] if x.strip()])
+                                else:
+                                    actual_count = 0
+                            except:
+                                actual_count = "ERR"
+                            
+                            st.write(f"{acc_key}")
+                            st.markdown(f"## {actual_count} 件")
                         
-                        st.write(f"{acc_key}")
-                        st.markdown(f"## {actual_count} 件")
-                    
-                    st.divider()
+                        st.divider()
 
-                    # --- 店舗リストの表示 ---
-                    st.markdown("##### 📍 登録店舗一覧")
-                    ws_link = status_sprs.worksheet(ws_name)
-                    link_data = ws_link.get_all_values()
-                    
-                    if len(link_data) > 1:
-                        # DataFrameで一気に処理して表示を安定させる
-                        link_df = pd.DataFrame(link_data[1:])
-                        if not link_df.empty:
-                            # 0:エリア, 1:店名
-                            area_groups = link_df.groupby(0)
-                            for area_name, group in area_groups:
-                                st.markdown(f"**【{area_name}】**")
-                                for shop_name in sorted(group[1].tolist()):
-                                    if shop_name.strip():
-                                        st.text(f"  • {shop_name}")
-                                st.write("")
-                    else:
-                        st.caption("管理シートに登録がありません")
-
-        except Exception as e:
-            # 真っ白になるのを防ぐため、エラー内容を画面に出す
-            st.error(f"表示エラーが発生しました。データ量が多い可能性があります。: {e}")
+                        # --- 管理シートに基づく店舗リスト表示 ---
+                        st.markdown("##### 📍 登録店舗一覧")
+                        try:
+                            ws_link = status_sprs.worksheet(ws_name)
+                            link_data = ws_link.get_all_values()
+                            if len(link_data) > 1:
+                                link_df = pd.DataFrame(link_data[1:])
+                                # 0列目:エリア, 1列目:店名
+                                for area_name, group in link_df.groupby(0):
+                                    st.markdown(f"**【{area_name}】**")
+                                    for shop_name in sorted(group[1].tolist()):
+                                        if shop_name.strip():
+                                            st.text(f"  • {shop_name}")
+                                    st.write("")
+                        except:
+                            st.caption("店舗情報の取得に失敗しました")
+            except Exception as e:
+                st.error(f"データの読み込み中にエラーが発生しました。接続を確認してください。")
+        else:
+            st.info("上のボタンを押すと、各シートから最新の投稿件数を集計します。")
