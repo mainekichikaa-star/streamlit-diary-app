@@ -307,8 +307,8 @@ def main():
         
         data_tab2 = get_full_sheet_data(SHEET_ID, SHEET_MAP[sel_acc_tab2])
         if data_tab2 and len(data_tab2) > 1:
-            # --- 【修正点3】Tab2側もデイズの列ズレを補正 ---
             raw_df2 = pd.DataFrame(data_tab2[1:])
+            # デイズの列ズレ補正
             if "デイズ" in sel_acc_tab2:
                 df2 = raw_df2[[0, 1, 2, 3, 5, 6, 7]]
             else:
@@ -319,29 +319,65 @@ def main():
             bucket = GCS_CLIENT.bucket(GCS_BUCKET_NAME)
             
             missing_images = []
+            
+            # --- 高速化のための修正：店舗ごとに画像をまとめてチェック ---
+            # 進捗表示
+            progress_bar = st.progress(0)
+            status_text = st.empty()
+            
+            unique_stores = df2[["エリア", "店名"]].drop_duplicates()
+            total_stores = len(unique_stores)
+            
+            # 店舗ごとの画像リストをキャッシュする辞書
+            store_blobs_cache = {}
+
+            for i, (_, s_row) in enumerate(unique_stores.iterrows()):
+                area_val = s_row["エリア"]
+                store_val = s_row["店名"]
+                status_text.text(f"🔍 スキャン中: {store_val}...")
+                
+                # その店舗の画像を全取得
+                blobs = get_target_blobs(bucket, area_val, sel_acc_tab2, store_val)
+                store_blobs_cache[(area_val, store_val)] = blobs
+                progress_bar.progress((i + 1) / total_stores)
+
+            # 各行の不備チェック
             for _, row in df2.iterrows():
                 b_time = parse_to_datetime(row["投稿時間"])
                 n_norm = normalize_text(row["女の子の名前"])
                 
-                # 柔軟なフォルダ検索を適用
-                blobs = get_target_blobs(bucket, row['エリア'], sel_acc_tab2, row['店名'])
-                matched = [img.name for img in blobs if (n_norm in normalize_text(img.name) or normalize_text(img.name) in n_norm) and is_time_match(b_time, img.name.split('/')[-1])]
-                
-                if not matched and row["女の子の名前"].strip() != "":
-                    missing_images.append(row)
-            
-            store_counts = df2["店名"].value_counts()
-            low_count_stores = store_counts[store_counts <= 20]
+                if not n_norm: continue # 名前が空ならスキップ
 
-            c_err1, c_err2 = st.columns(2)
-            with c_err1:
-                st.subheader(f"❌ 画像がない日記 ({len(missing_images)}件)")
+                # キャッシュから取得
+                blobs = store_blobs_cache.get((row['エリア'], row['店名']), [])
+                
+                # 判定ロジック
+                matched = [
+                    img.name for img in blobs 
+                    if (n_norm in normalize_text(img.name.split('/')[-1]) or 
+                        normalize_text(img.name.split('/')[-1]) in n_norm) 
+                    and is_time_match(b_time, img.name.split('/')[-1])
+                ]
+                
+                if not matched:
+                    missing_images.append(row)
+
+            # 結果表示
+            status_text.empty()
+            progress_bar.empty()
+
+            st.subheader(f"❌ 画像がない日記 ({len(missing_images)}件)")
+            if missing_images:
+                # 1列でスッキリ表示
                 for item in missing_images:
-                    st.markdown(f'<div class="error-card"><b>📍 {item["エリア"]} / {item["店名"]}</b><br>👤 {item["女の子の名前"]} ({item["投稿時間"]})</div>', unsafe_allow_html=True)
-            with c_err2:
-                st.subheader(f"⚠️ 日記が少ない店舗 (20件以下)")
-                for s_name, count in low_count_stores.items():
-                    st.warning(f"🏢 **{s_name}**: 総数 `{count}` 件")
+                    st.markdown(f'''
+                        <div class="error-card">
+                            <b>📍 {item["エリア"]} / {item["店名"]}</b><br>
+                            👤 {item["女の子の名前"]} (⏰ {item["投稿時間"]})
+                        </div>
+                    ''', unsafe_allow_html=True)
+            else:
+                st.success("✅ 全ての日記に画像が紐付いています！")
 
     # =========================================================================
     # TAB 3: 店舗アカウント状況
@@ -409,6 +445,7 @@ def main():
 
 if __name__ == "__main__":
     main()
+
 
 
 
