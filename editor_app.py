@@ -300,147 +300,101 @@ def main():
             sel_acc_tab2 = st.selectbox("👤 対象アカウント", ACCOUNT_OPTIONS, index=0, key="acc_tab2")
         with ce2:
             st.write("")
-            if st.button("🔄 最新データでスキャン", key="btn_reload_tab2", use_container_width=True):
+            if st.button("🔄 キャッシュクリア", key="btn_clear_tab2", use_container_width=True):
                 st.cache_data.clear()
                 st.rerun()
         st.markdown('</div>', unsafe_allow_html=True)
-        
-        data_tab2 = get_full_sheet_data(SHEET_ID, SHEET_MAP[sel_acc_tab2])
-        if data_tab2 and len(data_tab2) > 1:
-            raw_df2 = pd.DataFrame(data_tab2[1:])
-            # デイズの列ズレ補正
-            if "デイズ" in sel_acc_tab2:
-                df2 = raw_df2[[0, 1, 2, 3, 5, 6, 7]]
-            else:
-                df2 = raw_df2.iloc[:, :7]
-            
-            df2.columns = DF_COLS
-            df2 = df2[df2["店名"].str.strip() != ""]
-            bucket = GCS_CLIENT.bucket(GCS_BUCKET_NAME)
-            
-            missing_images = []
-            
-            # --- 高速化のための修正：店舗ごとに画像をまとめてチェック ---
-            # 進捗表示
-            progress_bar = st.progress(0)
-            status_text = st.empty()
-            
-            unique_stores = df2[["エリア", "店名"]].drop_duplicates()
-            total_stores = len(unique_stores)
-            
-            # 店舗ごとの画像リストをキャッシュする辞書
-            store_blobs_cache = {}
 
-            for i, (_, s_row) in enumerate(unique_stores.iterrows()):
-                area_val = s_row["エリア"]
-                store_val = s_row["店名"]
-                status_text.text(f"🔍 スキャン中: {store_val}...")
+        # 自動実行を防ぎ、ボタン押下時のみスキャンする
+        if st.button("🔍 不備チェック（画像なし確認）を開始", key="run_scan_tab2", type="primary", use_container_width=True):
+            data_tab2 = get_full_sheet_data(SHEET_ID, SHEET_MAP[sel_acc_tab2])
+            if data_tab2 and len(data_tab2) > 1:
+                raw_df2 = pd.DataFrame(data_tab2[1:])
+                if "デイズ" in sel_acc_tab2:
+                    df2 = raw_df2[[0, 1, 2, 3, 5, 6, 7]]
+                else:
+                    df2 = raw_df2.iloc[:, :7]
                 
-                # その店舗の画像を全取得
-                blobs = get_target_blobs(bucket, area_val, sel_acc_tab2, store_val)
-                store_blobs_cache[(area_val, store_val)] = blobs
-                progress_bar.progress((i + 1) / total_stores)
-
-            # 各行の不備チェック
-            for _, row in df2.iterrows():
-                b_time = parse_to_datetime(row["投稿時間"])
-                n_norm = normalize_text(row["女の子の名前"])
+                df2.columns = DF_COLS
+                df2 = df2[df2["店名"].str.strip() != ""]
+                bucket = GCS_CLIENT.bucket(GCS_BUCKET_NAME)
                 
-                if not n_norm: continue # 名前が空ならスキップ
-
-                # キャッシュから取得
-                blobs = store_blobs_cache.get((row['エリア'], row['店名']), [])
+                missing_images = []
+                progress_bar = st.progress(0)
+                status_text = st.empty()
                 
-                # 判定ロジック
-                matched = [
-                    img.name for img in blobs 
-                    if (n_norm in normalize_text(img.name.split('/')[-1]) or 
-                        normalize_text(img.name.split('/')[-1]) in n_norm) 
-                    and is_time_match(b_time, img.name.split('/')[-1])
-                ]
-                
-                if not matched:
-                    missing_images.append(row)
+                unique_stores = df2[["エリア", "店名"]].drop_duplicates()
+                total_stores = len(unique_stores)
+                store_blobs_cache = {}
 
-            # 結果表示
-            status_text.empty()
-            progress_bar.empty()
+                for i, (_, s_row) in enumerate(unique_stores.iterrows()):
+                    area_val, store_val = s_row["エリア"], s_row["店名"]
+                    status_text.text(f"🔍 スキャン中: {store_val}...")
+                    # 通信回数を抑えるため店舗ごとに取得
+                    store_blobs_cache[(area_val, store_val)] = get_target_blobs(bucket, area_val, sel_acc_tab2, store_val)
+                    progress_bar.progress((i + 1) / total_stores)
 
-            st.subheader(f"❌ 画像がない日記 ({len(missing_images)}件)")
-            if missing_images:
-                # 1列でスッキリ表示
+                for _, row in df2.iterrows():
+                    b_time = parse_to_datetime(row["投稿時間"])
+                    n_norm = normalize_text(row["女の子の名前"])
+                    if not n_norm: continue
+                    
+                    blobs = store_blobs_cache.get((row['エリア'], row['店名']), [])
+                    matched = [img.name for img in blobs if (n_norm in normalize_text(img.name.split('/')[-1]) or normalize_text(img.name.split('/')[-1]) in n_norm) and is_time_match(b_time, img.name.split('/')[-1])]
+                    
+                    if not matched:
+                        missing_images.append(row)
+
+                status_text.empty()
+                progress_bar.empty()
+
+                st.subheader(f"❌ 画像がない日記 ({len(missing_images)}件)")
                 for item in missing_images:
-                    st.markdown(f'''
-                        <div class="error-card">
-                            <b>📍 {item["エリア"]} / {item["店名"]}</b><br>
-                            👤 {item["女の子の名前"]} (⏰ {item["投稿時間"]})
-                        </div>
-                    ''', unsafe_allow_html=True)
-            else:
-                st.success("✅ 全ての日記に画像が紐付いています！")
+                    st.markdown(f'<div class="error-card"><b>📍 {item["エリア"]} / {item["店名"]}</b><br>👤 {item["女の子の名前"]} ({item["投稿時間"]})</div>', unsafe_allow_html=True)
+        else:
+            st.info("「不備チェックを開始」ボタンを押すと、スプレッドシートと画像の照合を開始します。")
 
-  # =========================================================================
+    # =========================================================================
     # TAB 3: 店舗アカウント状況
     # =========================================================================
     with tab3:
         st.markdown("## 📊 店舗アカウント状況")
-        
-        # 管理シートの定義
-        status_sheets = {
-            "駅ちか": "駅ちかアカウント",
-            "デリじゃ": "デリじゃアカウント",
-            "デイズ": "デイズアカウント"
-        }
+        status_sheets = {"駅ちか": "駅ちかアカウント", "デリじゃ": "デリじゃアカウント", "デイズ": "デイズアカウント"}
 
-        # 読み込みボタン（自動読み込みで真っ白になるのを防ぐため、明示的に実行させる）
-        if st.button("📊 統計データを読み込む / 更新", key="load_stats_btn"):
+        if st.button("📊 最新の投稿件数を集計する", key="load_stats_btn", type="primary", use_container_width=True):
             try:
                 status_sprs = GC.open_by_key(ACCOUNT_STATUS_SHEET_ID)
                 cols = st.columns(3)
-                
                 for i, (media_name, ws_name) in enumerate(status_sheets.items()):
                     with cols[i]:
                         st.markdown(f"### 📱 {media_name}")
-                        
-                        # --- 各アカウントの投稿件数算出 ---
                         for suffix in ["A", "B"]:
                             acc_key = f"{media_name}{suffix}"
                             try:
-                                # 特定のシートのみを都度取得（全体取得関数ではなく直で呼ぶ）
-                                sheet_id_map = SHEET_MAP.get(acc_key, "")
-                                if sheet_id_map:
-                                    target_ws = GC.open_by_key(SHEET_ID).worksheet(sheet_id_map)
-                                    # 全データではなく「B列（店名）」のデータだけ取得して軽量化
-                                    col_b = target_ws.col_values(2) # 2列目 = 店名
-                                    # ヘッダーを除き、空文字でないものをカウント
-                                    actual_count = len([x for x in col_b[1:] if x.strip()])
-                                else:
-                                    actual_count = 0
-                            except:
-                                actual_count = "ERR"
-                            
+                                sid = SHEET_MAP.get(acc_key, "")
+                                if sid:
+                                    ws = GC.open_by_key(SHEET_ID).worksheet(sid)
+                                    # B列（店名）だけを取得して高速化
+                                    names = ws.col_values(2)
+                                    count = len([x for x in names[1:] if x.strip()])
+                                else: count = 0
+                            except: count = "ERR"
                             st.write(f"{acc_key}")
-                            st.markdown(f"## {actual_count} 件")
+                            st.markdown(f"## {count} 件")
                         
                         st.divider()
-
-                        # --- 管理シートに基づく店舗リスト表示 ---
                         st.markdown("##### 📍 登録店舗一覧")
                         try:
-                            ws_link = status_sprs.worksheet(ws_name)
-                            link_data = ws_link.get_all_values()
-                            if len(link_data) > 1:
-                                link_df = pd.DataFrame(link_data[1:])
-                                # 0列目:エリア, 1列目:店名
-                                for area_name, group in link_df.groupby(0):
-                                    st.markdown(f"**【{area_name}】**")
-                                    for shop_name in sorted(group[1].tolist()):
-                                        if shop_name.strip():
-                                            st.text(f"  • {shop_name}")
-                                    st.write("")
-                        except:
-                            st.caption("店舗情報の取得に失敗しました")
+                            l_data = status_sprs.worksheet(ws_name).get_all_values()
+                            if len(l_data) > 1:
+                                l_df = pd.DataFrame(l_data[1:])
+                                for area, group in l_df.groupby(0):
+                                    st.markdown(f"**【{area}】**")
+                                    for shop in sorted(group[1].unique()):
+                                        if shop.strip(): st.text(f"  • {shop}")
+                        except: st.caption("リスト取得失敗")
             except Exception as e:
-                st.error(f"データの読み込み中にエラーが発生しました。接続を確認してください。")
+                st.error(f"接続エラー: {e}")
         else:
-            st.info("上のボタンを押すと、各シートから最新の投稿件数を集計します。")
+            st.info("ボタンを押すと、管理シートの店舗リストと各アカウントの投稿実数を表示します。")
+
