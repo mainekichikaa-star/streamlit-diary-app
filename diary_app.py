@@ -205,34 +205,30 @@ with tab1:
                     st.error(f"❌ 登録エラーが発生しました: {e}")
                 
 # =========================================================
-# --- Tab 2: 📊 ② 店舗アカウント状況 (UIブラッシュアップ版) ---
+# --- Tab 2: 📊 ② 店舗アカウント状況 (究極API対策版) ---
 # =========================================================
 with tab2:
-    st.markdown("""
-        <style>
-        /* メトリックの背景を少し明るくして目立たせる */
-        [data-testid="stMetric"] {
-            background-color: #f8f9fb;
-            padding: 15px;
-            border-radius: 10px;
-            box-shadow: inset 0 0 5px rgba(0,0,0,0.05);
-        }
-        /* エリア情報ボックスのカスタマイズ */
-        .area-card {
-            background-color: #ffffff;
-            border: 1px solid #e1e4e8;
-            padding: 10px;
-            border-radius: 8px;
-            margin-bottom: 10px;
-        }
-        </style>
-    """, unsafe_allow_html=True)
+    # 1. 更新用ボタンを配置
+    if 'update_tick' not in st.session_state:
+        st.session_state.update_tick = 0
+    
+    col_h, col_btn = st.columns([3, 1])
+    with col_h:
+        st.markdown("## 📈 現在の稼働状況")
+    with col_btn:
+        if st.button("🔄 状況を最新に更新", use_container_width=True):
+            st.session_state.update_tick += 1
+            st.cache_data.clear()
+            st.rerun()
 
-    st.markdown("## 📈 現在の稼働状況")
-    st.caption("各アカウントの最新投稿件数と、登録されている店舗の一覧を媒体ごとに統合して表示しています。")
+    st.caption("※ API保護のため10分間キャッシュされます。最新にしたい場合は更新ボタンを押してください。")
     st.divider()
     
-    # 統合グループの定義
+    # 2. キャッシュされたデータを取得（ここがAPI節約のキモ）
+    with st.spinner("データを取得中..."):
+        all_data_cached = get_full_sheet_data(SHEET_ID, ACCOUNT_OPTIONS, st.session_state.update_tick)
+
+    # 3. 表示ロジック（取得済みの all_data_cached を使うのでAPI消費ゼロ）
     groups = {
         "駅ちか": ["駅ちかA", "駅ちかB"],
         "デリじゃ": ["デリじゃA", "デリじゃB"],
@@ -240,72 +236,51 @@ with tab2:
     }
 
     for label, accounts in groups.items():
-        # 媒体ごとのセクション
         with st.container():
             st.markdown(f"### 📱 {label} グループ")
-            
-            # --- メトリック表示エリア ---
             c_met1, c_met2 = st.columns(2)
-            combined_rows = []
+            valid_dfs = []
             
             for idx, acc_name in enumerate(accounts):
-                try:
-                    ws = GC.open_by_key(SHEET_ID).worksheet(SHEET_MAP[acc_name])
-                    # B列(店名)をベースに全件取得
-                    data = ws.get_all_values()
-                    if len(data) > 1:
-                        df = pd.DataFrame(data[1:])
-                        # 店名が入っている行だけカウント
-                        count = len(df[df[1].str.strip() != ""])
-                        combined_rows.append(df)
-                    else:
-                        count = 0
-                except:
+                data = all_data_cached.get(acc_name, [])
+                if data:
+                    df = pd.DataFrame(data[1:])
+                    # 空行除外（浜松版: 1列目が店名）
+                    count = len(df[df[1].str.strip() != ""])
+                    valid_dfs.append(df)
+                else:
                     count = 0
                 
                 with [c_met1, c_met2][idx]:
                     st.metric(label=f"👤 {acc_name}", value=f"{count} 件")
             
-            # --- エリア別店舗リスト表示エリア ---
-            st.markdown("#### 📍 登録中の店舗一覧")
-            if combined_rows:
-                full_df = pd.concat(combined_rows)
+            # 店舗リスト表示
+            if valid_dfs:
+                st.markdown("#### 📍 登録中の店舗一覧")
+                full_df = pd.concat(valid_dfs)
                 full_df = full_df[full_df[1].str.strip() != ""]
                 
-                # エリアマッピング
                 area_map = {}
                 for _, r in full_df.iterrows():
-                    # 浜松版: 0:エリア, 1:店名
                     a_name = r[0].strip() if r[0] else "未設定"
                     s_name = r[1].strip()
-                    if a_name not in area_map:
-                        area_map[a_name] = set()
+                    if a_name not in area_map: area_map[a_name] = set()
                     area_map[a_name].add(s_name)
                 
-                # エリアを整理して表示
                 sorted_areas = sorted(area_map.keys())
-                num_areas = len(sorted_areas)
-                
-                if num_areas > 0:
-                    # エリア数に応じてカラムを分割
-                    area_cols = st.columns(min(num_areas, 4)) # 最大4列まで
+                if sorted_areas:
+                    area_cols = st.columns(min(len(sorted_areas), 4))
                     for i, a_name in enumerate(sorted_areas):
                         with area_cols[i % 4]:
+                            shops_html = "".join([f"<div>• {s}</div>" for s in sorted(area_map[a_name])])
                             st.markdown(f"""
                                 <div class="area-card">
                                     <div style="color: #FF4B4B; font-weight: bold; border-bottom: 1px solid #eee; margin-bottom: 5px;">📍 {a_name}</div>
-                                    <div style="font-size: 0.9em; line-height: 1.6;">
-                                        {''.join([f"<div>• {s}</div>" for s in sorted(area_map[a_name])])}
-                                    </div>
+                                    <div style="font-size: 0.9em; line-height: 1.6;">{shops_html}</div>
                                 </div>
                             """, unsafe_allow_html=True)
-                else:
-                    st.caption("エリア情報の取得に失敗しました。")
-            else:
-                st.info("現在、この媒体に登録されている店舗データはありません。")
-                
             st.divider()
-
+            
 # =========================================================
 # --- Tab 4: 🖼 ④ 使用可能画像 (大宮版の画像処理を移植) ---
 # =========================================================
@@ -353,6 +328,7 @@ with tab4:
                     if st.button("🗑 削除", key=f"del_{b_name}"):
                         bucket.blob(b_name).delete()
                         st.cache_data.clear(); st.rerun()
+
 
 
 
