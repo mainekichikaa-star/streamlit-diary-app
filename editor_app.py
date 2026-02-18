@@ -34,10 +34,15 @@ def normalize_text(s):
     if not s: return ""
     return re.sub(r'\s+', '', str(s)).replace('　', '').lower()
 
-@st.cache_data(ttl=300) # 5分間はGCSのリストを使い回す
-def get_cached_blobs(area):
+@st.cache_data(ttl=300) # 5分間はファイル名のリストを使い回す
+def get_cached_blob_names(area):
+    """
+    Blobオブジェクトそのものではなく、
+    シリアライズ可能な「ファイル名（文字列）」のリストをキャッシュする
+    """
     bucket = GCS_CLIENT.bucket(GCS_BUCKET_NAME)
-    return list(bucket.list_blobs(prefix=f"{area}/"))
+    # blob.name (文字列) のリストにして返す
+    return [blob.name for blob in bucket.list_blobs(prefix=f"{area}/")]
 
 def get_target_blobs(bucket, area, sel_acc, store_name):
     suffix = "【A】" if "A" in sel_acc else "【B】"
@@ -50,17 +55,20 @@ def get_target_blobs(bucket, area, sel_acc, store_name):
     
     target_norm = normalize_text(base_pattern)
     
-    # ここを修正：APIを叩かずキャッシュから取得
-    full_list = get_cached_blobs(area)
+    # キャッシュされた「ファイル名のリスト」を取得
+    full_name_list = get_cached_blob_names(area)
     
     matched_blobs = []
-    for blob in full_list:
-        path_parts = blob.name.split('/')
+    for b_name in full_name_list:
+        path_parts = b_name.split('/')
         if len(path_parts) < 3: continue
+        
         folder_part = path_parts[1]
         if normalize_text(folder_part) == target_norm:
             if path_parts[2]:
-                matched_blobs.append(blob)
+                # 判定にマッチしたものだけ、bucket.blob() でオブジェクト化する
+                matched_blobs.append(bucket.blob(b_name))
+                
     return matched_blobs
 
 def parse_to_datetime(t_str):
@@ -461,4 +469,5 @@ def main():
             
 if __name__ == "__main__":
     main()
+
 
