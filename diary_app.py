@@ -163,17 +163,23 @@ with tab1:
                     if e['img']: 
                         gcs_upload_wrapper(e['img'], e, global_area, global_store, target_media, target_acc)
                 
-                # --- 日記文を登録 (媒体列を削除し左詰め) ---
+                # --- 日記文を登録 (左詰め & 0落ち防止) ---
                 progress_text.info("📝 日記文を登録中...")
                 ws_main = GC.open_by_key(SHEET_ID).worksheet(SHEET_MAP[target_acc])
                 
-                # 媒体(target_media)とデイズの空列を削除した構成
-                # A:エリア, B:店名, C:時間, D:名前, E:タイトル, F:本文
-                rows_main = [[global_area, global_store, e['投稿時間'], e['女の子の名前'], e['タイトル'], e['本文']] for e in valid_data]
+                # A:エリア, B:店名, C:時間(文字列強制), D:名前, E:タイトル, F:本文
+                rows_main = [[
+                    global_area, 
+                    global_store, 
+                    f"'{e['投稿時間']}", 
+                    e['女の子の名前'], 
+                    e['タイトル'], 
+                    e['本文']
+                ] for e in valid_data]
                 
                 ws_main.append_rows(rows_main, value_input_option='USER_ENTERED')
                 
-                # --- ログイン情報を登録 (媒体列を削除し左詰め) ---
+                # --- ログイン情報を登録 (左詰め) ---
                 progress_text.info("🔐 ログイン情報を登録中...")
                 ws_status = GC.open_by_key(ACCOUNT_STATUS_SHEET_ID).worksheet(f"{target_media}アカウント")
                 
@@ -336,6 +342,7 @@ with tab4:
                     if st.button("🗑 削除", key=f"del_{b_name}"):
                         bucket.blob(b_name).delete()
                         st.cache_data.clear(); st.rerun()
+
 
 
 
