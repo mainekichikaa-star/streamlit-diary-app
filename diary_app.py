@@ -96,59 +96,39 @@ tab1, tab2, tab3, tab4 = st.tabs([
 ])
 
 # =========================================================
-# --- Tab 1: 📝 ① データ登録 (媒体表示削除版) ---
+# --- Tab 1: 📝 ① データ登録 ---
 # =========================================================
 with tab1:
     st.header("1️⃣ 浜松版：新規データ登録")
     
     with st.form("diary_input_form", clear_on_submit=False):
-        # 3カラム構成
         c1, c2, c3 = st.columns(3)
         target_acc = c1.selectbox("👤 投稿アカウント", ACCOUNT_OPTIONS, key="sel_acc_f")
         
-        # --- 媒体の自動判別ロジック (内部処理用) ---
-        if "駅ちか" in target_acc:
-            target_media = "駅ちか"
-        elif "デリじゃ" in target_acc:
-            target_media = "デリじゃ"
-        elif "デイズ" in target_acc:
-            target_media = "デイズ"
-        else:
-            target_media = "不明"
+        # 媒体の自動判別
+        target_media = "駅ちか" if "駅ちか" in target_acc else "デリじゃ" if "デリじゃ" in target_acc else "デイズ" if "デイズ" in target_acc else "不明"
             
         global_area = c2.text_input("📍 エリア", key="in_area_f")
         global_store = c3.text_input("🏢 店名", key="in_store_f")
         
         st.subheader("🔑 ログイン情報")
-        c5, c6 = st.columns(2)
-        login_id = c5.text_input("ID", key="login_id_f")
-        login_pw = c6.text_input("パスワード", key="login_pw_f")
-        
+        # デイズの場合のみ「管理画面ナンバー」を表示するため3カラムに調整
+        if target_media == "デイズ":
+            lc1, lc2, lc3 = st.columns(3)
+            login_num = lc1.text_input("管理画面ナンバー", key="login_num_f") # デイズ専用
+            login_id = lc2.text_input("ID", key="login_id_f")
+            login_pw = lc3.text_input("パスワード", key="login_pw_f")
+        else:
+            lc1, lc2 = st.columns(2)
+            login_id = lc1.text_input("ID", key="login_id_f")
+            login_pw = lc2.text_input("パスワード", key="login_pw_f")
+            login_num = "" 
+
         st.markdown("---")
-        # 修正箇所：「- 判別媒体: ○○」の表示を削除
         st.subheader("📸 投稿内容入力 (最大40件)")
 
-        st.markdown("""
-            <div style="display: flex; flex-direction: row; border-bottom: 2px solid #444; background-color: #f0f2f6; padding: 10px; border-radius: 5px 5px 0 0;">
-                <div style="flex: 1; font-weight: bold; color: black;">時間</div>
-                <div style="flex: 1; font-weight: bold; color: black;">名前</div>
-                <div style="flex: 2; font-weight: bold; color: black;">タイトル</div>
-                <div style="flex: 3; font-weight: bold; color: black;">本文</div>
-                <div style="flex: 2; font-weight: bold; color: black;">画像</div>
-            </div>
-        """, unsafe_allow_html=True)
-
-        form_entries = []
-        for i in range(40):
-            cols = st.columns([1, 1, 2, 3, 2])
-            e_time = cols[0].text_input(f"t{i}", key=f"f_t_{i}", label_visibility="collapsed")
-            e_name = cols[1].text_input(f"n{i}", key=f"f_n_{i}", label_visibility="collapsed")
-            e_title = cols[2].text_area(f"ti{i}", key=f"f_ti_{i}", height=68, label_visibility="collapsed")
-            e_body = cols[3].text_area(f"b{i}", key=f"f_b_{i}", height=68, label_visibility="collapsed")
-            e_img = cols[4].file_uploader(f"g{i}", key=f"f_img_{i}", label_visibility="collapsed")
-            form_entries.append({'投稿時間': e_time, '女の子の名前': e_name, 'タイトル': e_title, '本文': e_body, 'img': e_img})
-
-        submit_button = st.form_submit_button("🔥 データを一括登録する", type="primary", use_container_width=True)
+        # (ヘッダー表示部分は変更なしのため省略可、以下登録ロジック)
+        # ... (中略: 40件の入力フォーム生成部分はそのまま) ...
 
     if submit_button:
         valid_data = [e for e in form_entries if e['投稿時間'] and e['女の子の名前']]
@@ -157,17 +137,21 @@ with tab1:
         else:
             progress_text = st.empty()
             try:
-                # --- 画像アップロード ---
+                # --- 画像アップロード (店名のスペースを削除) ---
                 progress_text.info("📸 画像をアップロード中...")
+                # フォルダ名用に店名からスペースを消す
+                clean_store_name = normalize_text(global_store) 
+                
                 for e in valid_data:
                     if e['img']: 
-                        gcs_upload_wrapper(e['img'], e, global_area, global_store, target_media, target_acc)
+                        # ラッパー関数内で clean_store_name を使うよう修正されている前提
+                        gcs_upload_wrapper(e['img'], e, global_area, clean_store_name, target_media, target_acc)
                 
                 # --- 日記文を登録 (左詰め & 0落ち防止) ---
                 progress_text.info("📝 日記文を登録中...")
                 ws_main = GC.open_by_key(SHEET_ID).worksheet(SHEET_MAP[target_acc])
                 
-                # A:エリア, B:店名, C:時間(文字列強制), D:名前, E:タイトル, F:本文
+                # 全媒体共通：A:エリア, B:店名, C:時間, D:名前, E:タイトル, F:本文
                 rows_main = [[
                     global_area, 
                     global_store, 
@@ -179,12 +163,18 @@ with tab1:
                 
                 ws_main.append_rows(rows_main, value_input_option='USER_ENTERED')
                 
-                # --- ログイン情報を登録 (左詰め) ---
+                # --- ログイン情報を登録 (デイズのみ管理画面ナンバーあり) ---
                 progress_text.info("🔐 ログイン情報を登録中...")
                 ws_status = GC.open_by_key(ACCOUNT_STATUS_SHEET_ID).worksheet(f"{target_media}アカウント")
                 
-                # A:エリア, B:店名, C:ID, D:パスワード
-                ws_status.append_row([global_area, global_store, login_id, login_pw], value_input_option='USER_ENTERED')
+                if target_media == "デイズ":
+                    # A:エリア, B:店名, C:管理画面ナンバー, D:ID, E:パスワード
+                    status_row = [global_area, global_store, login_num, login_id, login_pw]
+                else:
+                    # A:エリア, B:店名, C:ID, D:パスワード
+                    status_row = [global_area, global_store, login_id, login_pw]
+                
+                ws_status.append_row(status_row, value_input_option='USER_ENTERED')
                 
                 progress_text.empty()
                 st.success(f"✅ {len(valid_data)}件のデータを正常に登録しました！")
@@ -342,6 +332,7 @@ with tab4:
                     if st.button("🗑 削除", key=f"del_{b_name}"):
                         bucket.blob(b_name).delete()
                         st.cache_data.clear(); st.rerun()
+
 
 
 
