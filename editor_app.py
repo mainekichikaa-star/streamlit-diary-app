@@ -357,112 +357,110 @@ def main():
             st.info("「不備チェックを開始」ボタンを押すと、スプレッドシートと画像の照合を開始します。")
 
     # =========================================================================
-# --- TAB 3: 店舗アカウント状況 (UIブラッシュアップ版) ---
-# =========================================================================
-with tab3:
-    st.markdown("""
-        <style>
-        /* メトリックカードの装飾 */
-        [data-testid="stMetric"] {
-            background-color: #f8f9fb;
-            padding: 15px;
-            border-radius: 10px;
-            box-shadow: inset 0 0 5px rgba(0,0,0,0.05);
-            border: 1px solid #eee;
-        }
-        /* エリア別カードの装飾 */
-        .status-area-card {
-            background-color: #ffffff;
-            border: 1px solid #e1e4e8;
-            padding: 12px;
-            border-radius: 8px;
-            margin-bottom: 12px;
-            min-height: 100px;
-        }
-        .area-title {
-            color: #FF4B4B;
-            font-weight: 800;
-            font-size: 0.9em;
-            border-bottom: 1.5px solid #f0f2f6;
-            margin-bottom: 8px;
-            padding-bottom: 4px;
-        }
-        .shop-list {
-            font-size: 0.85em;
-            line-height: 1.5;
-            color: #333;
-        }
-        </style>
-    """, unsafe_allow_html=True)
+    # --- TAB 3: 店舗アカウント状況 (UIブラッシュアップ版) ---
+    # =========================================================================
+    with tab3:
+        st.markdown("""
+            <style>
+            /* メトリックカードの装飾 */
+            [data-testid="stMetric"] {
+                background-color: #f8f9fb;
+                padding: 15px;
+                border-radius: 10px;
+                box-shadow: inset 0 0 5px rgba(0,0,0,0.05);
+                border: 1px solid #eee;
+            }
+            /* エリア別カードの装飾 */
+            .status-area-card {
+                background-color: #ffffff;
+                border: 1px solid #e1e4e8;
+                padding: 12px;
+                border-radius: 8px;
+                margin-bottom: 12px;
+                min-height: 100px;
+            }
+            .area-title {
+                color: #FF4B4B;
+                font-weight: 800;
+                font-size: 0.9em;
+                border-bottom: 1.5px solid #f0f2f6;
+                margin-bottom: 8px;
+                padding-bottom: 4px;
+            }
+            .shop-list {
+                font-size: 0.85em;
+                line-height: 1.5;
+                color: #333;
+            }
+            </style>
+        """, unsafe_allow_html=True)
 
-    st.markdown("## 📊 店舗稼働ステータス")
-    st.caption("管理シートに基づいた店舗リストと、現在のアカウント投稿件数を表示しています。")
-    st.divider()
+        st.markdown("## 📊 店舗稼働ステータス")
+        st.caption("管理シートに基づいた店舗リストと、現在のアカウント投稿件数を表示しています。")
+        st.divider()
 
-    # 管理シートの定義
-    status_sheets = {
-        "駅ちか": "駅ちかアカウント",
-        "デリじゃ": "デリじゃアカウント",
-        "デイズ": "デイズアカウント"
-    }
+        # 管理シートの定義
+        status_sheets = {
+            "駅ちか": "駅ちかアカウント",
+            "デリじゃ": "デリじゃアカウント",
+            "デイズ": "デイズアカウント"
+        }
 
-    try:
-        status_sprs = GC.open_by_key(ACCOUNT_STATUS_SHEET_ID)
-        
-        for media_name, ws_name in status_sheets.items():
-            st.markdown(f"### 📱 {media_name} グループ")
+        try:
+            status_sprs = GC.open_by_key(ACCOUNT_STATUS_SHEET_ID)
             
-            # --- 上段：投稿件数メトリック (A/B横並び) ---
-            m_col1, m_col2 = st.columns(2)
-            
-            # Aアカウント
-            rows_a = get_full_sheet_data(SHEET_ID, SHEET_MAP.get(f"{media_name}A", ""))
-            count_a = len(rows_a) - 1 if rows_a else 0
-            with m_col1:
-                st.metric(label=f"👤 {media_name}A 投稿数", value=f"{count_a} 件")
+            for media_name, ws_name in status_sheets.items():
+                st.markdown(f"### 📱 {media_name} グループ")
                 
-            # Bアカウント
-            rows_b = get_full_sheet_data(SHEET_ID, SHEET_MAP.get(f"{media_name}B", ""))
-            count_b = len(rows_b) - 1 if rows_b else 0
-            with m_col2:
-                st.metric(label=f"👤 {media_name}B 投稿数", value=f"{count_b} 件")
-
-            # --- 下段：管理シートに基づく店舗リスト (カード並列表示) ---
-            ws_link = status_sprs.worksheet(ws_name)
-            link_data = ws_link.get_all_values()
-            
-            if len(link_data) > 1:
-                # エリアごとに店舗をまとめる
-                area_map = {}
-                for r in link_data[1:]:
-                    if len(r) >= 2:
-                        area = r[0].strip() if r[0].strip() else "未設定"
-                        shop = r[1].strip()
-                        if shop: # 店名がある場合のみ
-                            if area not in area_map: area_map[area] = []
-                            area_map[area].append(shop)
+                # --- 上段：投稿件数メトリック (A/B横並び) ---
+                m_col1, m_col2 = st.columns(2)
                 
-                # エリアカードを横並びで表示 (最大4列)
-                sorted_areas = sorted(area_map.keys())
-                if sorted_areas:
-                    cols = st.columns(4)
-                    for idx, area_name in enumerate(sorted_areas):
-                        with cols[idx % 4]:
-                            shops_html = "".join([f"<div>• {s}</div>" for s in sorted(area_map[area_name])])
-                            st.markdown(f"""
-                                <div class="status-area-card">
-                                    <div class="area-title">📍 {area_name} ({len(area_map[area_name])})</div>
-                                    <div class="shop-list">
-                                        {shops_html}
+                # Aアカウント
+                rows_a = get_full_sheet_data(SHEET_ID, SHEET_MAP.get(f"{media_name}A", ""))
+                count_a = len(rows_a) - 1 if rows_a else 0
+                with m_col1:
+                    st.metric(label=f"👤 {media_name}A 投稿数", value=f"{count_a} 件")
+                    
+                # Bアカウント
+                rows_b = get_full_sheet_data(SHEET_ID, SHEET_MAP.get(f"{media_name}B", ""))
+                count_b = len(rows_b) - 1 if rows_b else 0
+                with m_col2:
+                    st.metric(label=f"👤 {media_name}B 投稿数", value=f"{count_b} 件")
+
+                # --- 下段：管理シートに基づく店舗リスト (カード並列表示) ---
+                ws_link = status_sprs.worksheet(ws_name)
+                link_data = ws_link.get_all_values()
+                
+                if len(link_data) > 1:
+                    # エリアごとに店舗をまとめる
+                    area_map = {}
+                    for r in link_data[1:]:
+                        if len(r) >= 2:
+                            area = r[0].strip() if r[0].strip() else "未設定"
+                            shop = r[1].strip()
+                            if shop: # 店名がある場合のみ
+                                if area not in area_map: area_map[area] = []
+                                area_map[area].append(shop)
+                    
+                    # エリアカードを横並びで表示 (最大4列)
+                    sorted_areas = sorted(area_map.keys())
+                    if sorted_areas:
+                        cols_status = st.columns(4)
+                        for idx, area_name in enumerate(sorted_areas):
+                            with cols_status[idx % 4]:
+                                shops_html = "".join([f"<div>• {s}</div>" for s in sorted(area_map[area_name])])
+                                st.markdown(f"""
+                                    <div class="status-area-card">
+                                        <div class="area-title">📍 {area_name} ({len(area_map[area_name])})</div>
+                                        <div class="shop-list">
+                                            {shops_html}
+                                        </div>
                                     </div>
-                                </div>
-                            """, unsafe_allow_html=True)
-            else:
-                st.info("💡 管理シートに登録されている店舗はありません。")
-            
-            st.divider()
+                                """, unsafe_allow_html=True)
+                else:
+                    st.info("💡 管理シートに登録されている店舗はありません。")
+                
+                st.divider()
 
-    except Exception as e:
-        st.error(f"❌ データの取得中にエラーが発生しました: {e}")
-
-
+        except Exception as e:
+            st.error(f"❌ データの取得中にエラーが発生しました: {e}")
