@@ -127,7 +127,7 @@ def get_full_sheet_data(sheet_key, worksheet_name):
         return None
 
 # --- 4. UI構築 ---
-st.set_page_config(layout="wide", page_title="写メ日記投稿データ管理")
+st.set_page_config(layout="wide", page_title="浜松・写メ日記投稿データ管理")
 
 st.markdown("""
     <style>
@@ -505,6 +505,7 @@ def main():
             
 if __name__ == "__main__":
     main()
+
 
 
 
