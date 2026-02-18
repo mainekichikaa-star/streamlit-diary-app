@@ -250,22 +250,19 @@ with tab1:
 # --- Tab 2: 📊 ② 店舗アカウント状況 (究極API対策版) ---
 # =========================================================
 with tab2:
-    # 1. 更新用ボタンを配置
+    # 1. 更新用ボタンとヘッダーの準備
     if 'update_tick' not in st.session_state:
         st.session_state.update_tick = 0
     
-    col_h, col_btn = st.columns([3, 1])
-    with col_h:
-        # --- 投稿スケジュール案内 (UI強化版) ---
+    # --- 【改善】スケジュール案内は横幅いっぱいに表示 ---
     import datetime
     now = datetime.datetime.now()
     weekday = now.weekday()  # 0:月...6:日
     is_pattern_a = weekday in [0, 2, 4]
     
-    # デザイン定義
-    active_bg = "#fff1f1"  # 本日のパターンの背景色
-    active_border = "#FF4B4B" # 本日のパターンの枠線色
-    inactive_alpha = "0.5" # ではない方の透明度
+    active_bg = "#fff1f1"
+    active_border = "#FF4B4B"
+    inactive_alpha = "0.5"
 
     st.markdown(f"""
         <div style="display: flex; gap: 15px; margin-bottom: 25px; align-items: stretch;">
@@ -281,7 +278,10 @@ with tab2:
             </div>
         </div>
     """, unsafe_allow_html=True)
-    # -----------------------------------
+
+    # タイトルと更新ボタン
+    col_h, col_btn = st.columns([3, 1])
+    with col_h:
         st.markdown("## 📈 現在の稼働状況")
     with col_btn:
         if st.button("🔄 状況を最新に更新", use_container_width=True):
@@ -396,6 +396,7 @@ with tab4:
                     if st.button("🗑 削除", key=f"del_{b_name}"):
                         bucket.blob(b_name).delete()
                         st.cache_data.clear(); st.rerun()
+
 
 
 
