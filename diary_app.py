@@ -101,7 +101,9 @@ tab1, tab2, tab3, tab4 = st.tabs([
 with tab1:
     st.header("1️⃣ 浜松版：新規データ登録")
     
+    # フォームの開始
     with st.form("diary_input_form", clear_on_submit=False):
+        # 1. 基本情報
         c1, c2, c3 = st.columns(3)
         target_acc = c1.selectbox("👤 投稿アカウント", ACCOUNT_OPTIONS, key="sel_acc_f")
         
@@ -112,10 +114,10 @@ with tab1:
         global_store = c3.text_input("🏢 店名", key="in_store_f")
         
         st.subheader("🔑 ログイン情報")
-        # デイズの場合のみ「管理画面ナンバー」を表示するため3カラムに調整
+        # デイズの場合のみ「管理画面ナンバー」を表示
         if target_media == "デイズ":
             lc1, lc2, lc3 = st.columns(3)
-            login_num = lc1.text_input("管理画面ナンバー", key="login_num_f") # デイズ専用
+            login_num = lc1.text_input("管理画面ナンバー", key="login_num_f") 
             login_id = lc2.text_input("ID", key="login_id_f")
             login_pw = lc3.text_input("パスワード", key="login_pw_f")
         else:
@@ -127,9 +129,32 @@ with tab1:
         st.markdown("---")
         st.subheader("📸 投稿内容入力 (最大40件)")
 
-        # (ヘッダー表示部分は変更なしのため省略可、以下登録ロジック)
-        # ... (中略: 40件の入力フォーム生成部分はそのまま) ...
+        # ヘッダー
+        st.markdown("""
+            <div style="display: flex; flex-direction: row; border-bottom: 2px solid #444; background-color: #f0f2f6; padding: 10px; border-radius: 5px 5px 0 0;">
+                <div style="flex: 1; font-weight: bold; color: black;">時間</div>
+                <div style="flex: 1; font-weight: bold; color: black;">名前</div>
+                <div style="flex: 2; font-weight: bold; color: black;">タイトル</div>
+                <div style="flex: 3; font-weight: bold; color: black;">本文</div>
+                <div style="flex: 2; font-weight: bold; color: black;">画像</div>
+            </div>
+        """, unsafe_allow_html=True)
 
+        # 入力行の生成
+        form_entries = []
+        for i in range(40):
+            cols = st.columns([1, 1, 2, 3, 2])
+            e_time = cols[0].text_input(f"t{i}", key=f"f_t_{i}", label_visibility="collapsed")
+            e_name = cols[1].text_input(f"n{i}", key=f"f_n_{i}", label_visibility="collapsed")
+            e_title = cols[2].text_area(f"ti{i}", key=f"f_ti_{i}", height=68, label_visibility="collapsed")
+            e_body = cols[3].text_area(f"b{i}", key=f"f_b_{i}", height=68, label_visibility="collapsed")
+            e_img = cols[4].file_uploader(f"g{i}", key=f"f_img_{i}", label_visibility="collapsed")
+            form_entries.append({'投稿時間': e_time, '女の子の名前': e_name, 'タイトル': e_title, '本文': e_body, 'img': e_img})
+
+        # 【重要】ボタンは必ず with の中で定義する
+        submit_button = st.form_submit_button("🔥 データを一括登録する", type="primary", use_container_width=True)
+
+    # フォームの外でボタンクリック後の処理を行う
     if submit_button:
         valid_data = [e for e in form_entries if e['投稿時間'] and e['女の子の名前']]
         if not valid_data or not global_area or not global_store:
@@ -137,21 +162,21 @@ with tab1:
         else:
             progress_text = st.empty()
             try:
-                # --- 画像アップロード (店名のスペースを削除) ---
-                progress_text.info("📸 画像をアップロード中...")
-                # フォルダ名用に店名からスペースを消す
+                # 1. 店名からスペースを消す（画像フォルダ名用）
                 clean_store_name = normalize_text(global_store) 
                 
+                # 2. 画像をアップロード
+                progress_text.info("📸 画像をアップロード中...")
                 for e in valid_data:
                     if e['img']: 
-                        # ラッパー関数内で clean_store_name を使うよう修正されている前提
+                        # 店名はスペースなしの clean_store_name を使用
                         gcs_upload_wrapper(e['img'], e, global_area, clean_store_name, target_media, target_acc)
                 
-                # --- 日記文を登録 (左詰め & 0落ち防止) ---
+                # 3. 日記文を登録 (全媒体共通：左詰め6列)
                 progress_text.info("📝 日記文を登録中...")
                 ws_main = GC.open_by_key(SHEET_ID).worksheet(SHEET_MAP[target_acc])
                 
-                # 全媒体共通：A:エリア, B:店名, C:時間, D:名前, E:タイトル, F:本文
+                # A:エリア, B:店名, C:時間(0落ち防止), D:名前, E:タイトル, F:本文
                 rows_main = [[
                     global_area, 
                     global_store, 
@@ -163,12 +188,12 @@ with tab1:
                 
                 ws_main.append_rows(rows_main, value_input_option='USER_ENTERED')
                 
-                # --- ログイン情報を登録 (デイズのみ管理画面ナンバーあり) ---
+                # 4. ログイン情報を登録 (デイズのみ管理番号あり)
                 progress_text.info("🔐 ログイン情報を登録中...")
                 ws_status = GC.open_by_key(ACCOUNT_STATUS_SHEET_ID).worksheet(f"{target_media}アカウント")
                 
                 if target_media == "デイズ":
-                    # A:エリア, B:店名, C:管理画面ナンバー, D:ID, E:パスワード
+                    # A:エリア, B:店名, C:管理番号, D:ID, E:パスワード
                     status_row = [global_area, global_store, login_num, login_id, login_pw]
                 else:
                     # A:エリア, B:店名, C:ID, D:パスワード
@@ -332,6 +357,7 @@ with tab4:
                     if st.button("🗑 削除", key=f"del_{b_name}"):
                         bucket.blob(b_name).delete()
                         st.cache_data.clear(); st.rerun()
+
 
 
 
