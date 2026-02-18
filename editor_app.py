@@ -431,27 +431,23 @@ def main():
 
         try:
             status_sprs = GC.open_by_key(ACCOUNT_STATUS_SHEET_ID)
-            
             for media_name, ws_name in status_sheets.items():
                 st.markdown(f"### 📱 {media_name} グループ")
-                
-                # --- 上段：投稿件数メトリック (A/B横並び) ---
                 m_col1, m_col2 = st.columns(2)
                 
-                # --- Aアカウントの修正 ---
-                rows_a = all_data_cached.get(f"{media_name}A", [])
-                if rows_a and len(rows_a) > 1:
-                    count_a = len([r for r in rows_a[1:] if len(r) > 1 and r[1].strip() != ""])
-                else:
-                    count_a = 0
-                
-                # --- Bアカウントの修正 ---
-                rows_b = all_data_cached.get(f"{media_name}B", [])
-                if rows_b and len(rows_b) > 1:
-                    count_b = len([r for r in rows_b[1:] if len(r) > 1 and r[1].strip() != ""])
-                else:
-                    count_b = 0
-                
+                # --- 投稿件数カウントロジックの修正 ---
+                def count_valid_rows(rows):
+                    if not rows or len(rows) <= 1: return 0
+                    # 1行目(ヘッダー)を除外し、各行の「どこかに文字がある」行を数える(より安全)
+                    return len([r for r in rows[1:] if any(cell.strip() for cell in r)])
+
+                # Aアカウント
+                count_a = count_valid_rows(all_data_cached.get(f"{media_name}A", []))
+                # Bアカウント
+                count_b = count_valid_rows(all_data_cached.get(f"{media_name}B", []))
+
+                with m_col1:
+                    st.metric(label=f"👤 {media_name}A 投稿数", value=f"{count_a} 件")
                 with m_col2:
                     st.metric(label=f"👤 {media_name}B 投稿数", value=f"{count_b} 件")
 
@@ -495,6 +491,7 @@ def main():
             
 if __name__ == "__main__":
     main()
+
 
 
 
