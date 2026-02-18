@@ -380,54 +380,87 @@ def main():
             st.info("「不備チェックを開始」ボタンを押すと、スプレッドシートと画像の照合を開始します。")
 
     # =========================================================================
-    # --- TAB 3: 店舗アカウント状況 (UIブラッシュアップ版) ---
-    # =========================================================================
-    with tab3:
-        st.markdown("""
-            <style>
-            /* メトリックカードの装飾 */
-            [data-testid="stMetric"] {
-                background-color: #f8f9fb;
-                padding: 15px;
-                border-radius: 10px;
-                box-shadow: inset 0 0 5px rgba(0,0,0,0.05);
-                border: 1px solid #eee;
-            }
-            /* エリア別カードの装飾 */
-            .status-area-card {
-                background-color: #ffffff;
-                border: 1px solid #e1e4e8;
-                padding: 12px;
-                border-radius: 8px;
-                margin-bottom: 12px;
-                min-height: 100px;
-            }
-            .area-title {
-                color: #FF4B4B;
-                font-weight: 800;
-                font-size: 0.9em;
-                border-bottom: 1.5px solid #f0f2f6;
-                margin-bottom: 8px;
-                padding-bottom: 4px;
-            }
-            .shop-list {
-                font-size: 0.85em;
-                line-height: 1.5;
-                color: #333;
-            }
-            </style>
-        """, unsafe_allow_html=True)
-
-        st.markdown("## 📊 店舗稼働ステータス")
-        st.caption("管理シートに基づいた店舗リストと、現在のアカウント投稿件数を表示しています。")
-        st.divider()
-
-        # 管理シートの定義
-        status_sheets = {
-            "駅ちか": "駅ちかアカウント",
-            "デリじゃ": "デリじゃアカウント",
-            "デイズ": "デイズアカウント"
+# --- TAB 3: 店舗アカウント状況 (UIブラッシュアップ版) ---
+# =========================================================================
+with tab3:
+    # --- スタイル定義（既存のものはそのまま維持） ---
+    st.markdown("""
+        <style>
+        [data-testid="stMetric"] {
+            background-color: #f8f9fb;
+            padding: 15px;
+            border-radius: 10px;
+            box-shadow: inset 0 0 5px rgba(0,0,0,0.05);
+            border: 1px solid #eee;
         }
+        .status-area-card {
+            background-color: #ffffff;
+            border: 1px solid #e1e4e8;
+            padding: 12px;
+            border-radius: 8px;
+            margin-bottom: 12px;
+            min-height: 100px;
+        }
+        .area-title {
+            color: #FF4B4B;
+            font-weight: 800;
+            font-size: 0.9em;
+            border-bottom: 1.5px solid #f0f2f6;
+            margin-bottom: 8px;
+            padding-bottom: 4px;
+        }
+        .shop-list {
+            font-size: 0.85em;
+            line-height: 1.5;
+            color: #333;
+        }
+        </style>
+    """, unsafe_allow_html=True)
+
+    # --- 【追加】曜日判定ロジックと共通UI ---
+    import datetime
+    now = datetime.datetime.now()
+    # 朝6時より前なら、判定用の日付を「昨日」にする
+    logic_date = now - datetime.timedelta(days=1) if now.hour < 6 else now
+    weekday = logic_date.weekday()
+    is_pattern_a = weekday in [0, 2, 4] # 月水金判定
+
+    def get_status_card_html(p_name, p_days, is_active):
+        style = (
+            "flex: 1; padding: 15px; border-radius: 12px; position: relative; "
+            "border: 2px solid #FF4B4B; background-color: #fff1f1; opacity: 1;"
+            if is_active else
+            "flex: 1; padding: 15px; border-radius: 12px; position: relative; "
+            "border: 1px solid #eee; background-color: #fcfcfc; opacity: 0.4;"
+        )
+        badge = '<div style="color: #FF4B4B; font-weight: bold; font-size: 0.8rem; margin-top: 5px;">● 現在の稼働曜日</div>' if is_active else ""
+        return f"""
+        <div style="{style}">
+            <div style="font-size: 0.75rem; color: #666; margin-bottom: 2px;">{p_name}</div>
+            <div style="font-weight: bold; font-size: 1rem; color: #333;">{p_days}</div>
+            {badge}
+        </div>
+        """
+
+    # 共通の稼働表示
+    st.markdown(f"""
+        <div style="display: flex; gap: 12px; margin-bottom: 20px; align-items: stretch;">
+            {get_status_card_html("PATTERN A", "月曜 ・ 水曜 ・ 金曜", is_pattern_a)}
+            {get_status_card_html("PATTERN B", "火曜 ・ 木曜 ・ 土曜 ・ 日曜", not is_pattern_a)}
+        </div>
+    """, unsafe_allow_html=True)
+
+    # ヘッダー部分（判定基準日を追加）
+    st.markdown(f"## 📊 店舗稼働ステータス <small style='font-size:0.5em; color:#999;'>（判定基準日: {logic_date.strftime('%m/%d')}）</small>", unsafe_allow_html=True)
+    st.caption("管理シートに基づいた店舗リストと、現在のアカウント投稿件数を表示しています。")
+    st.divider()
+
+    # --- 以下、既存の管理シート読み込みロジック ---
+    status_sheets = {
+        "駅ちか": "駅ちかアカウント",
+        "デリじゃ": "デリじゃアカウント",
+        "デイズ": "デイズアカウント"
+    }
 
         try:
             status_sprs = GC.open_by_key(ACCOUNT_STATUS_SHEET_ID)
@@ -505,6 +538,7 @@ def main():
             
 if __name__ == "__main__":
     main()
+
 
 
 
