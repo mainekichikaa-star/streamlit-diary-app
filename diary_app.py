@@ -121,20 +121,23 @@ tab1, tab2, tab3, tab4 = st.tabs([
 with tab1:
     st.header("1️⃣ 浜松版：新規データ登録")
     
+    # --- 投稿スケジュール案内 (UI改善版) ---
+    st.markdown("""
+        <div style="background-color: #f0f2f6; padding: 15px; border-radius: 10px; border-left: 5px solid #FF4B4B; margin-bottom: 20px;">
+            <p style="margin: 0; font-size: 0.9rem; color: #555;">📅 <b>投稿スケジュール説明</b></p>
+            <div style="display: flex; gap: 20px; margin-top: 5px;">
+                <div style="flex: 1;"><b>パターン A:</b> 月曜日・水曜日・金曜日</div>
+                <div style="flex: 1;"><b>パターン B:</b> 火曜日・木曜日・土曜日・日曜日</div>
+            </div>
+        </div>
+    """, unsafe_allow_html=True)
+    # -----------------------------------
+    
     # リアルタイム切り替えのためフォームの外に配置
     c1, c2, c3 = st.columns(3)
     target_acc = c1.selectbox("👤 投稿アカウント", ACCOUNT_OPTIONS, key="sel_acc_f")
     
     target_media = "駅ちか" if "駅ちか" in target_acc else "デリじゃ" if "デリじゃ" in target_acc else "デイズ" if "デイズ" in target_acc else "不明"
-    
-    # --- 投稿パターンの説明 ---
-    st.markdown("""
-    | パターン | 該当曜日 |
-    | :--- | :--- |
-    | **パターン A** | 月曜日・水曜日・金曜日 |
-    | **パターン B** | 火曜日・木曜日・土曜日・日曜日 |
-    """, unsafe_allow_html=True)
-    # -----------------------
     
     global_area = c2.text_input("📍 エリア", key="in_area_f")
     global_store = c3.text_input("🏢 店名", key="in_store_f")
@@ -367,6 +370,7 @@ with tab4:
                     if st.button("🗑 削除", key=f"del_{b_name}"):
                         bucket.blob(b_name).delete()
                         st.cache_data.clear(); st.rerun()
+
 
 
 
