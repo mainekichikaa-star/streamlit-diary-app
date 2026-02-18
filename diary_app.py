@@ -45,6 +45,11 @@ def get_clients():
 
 GC, GCS_CLIENT = get_clients()
 
+def normalize_text(s):
+    if not s: return ""
+    # 全角・半角スペースをすべて削除し、小文字に統一する
+    return re.sub(r'\s+', '', str(s)).replace('　', '').lower()
+
 def gcs_upload_wrapper(uploaded_file, entry, area, store, media, sel_acc):
     try:
         bucket = GCS_CLIENT.bucket(GCS_BUCKET_NAME)
@@ -325,6 +330,7 @@ with tab4:
                     if st.button("🗑 削除", key=f"del_{b_name}"):
                         bucket.blob(b_name).delete()
                         st.cache_data.clear(); st.rerun()
+
 
 
 
