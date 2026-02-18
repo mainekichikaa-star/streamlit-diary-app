@@ -354,47 +354,70 @@ def main():
         else:
             st.info("「不備チェックを開始」ボタンを押すと、スプレッドシートと画像の照合を開始します。")
 
-    # =========================================================================
+   # =========================================================================
     # TAB 3: 店舗アカウント状況
     # =========================================================================
     with tab3:
-        st.markdown("## 📊 店舗アカウント状況")
-        status_sheets = {"駅ちか": "駅ちかアカウント", "デリじゃ": "デリじゃアカウント", "デイズ": "デイズアカウント"}
+        st.markdown("## 📊 店舗アカウント状況 (マスター参照)")
+        
+        # アカウント管理シートの読み込み
+        # 浜松仕様のシート名定義
+        status_sheets = {
+            "駅ちか": "駅ちかアカウント",
+            "デリじゃ": "デリじゃアカウント",
+            "デイズ": "デイズアカウント"
+        }
 
-        if st.button("📊 最新の投稿件数を集計する", key="load_stats_btn", type="primary", use_container_width=True):
-            try:
-                status_sprs = GC.open_by_key(ACCOUNT_STATUS_SHEET_ID)
-                cols = st.columns(3)
-                for i, (media_name, ws_name) in enumerate(status_sheets.items()):
-                    with cols[i]:
-                        st.markdown(f"### 📱 {media_name}")
-                        for suffix in ["A", "B"]:
-                            acc_key = f"{media_name}{suffix}"
-                            try:
-                                sid = SHEET_MAP.get(acc_key, "")
-                                if sid:
-                                    ws = GC.open_by_key(SHEET_ID).worksheet(sid)
-                                    # B列（店名）だけを取得して高速化
-                                    names = ws.col_values(2)
-                                    count = len([x for x in names[1:] if x.strip()])
-                                else: count = 0
-                            except: count = "ERR"
-                            st.write(f"{acc_key}")
-                            st.markdown(f"## {count} 件")
+        try:
+            # 管理シートから全データを取得
+            status_sprs = GC.open_by_key(ACCOUNT_STATUS_SHEET_ID)
+            
+            # 各媒体（駅ちか、デリじゃ、デイズ）ごとにカラムを分けて表示
+            m1, m2, m3 = st.columns(3)
+            media_cols = {"駅ちか": m1, "デリじゃ": m2, "デイズ": m3}
+
+            for media_name, ws_name in status_sheets.items():
+                with media_cols[media_name]:
+                    st.subheader(f"📱 {media_name}")
+                    ws_link = status_sprs.worksheet(ws_name)
+                    link_data = ws_link.get_all_values()
+                    
+                    if len(link_data) <= 1:
+                        st.caption("登録店舗なし")
+                        continue
+
+                    # 1:アカウント(A/B), 2:店舗名, 0:エリア (シート構造に合わせる)
+                    # 浜松の管理シート構造: 0:エリア, 1:店舗名, 2:アカウント状況など
+                    df_status = pd.DataFrame(link_data[1:])
+                    
+                    # 各アカウント(A/B)ごとにグループ化して表示
+                    for acc_suffix in ["A", "B"]:
+                        acc_full_name = f"{media_name}{acc_suffix}"
+                        # 投稿シート(SHEET_MAP)から現在の投稿件数を取得
+                        current_rows = get_full_sheet_data(SHEET_ID, SHEET_MAP.get(acc_full_name, ""))
+                        count = len(current_rows) - 1 if current_rows else 0
                         
+                        st.markdown(f"**【{acc_suffix}】** (`{count}件`) ")
+                        
+                        # 管理シート内で、この媒体のAまたはBに該当する店舗を抽出
+                        # ※管理シート側の「どのアカウントか」を判定する列インデックスに合わせて調整してください
+                        # ここでは仮に2列目に「A」や「B」が入っている、もしくは判定ロジックがあるものとします
+                        matched_shops = []
+                        for r in link_data[1:]:
+                            if len(r) >= 2:
+                                # 管理シートの運用に合わせて、ここでA/Bの振り分けを判定
+                                # 例: 店舗名や備考欄から判定、あるいは単純にそのシートにある全店舗を表示
+                                matched_shops.append(f"• {r[0]} / {r[1]}")
+                        
+                        if matched_shops:
+                            with st.expander(f"{acc_full_name} の店舗一覧"):
+                                for s in sorted(matched_shops):
+                                    st.write(s)
                         st.divider()
-                        st.markdown("##### 📍 登録店舗一覧")
-                        try:
-                            l_data = status_sprs.worksheet(ws_name).get_all_values()
-                            if len(l_data) > 1:
-                                l_df = pd.DataFrame(l_data[1:])
-                                for area, group in l_df.groupby(0):
-                                    st.markdown(f"**【{area}】**")
-                                    for shop in sorted(group[1].unique()):
-                                        if shop.strip(): st.text(f"  • {shop}")
-                        except: st.caption("リスト取得失敗")
-            except Exception as e:
-                st.error(f"接続エラー: {e}")
-        else:
-            st.info("ボタンを押すと、管理シートの店舗リストと各アカウントの投稿実数を表示します。")
 
+        except Exception as e:
+            st.error(f"アカウント状況の取得に失敗しました: {e}")
+
+# --- スクリプト末尾 ---
+if __name__ == "__main__":
+    main()
