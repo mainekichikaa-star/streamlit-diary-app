@@ -256,6 +256,32 @@ with tab2:
     
     col_h, col_btn = st.columns([3, 1])
     with col_h:
+        # --- 投稿スケジュール案内 (UI強化版) ---
+    import datetime
+    now = datetime.datetime.now()
+    weekday = now.weekday()  # 0:月...6:日
+    is_pattern_a = weekday in [0, 2, 4]
+    
+    # デザイン定義
+    active_bg = "#fff1f1"  # 本日のパターンの背景色
+    active_border = "#FF4B4B" # 本日のパターンの枠線色
+    inactive_alpha = "0.5" # ではない方の透明度
+
+    st.markdown(f"""
+        <div style="display: flex; gap: 15px; margin-bottom: 25px; align-items: stretch;">
+            <div style="flex: 1; padding: 15px; border-radius: 12px; border: 2px solid {' ' + active_border if is_pattern_a else '#eee'}; background-color: {' ' + active_bg if is_pattern_a else '#f9f9f9'}; opacity: {' 1' if is_pattern_a else inactive_alpha}; position: relative;">
+                {'<span style="position: absolute; top: -10px; right: 10px; background: #FF4B4B; color: white; padding: 2px 10px; border-radius: 10px; font-size: 0.75rem; font-weight: bold;">✨ 本日の推奨</span>' if is_pattern_a else ''}
+                <div style="font-size: 0.85rem; color: #666; margin-bottom: 5px;">【パターン A】</div>
+                <div style="font-weight: bold; font-size: 1rem;">月曜 ・ 水曜 ・ 金曜</div>
+            </div>
+            <div style="flex: 1; padding: 15px; border-radius: 12px; border: 2px solid {' ' + active_border if not is_pattern_a else '#eee'}; background-color: {' ' + active_bg if not is_pattern_a else '#f9f9f9'}; opacity: {' 1' if not is_pattern_a else inactive_alpha}; position: relative;">
+                {'<span style="position: absolute; top: -10px; right: 10px; background: #FF4B4B; color: white; padding: 2px 10px; border-radius: 10px; font-size: 0.75rem; font-weight: bold;">✨ 本日の推奨</span>' if not is_pattern_a else ''}
+                <div style="font-size: 0.85rem; color: #666; margin-bottom: 5px;">【パターン B】</div>
+                <div style="font-weight: bold; font-size: 1rem;">火曜 ・ 木曜 ・ 土曜 ・ 日曜</div>
+            </div>
+        </div>
+    """, unsafe_allow_html=True)
+    # -----------------------------------
         st.markdown("## 📈 現在の稼働状況")
     with col_btn:
         if st.button("🔄 状況を最新に更新", use_container_width=True):
@@ -370,6 +396,7 @@ with tab4:
                     if st.button("🗑 削除", key=f"del_{b_name}"):
                         bucket.blob(b_name).delete()
                         st.cache_data.clear(); st.rerun()
+
 
 
 
