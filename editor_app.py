@@ -417,15 +417,23 @@ def main():
                 # --- 上段：投稿件数メトリック (A/B横並び) ---
                 m_col1, m_col2 = st.columns(2)
                 
-                # Aアカウント
+                # Aアカウント：店名(1番目のインデックス)が空でない行だけをカウント
                 rows_a = get_full_sheet_data(SHEET_ID, SHEET_MAP.get(f"{media_name}A", ""))
-                count_a = len(rows_a) - 1 if rows_a else 0
+                if rows_a and len(rows_a) > 1:
+                    count_a = len([r for r in rows_a[1:] if len(r) > 1 and r[1].strip() != ""])
+                else:
+                    count_a = 0
+                
                 with m_col1:
                     st.metric(label=f"👤 {media_name}A 投稿数", value=f"{count_a} 件")
                     
-                # Bアカウント
+                # Bアカウント：店名(1番目のインデックス)が空でない行だけをカウント
                 rows_b = get_full_sheet_data(SHEET_ID, SHEET_MAP.get(f"{media_name}B", ""))
-                count_b = len(rows_b) - 1 if rows_b else 0
+                if rows_b and len(rows_b) > 1:
+                    count_b = len([r for r in rows_b[1:] if len(r) > 1 and r[1].strip() != ""])
+                else:
+                    count_b = 0
+                
                 with m_col2:
                     st.metric(label=f"👤 {media_name}B 投稿数", value=f"{count_b} 件")
 
@@ -469,5 +477,6 @@ def main():
             
 if __name__ == "__main__":
     main()
+
 
 
