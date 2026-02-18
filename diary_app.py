@@ -127,6 +127,12 @@ with tab1:
     
     target_media = "駅ちか" if "駅ちか" in target_acc else "デリじゃ" if "デリじゃ" in target_acc else "デイズ" if "デイズ" in target_acc else "不明"
     
+    st.info(f"""
+    📅 **投稿スケジュール確認**
+    - {a_style}パターン A：月曜日・水曜日・金曜日{a_style} {" ← ✨本日" if is_pattern_a else ""}
+    - {b_style}パターン B：火曜日・木曜日・土曜日・日曜日{b_style} {" ← ✨本日" if not is_pattern_a else ""}
+    """)
+    
     global_area = c2.text_input("📍 エリア", key="in_area_f")
     global_store = c3.text_input("🏢 店名", key="in_store_f")
 
@@ -358,6 +364,7 @@ with tab4:
                     if st.button("🗑 削除", key=f"del_{b_name}"):
                         bucket.blob(b_name).delete()
                         st.cache_data.clear(); st.rerun()
+
 
 
 
