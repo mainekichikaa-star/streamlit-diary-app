@@ -152,29 +152,33 @@ with tab1:
         if not valid_data or not global_area or not global_store:
             st.error("⚠️ 入力不足：エリア、店名、および少なくとも1件以上の「時間・名前」を入力してください。")
         else:
-            # フォーム送信直後にキャッシュをクリア
-            st.cache_data.clear()
-            
             progress_text = st.empty()
             try:
-                # 1. フォルダ名用
+                # 1. 前処理（画像フォルダ名）
                 clean_store_name = normalize_text(global_store) 
                 
-                # 2. 画像
+                # 2. 画像アップロード
                 progress_text.info("📸 画像をアップロード中...")
                 for e in valid_data:
                     if e['img']: 
                         gcs_upload_wrapper(e['img'], e, global_area, clean_store_name, target_media, target_acc)
                 
-                # 3. 日記文 (ここが重要)
-                progress_text.info(f"📝 {target_acc} のシートに書き込み中...")
+                # 3. 日記文を一括登録
+                progress_text.info("📝 日記データを一括送信中...")
                 ws_main = GC.open_by_key(SHEET_ID).worksheet(SHEET_MAP[target_acc])
-                rows_main = [[global_area, global_store, f"'{e['投稿時間']}", e['女の子の名前'], e['タイトル'], e['本文']] for e in valid_data]
+                rows_main = [[
+                    global_area, 
+                    global_store, 
+                    f"'{e['投稿時間']}", 
+                    e['女の子の名前'], 
+                    e['タイトル'], 
+                    e['本文']
+                ] for e in valid_data]
                 
-                # append_rows を確実に完了させる
+                # ここで一括書き込み (1回のリクエスト)
                 ws_main.append_rows(rows_main, value_input_option='USER_ENTERED')
                 
-                # 4. ログイン情報
+                # 4. ログイン情報を登録
                 progress_text.info("🔐 ログイン情報を登録中...")
                 ws_status = GC.open_by_key(ACCOUNT_STATUS_SHEET_ID).worksheet(f"{target_media}アカウント")
                 if target_media == "デイズ":
@@ -183,17 +187,22 @@ with tab1:
                     status_row = [global_area, global_store, login_id, login_pw]
                 ws_status.append_row(status_row, value_input_option='USER_ENTERED')
                 
-                # 完了表示
+                # 5. 完了処理
                 progress_text.empty()
-                st.success(f"✅ {len(valid_data)}件の登録に成功しました。")
+                st.success(f"✅ {len(valid_data)}件のデータを正常に登録しました！")
                 
-                # 画面更新を確実にするための短い待機
+                # 重要：API制限回避のため、少し待ってからキャッシュクリアとリスタート
                 import time
-                time.sleep(1)
+                time.sleep(2) 
+                st.cache_data.clear()
                 st.rerun()
 
             except Exception as e:
-                st.error(f"❌ 登録中にエラーが発生しました: {e}")
+                # 429エラーが出た場合の対策
+                if "429" in str(e):
+                    st.error("⚠️ Googleの制限により一時的に登録できません。30秒ほど待ってから再度お試しください。")
+                else:
+                    st.error(f"❌ 登録エラーが発生しました: {e}")
                 
 # =========================================================
 # --- Tab 2: 📊 ② 店舗アカウント状況 (UIブラッシュアップ版) ---
@@ -344,6 +353,7 @@ with tab4:
                     if st.button("🗑 削除", key=f"del_{b_name}"):
                         bucket.blob(b_name).delete()
                         st.cache_data.clear(); st.rerun()
+
 
 
 
