@@ -101,83 +101,66 @@ tab1, tab2, tab3, tab4 = st.tabs([
 with tab1:
     st.header("1️⃣ 浜松版：新規データ登録")
     
-    # フォームの外に置くことで、アカウント選択時に即座に再描画させる
+    # リアルタイム切り替えのためフォームの外に配置
     c1, c2, c3 = st.columns(3)
     target_acc = c1.selectbox("👤 投稿アカウント", ACCOUNT_OPTIONS, key="sel_acc_f")
     
-    # 媒体の自動判別
     target_media = "駅ちか" if "駅ちか" in target_acc else "デリじゃ" if "デリじゃ" in target_acc else "デイズ" if "デイズ" in target_acc else "不明"
     
-    global_area = c2.text_input("📍 エリア", placeholder="例：浜松", key="in_area_f")
-    global_store = c3.text_input("🏢 店名", placeholder="例：テスト店舗", key="in_store_f")
+    global_area = c2.text_input("📍 エリア", key="in_area_f")
+    global_store = c3.text_input("🏢 店名", key="in_store_f")
 
-    # ここからフォーム
     with st.form("diary_input_form", clear_on_submit=False):
-        
         st.subheader("🔑 ログイン情報")
-        # デイズの場合のみ「管理画面ナンバー」を表示
         if target_media == "デイズ":
             lc1, lc2, lc3 = st.columns(3)
-            login_num = lc1.text_input("管理画面ナンバー", placeholder="例：12345", key="login_num_f") 
-            login_id = lc2.text_input("ID", placeholder="ログインID", key="login_id_f")
-            login_pw = lc3.text_input("パスワード", type="password", key="login_pw_f")
+            login_num = lc1.text_input("管理画面ナンバー", key="login_num_f") 
+            login_id = lc2.text_input("ID", key="login_id_f")
+            login_pw = lc3.text_input("パスワード", key="login_pw_f")
         else:
             lc1, lc2 = st.columns(2)
-            login_id = lc1.text_input("ID", placeholder="ログインID", key="login_id_f")
-            login_pw = lc2.text_input("パスワード", type="password", key="login_pw_f")
+            login_id = lc1.text_input("ID", key="login_id_f")
+            login_pw = lc2.text_input("パスワード", key="login_pw_f")
             login_num = "" 
 
         st.markdown("---")
         st.subheader("📸 投稿内容入力 (最大40件)")
 
-        # 表形式のヘッダー表示
-        st.markdown("""
-            <div style="display: flex; flex-direction: row; border-bottom: 2px solid #444; background-color: #f0f2f6; padding: 10px; border-radius: 5px 5px 0 0; margin-bottom: 5px;">
-                <div style="flex: 1; font-weight: bold; color: black; text-align: center;">時間</div>
-                <div style="flex: 1; font-weight: bold; color: black; text-align: center;">名前</div>
-                <div style="flex: 2; font-weight: bold; color: black; text-align: center;">タイトル</div>
-                <div style="flex: 3; font-weight: bold; color: black; text-align: center;">本文</div>
-                <div style="flex: 2; font-weight: bold; color: black; text-align: center;">画像</div>
-            </div>
-        """, unsafe_allow_html=True)
-
+        # 各列の項目名を表示するように修正（collapsedを削除）
         form_entries = []
         for i in range(40):
             cols = st.columns([1, 1, 2, 3, 2])
-            # placeholder を追加して、枠の中に文字を表示
-            e_time = cols[0].text_input(f"t{i}", placeholder="0000", key=f"f_t_{i}", label_visibility="collapsed")
-            e_name = cols[1].text_input(f"n{i}", placeholder="名前", key=f"f_n_{i}", label_visibility="collapsed")
-            e_title = cols[2].text_area(f"ti{i}", placeholder="タイトル", key=f"f_ti_{i}", height=68, label_visibility="collapsed")
-            e_body = cols[3].text_area(f"b{i}", placeholder="本文を入力", key=f"f_b_{i}", height=68, label_visibility="collapsed")
-            e_img = cols[4].file_uploader(f"g{i}", key=f"f_img_{i}", label_visibility="collapsed")
+            # 最初の1行目だけラベルを表示する設定
+            l_vis = "visible" if i == 0 else "collapsed"
+            
+            e_time = cols[0].text_input("時間", key=f"f_t_{i}", label_visibility=l_vis)
+            e_name = cols[1].text_input("名前", key=f"f_n_{i}", label_visibility=l_vis)
+            e_title = cols[2].text_area("タイトル", key=f"f_ti_{i}", height=68, label_visibility=l_vis)
+            e_body = cols[3].text_area("本文", key=f"f_b_{i}", height=68, label_visibility=l_vis)
+            e_img = cols[4].file_uploader("画像", key=f"f_img_{i}", label_visibility=l_vis)
             form_entries.append({'投稿時間': e_time, '女の子の名前': e_name, 'タイトル': e_title, '本文': e_body, 'img': e_img})
 
         submit_button = st.form_submit_button("🔥 データを一括登録する", type="primary", use_container_width=True)
 
-    # --- 登録ロジック ---
     if submit_button:
+        # (登録ロジック：媒体列なし・左詰め・店名スペース削除・0落ち防止)
         valid_data = [e for e in form_entries if e['投稿時間'] and e['女の子の名前']]
         if not valid_data or not global_area or not global_store:
             st.error("⚠️ 入力不足：エリア、店名、および少なくとも1件以上の「時間・名前」を入力してください。")
         else:
             progress_text = st.empty()
             try:
-                # 店名のスペース削除（画像フォルダ用）
                 clean_store_name = normalize_text(global_store) 
-                
-                # 画像アップロード
                 progress_text.info("📸 画像をアップロード中...")
                 for e in valid_data:
                     if e['img']: 
                         gcs_upload_wrapper(e['img'], e, global_area, clean_store_name, target_media, target_acc)
                 
-                # 日記文登録
                 progress_text.info("📝 日記文を登録中...")
                 ws_main = GC.open_by_key(SHEET_ID).worksheet(SHEET_MAP[target_acc])
                 rows_main = [[global_area, global_store, f"'{e['投稿時間']}", e['女の子の名前'], e['タイトル'], e['本文']] for e in valid_data]
                 ws_main.append_rows(rows_main, value_input_option='USER_ENTERED')
                 
-                # ログイン情報登録
                 progress_text.info("🔐 ログイン情報を登録中...")
                 ws_status = GC.open_by_key(ACCOUNT_STATUS_SHEET_ID).worksheet(f"{target_media}アカウント")
                 if target_media == "デイズ":
@@ -342,6 +325,7 @@ with tab4:
                     if st.button("🗑 削除", key=f"del_{b_name}"):
                         bucket.blob(b_name).delete()
                         st.cache_data.clear(); st.rerun()
+
 
 
 
