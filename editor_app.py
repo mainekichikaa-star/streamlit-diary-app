@@ -34,11 +34,12 @@ def normalize_text(s):
     if not s: return ""
     return re.sub(r'\s+', '', str(s)).replace('　', '').lower()
 
+@st.cache_data(ttl=300) # 5分間はGCSのリストを使い回す
+def get_cached_blobs(area):
+    bucket = GCS_CLIENT.bucket(GCS_BUCKET_NAME)
+    return list(bucket.list_blobs(prefix=f"{area}/"))
+
 def get_target_blobs(bucket, area, sel_acc, store_name):
-    """
-    GCS上のフォルダを全角・半角スペース問わず検索し、
-    その配下にある「ファイル」のみを抽出して返す
-    """
     suffix = "【A】" if "A" in sel_acc else "【B】"
     if "デリじゃ" in sel_acc:
         base_pattern = f"デリじゃ{store_name}{suffix}"
@@ -49,25 +50,17 @@ def get_target_blobs(bucket, area, sel_acc, store_name):
     
     target_norm = normalize_text(base_pattern)
     
-    # prefixを指定して絞り込み（list化して確実に取得）
-    full_list = list(bucket.list_blobs(prefix=f"{area}/"))
+    # ここを修正：APIを叩かずキャッシュから取得
+    full_list = get_cached_blobs(area)
     
     matched_blobs = []
     for blob in full_list:
-        # blob.name の例: "富山/M.O.M 【A】/0501_松浦.jpg"
         path_parts = blob.name.split('/')
-        
-        # 階層が足りない（フォルダ自身など）場合はスキップ
-        if len(path_parts) < 3:
-            continue
-            
-        # フォルダ名の部分（例: "M.O.M 【A】"）を抽出して比較
+        if len(path_parts) < 3: continue
         folder_part = path_parts[1]
         if normalize_text(folder_part) == target_norm:
-            # ファイル名が存在する場合のみ追加
             if path_parts[2]:
                 matched_blobs.append(blob)
-                
     return matched_blobs
 
 def parse_to_datetime(t_str):
@@ -91,10 +84,11 @@ def get_cached_url(blob_name):
     return f"https://storage.googleapis.com/{GCS_BUCKET_NAME}/{urllib.parse.quote(blob_name)}"
 
 # --- 3. API接続 & キャッシュ設定 ---
-@st.cache_resource(ttl=3600)
+st.cache_resource(ttl=3600)
 def get_clients():
-    gc = gspread.service_account_from_dict(st.secrets["gcp_service_account"])
-    gcs = storage.Client.from_service_account_info(st.secrets["gcp_service_account"])
+    creds = st.secrets["gcp_service_account"]
+    gc = gspread.service_account_from_dict(creds)
+    gcs = storage.Client.from_service_account_info(creds)
     return gc, gcs
 
 GC, GCS_CLIENT = get_clients()
@@ -467,3 +461,4 @@ def main():
             
 if __name__ == "__main__":
     main()
+
