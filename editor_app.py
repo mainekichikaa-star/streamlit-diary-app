@@ -355,11 +355,12 @@ def main():
             st.info("「不備チェックを開始」ボタンを押すと、スプレッドシートと画像の照合を開始します。")
 
     # =========================================================================
-    # TAB 3: 店舗アカウント状況 (大宮版ロジック + 浜松軽量化)
+    # TAB 3: 店舗アカウント状況
     # =========================================================================
     with tab3:
         st.markdown("## 📊 店舗アカウント状況")
         
+        # 管理シートの定義
         status_sheets = {
             "駅ちか": "駅ちかアカウント",
             "デリじゃ": "デリじゃアカウント",
@@ -369,52 +370,53 @@ def main():
         try:
             status_sprs = GC.open_by_key(ACCOUNT_STATUS_SHEET_ID)
             
-            # 媒体ごとに縦に並べる
-            for media_name, ws_name in status_sheets.items():
-                st.markdown(f"### 📱 {media_name}")
-                
-                # --- 1. 件数表示 (横並び) ---
-                c1, c2 = st.columns(2)
-                for i, suffix in enumerate(["A", "B"]):
-                    acc_key = f"{media_name}{suffix}"
-                    with [c1, c2][i]:
-                        try:
-                            sid = SHEET_MAP.get(acc_key, "")
-                            if sid:
-                                # B列(店名)だけをピンポイントで取得して数える(高速)
-                                ws_work = GC.open_by_key(SHEET_ID).worksheet(sid)
-                                names = ws_work.col_values(2)
-                                count = len([x for x in names[1:] if x.strip()])
-                            else: count = 0
-                        except: count = "ERR"
-                        st.metric(label=f"投稿{acc_key}", value=f"{count} 件")
-                
-                # --- 2. 管理シートに基づく店舗リスト (エリアごとに横並び表示) ---
-                ws_link = status_sprs.worksheet(ws_name)
-                link_data = ws_link.get_all_values()
-                
-                if len(link_data) > 1:
-                    area_map = {}
-                    for r in link_data[1:]:
-                        if len(r) >= 2:
-                            area, shop = r[0].strip(), r[1].strip()
-                            if not area: area = "不明"
-                            if area not in area_map: area_map[area] = []
-                            area_map[area].append(shop)
+            # 媒体ごとに横並びで表示
+            cols = st.columns(3)
+            
+            for i, (media_name, ws_name) in enumerate(status_sheets.items()):
+                with cols[i]:
+                    st.markdown(f"### 📱 {media_name}")
                     
-                    # エリア数に合わせて横カラムを作成 (大宮版スタイル)
-                    if area_map:
-                        areas = sorted(area_map.keys())
-                        area_cols = st.columns(len(areas))
-                        for idx, area_name in enumerate(areas):
-                            with area_cols[idx]:
-                                st.info(f"📍 **{area_name}**")
-                                for s in sorted(area_map[area_name]):
+                    # --- 投稿件数の取得 ---
+                    # Aアカウント
+                    rows_a = get_full_sheet_data(SHEET_ID, SHEET_MAP.get(f"{media_name}A", ""))
+                    count_a = len(rows_a) - 1 if rows_a else 0
+                    
+                    # Bアカウント
+                    rows_b = get_full_sheet_data(SHEET_ID, SHEET_MAP.get(f"{media_name}B", ""))
+                    count_b = len(rows_b) - 1 if rows_b else 0
+                    
+                    # 件数表示
+                    st.metric(label=f"{media_name}A", value=f"{count_a} 件")
+                    st.metric(label=f"{media_name}B", value=f"{count_b} 件")
+                    
+                    st.divider()
+
+                    # --- 管理シートに基づく店舗リスト表示 ---
+                    ws_link = status_sprs.worksheet(ws_name)
+                    link_data = ws_link.get_all_values()
+                    
+                    if len(link_data) > 1:
+                        # エリアごとに店舗をまとめる
+                        area_map = {}
+                        for r in link_data[1:]:
+                            if len(r) >= 2:
+                                area, shop = r[0].strip(), r[1].strip()
+                                if not area: area = "その他"
+                                if area not in area_map: area_map[area] = []
+                                area_map[area].append(shop)
+                        
+                        # エリアごとに展開表示
+                        for area_name, shops in area_map.items():
+                            with st.expander(f"📍 {area_name} ({len(shops)}店舗)"):
+                                for s in sorted(shops):
                                     st.write(f"• {s}")
-                else:
-                    st.caption("登録店舗なし")
-                
-                st.divider()
+                    else:
+                        st.caption("管理シートに登録がありません")
 
         except Exception as e:
             st.error(f"データの取得中にエラーが発生しました: {e}")
+
+# --- スクリプト末尾 ---
+if __name__ == "__main__":
+    main()
