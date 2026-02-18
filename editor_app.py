@@ -102,6 +102,8 @@ GC, GCS_CLIENT = get_clients()
 @st.cache_data(ttl=600)
 def get_full_sheet_data(sheet_key, worksheet_name):
     try:
+        if not worksheet_name: # シート名が空の場合はNoneを返す
+            return None
         sh = GC.open_by_key(sheet_key)
         ws = sh.worksheet(worksheet_name)
         return ws.get_all_values()
@@ -462,3 +464,4 @@ with tab3:
 
     except Exception as e:
         st.error(f"❌ データの取得中にエラーが発生しました: {e}")
+
