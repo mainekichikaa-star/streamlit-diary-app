@@ -178,37 +178,37 @@ with tab1:
                     if e['img']: 
                         gcs_upload_wrapper(e['img'], e, global_area, clean_store_name, target_media, target_acc)
                 
-                # 3. 日記文を一括登録
+                # 3. 日記文を一括登録 (ここからインデントを修正)
                 progress_text.info("📝 日記データを一括送信中...")
-ws_main = GC.open_by_key(SHEET_ID).worksheet(SHEET_MAP[target_acc])
+                ws_main = GC.open_by_key(SHEET_ID).worksheet(SHEET_MAP[target_acc])
 
-rows_main = []
-for e in valid_data:
-    if "デイズ" in target_acc:
-        # デイズ専用：0:エリア, 1:店名, 2:時間, 3:名前, 4:URL(空), 5:タイトル, 6:本文
-        row = [
-            global_area, 
-            global_store, 
-            f"'{e['投稿時間']}", 
-            e['女の子の名前'], 
-            "", # 4列目のURL列を空にする
-            e['タイトル'], 
-            e['本文']
-        ]
-    else:
-        # その他：0:エリア, 1:店名, 2:時間, 3:名前, 4:タイトル, 5:本文
-        row = [
-            global_area, 
-            global_store, 
-            f"'{e['投稿時間']}", 
-            e['女の子の名前'], 
-            e['タイトル'], 
-            e['本文']
-        ]
-    rows_main.append(row)
+                rows_main = []
+                for e in valid_data:
+                    if "デイズ" in target_acc:
+                        # デイズ専用：0:エリア, 1:店名, 2:時間, 3:名前, 4:URL(空), 5:タイトル, 6:本文
+                        row = [
+                            global_area, 
+                            global_store, 
+                            f"'{e['投稿時間']}", 
+                            e['女の子の名前'], 
+                            "", # 4列目のURL列を空にする
+                            e['タイトル'], 
+                            e['本文']
+                        ]
+                    else:
+                        # その他：0:エリア, 1:店名, 2:時間, 3:名前, 4:タイトル, 5:本文
+                        row = [
+                            global_area, 
+                            global_store, 
+                            f"'{e['投稿時間']}", 
+                            e['女の子の名前'], 
+                            e['タイトル'], 
+                            e['本文']
+                        ]
+                    rows_main.append(row)
 
-# 書き込み実行
-ws_main.append_rows(rows_main, value_input_option='USER_ENTERED')
+                # 書き込み実行
+                ws_main.append_rows(rows_main, value_input_option='USER_ENTERED')
                 
                 # 4. ログイン情報を登録
                 progress_text.info("🔐 ログイン情報を登録中...")
@@ -223,14 +223,12 @@ ws_main.append_rows(rows_main, value_input_option='USER_ENTERED')
                 progress_text.empty()
                 st.success(f"✅ {len(valid_data)}件のデータを正常に登録しました！")
                 
-                # 重要：API制限回避のため、少し待ってからキャッシュクリアとリスタート
                 import time
                 time.sleep(2) 
                 st.cache_data.clear()
                 st.rerun()
 
             except Exception as e:
-                # 429エラーが出た場合の対策
                 if "429" in str(e):
                     st.error("⚠️ Googleの制限により一時的に登録できません。30秒ほど待ってから再度お試しください。")
                 else:
@@ -360,6 +358,7 @@ with tab4:
                     if st.button("🗑 削除", key=f"del_{b_name}"):
                         bucket.blob(b_name).delete()
                         st.cache_data.clear(); st.rerun()
+
 
 
 
