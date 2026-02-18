@@ -288,22 +288,22 @@ with tab2:
         </div>
     """, unsafe_allow_html=True)
 
-    # タイトルと更新ボタン
+    # --- ヘッダー・更新ボタン ---
     col_h, col_btn = st.columns([3, 1])
     with col_h:
-        st.markdown("## 📈 現在の稼働状況")
+        st.markdown(f"## 📈 現在の稼働状況 <small style='font-size:0.5em; color:#999;'>（判定基準日: {logic_date.strftime('%m/%d')}）</small>", unsafe_allow_html=True)
     with col_btn:
         if st.button("🔄 状況を最新に更新", use_container_width=True):
             st.session_state.update_tick += 1
             st.cache_data.clear()
             st.rerun()
 
-    st.caption("※ API保護のため10分間キャッシュされます。最新にしたい場合は更新ボタンを押してください。")
+    st.caption("※ API保護のため10分間キャッシュされます。")
     st.divider()
-    
-    # 2. キャッシュされたデータを取得（ここがAPI節約のキモ）
+
+    # 2. キャッシュされたデータを取得（関数名は適宜合わせてください）
     with st.spinner("データを取得中..."):
-        all_data_cached = get_full_sheet_data(SHEET_ID, st.session_state.update_tick)
+        all_data_cached = get_all_accounts_data_cached(st.session_state.update_tick)
 
     # 3. 表示ロジック（取得済みの all_data_cached を使うのでAPI消費ゼロ）
     groups = {
@@ -405,6 +405,7 @@ with tab4:
                     if st.button("🗑 削除", key=f"del_{b_name}"):
                         bucket.blob(b_name).delete()
                         st.cache_data.clear(); st.rerun()
+
 
 
 
