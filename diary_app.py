@@ -254,35 +254,36 @@ with tab2:
     if 'update_tick' not in st.session_state:
         st.session_state.update_tick = 0
     
-    # --- 【営業時間（10時〜翌6時）を考慮した曜日判定】 ---
+    # --- 【営業時間（10時〜翌6時）を考慮した正確な曜日判定】 ---
     import datetime
-    # 現在時刻を取得
     now = datetime.datetime.now()
-    
     # 朝6時より前なら、判定用の日付を「昨日」にする
-    if now.hour < 6:
-        logic_date = now - datetime.timedelta(days=1)
-    else:
-        logic_date = now
+    logic_date = now - datetime.timedelta(days=1) if now.hour < 6 else now
     
     weekday = logic_date.weekday()  # 0:月...6:日
-    is_pattern_a = weekday in [0, 2, 4] # 月水金
+    is_pattern_a = weekday in [0, 2, 4] # 月水金判定
     
-    # UI表示用
-    active_style = "border: 2px solid #FF4B4B; background-color: #fff1f1; opacity: 1;"
-    inactive_style = "border: 1px solid #eee; background-color: #f9f9f9; opacity: 0.4;"
+    # --- UIデザインの修正（閉じタグ漏れ・崩れ対策） ---
+    # カードの基本スタイル
+    base_card = "flex: 1; padding: 18px; border-radius: 12px; position: relative; transition: 0.3s;"
+    active_style = f"{base_card} border: 2px solid #FF4B4B; background-color: #fff1f1; opacity: 1; box-shadow: 0 4px 12px rgba(255,75,75,0.1);"
+    inactive_style = f"{base_card} border: 1px solid #eee; background-color: #fcfcfc; opacity: 0.4;"
+
+    # ラベル（現在稼働中の時だけ表示）
+    badge_a = '<div style="color: #FF4B4B; font-weight: bold; font-size: 0.85rem; margin-top: 8px;">● 現在の稼働曜日</div>' if is_pattern_a else ""
+    badge_b = '<div style="color: #FF4B4B; font-weight: bold; font-size: 0.85rem; margin-top: 8px;">● 現在の稼働曜日</div>' if not is_pattern_a else ""
 
     st.markdown(f"""
-        <div style="display: flex; gap: 15px; margin-bottom: 25px; align-items: stretch;">
-            <div style="flex: 1; padding: 15px; border-radius: 12px; {active_style if is_pattern_a else inactive_style}">
-                <div style="font-size: 0.85rem; color: #666; margin-bottom: 5px;">【パターン A】</div>
-                <div style="font-weight: bold; font-size: 1rem;">月曜 ・ 水曜 ・ 金曜</div>
-                {"<div style='color: #FF4B4B; font-weight: bold; font-size: 0.8rem; margin-top: 5px;'>● 現在の稼働曜日</div>" if is_pattern_a else ""}
+        <div style="display: flex; gap: 15px; margin-bottom: 30px; align-items: stretch;">
+            <div style="{active_style if is_pattern_a else inactive_style}">
+                <div style="font-size: 0.8rem; color: #666; margin-bottom: 4px; letter-spacing: 0.05em;">PATTERN A</div>
+                <div style="font-weight: bold; font-size: 1.1rem; color: #333;">月曜 ・ 水曜 ・ 金曜</div>
+                {badge_a}
             </div>
-            <div style="flex: 1; padding: 15px; border-radius: 12px; {active_style if not is_pattern_a else inactive_style}">
-                <div style="font-size: 0.85rem; color: #666; margin-bottom: 5px;">【パターン B】</div>
-                <div style="font-weight: bold; font-size: 1rem;">火曜 ・ 木曜 ・ 土曜 ・ 日曜</div>
-                {"<div style='color: #FF4B4B; font-weight: bold; font-size: 0.8rem; margin-top: 5px;'>● 現在の稼働曜日</div>" if not is_pattern_a else ""}
+            <div style="{active_style if not is_pattern_a else inactive_style}">
+                <div style="font-size: 0.8rem; color: #666; margin-bottom: 4px; letter-spacing: 0.05em;">PATTERN B</div>
+                <div style="font-weight: bold; font-size: 1.1rem; color: #333;">火曜 ・ 木曜 ・ 土曜 ・ 日曜</div>
+                {badge_b}
             </div>
         </div>
     """, unsafe_allow_html=True)
@@ -404,6 +405,7 @@ with tab4:
                     if st.button("🗑 削除", key=f"del_{b_name}"):
                         bucket.blob(b_name).delete()
                         st.cache_data.clear(); st.rerun()
+
 
 
 
