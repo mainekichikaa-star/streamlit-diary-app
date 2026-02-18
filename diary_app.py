@@ -71,11 +71,13 @@ def get_cached_url(blob_name):
     safe_path = urllib.parse.quote(blob_name)
     return f"https://storage.googleapis.com/{GCS_BUCKET_NAME}/{safe_path}"
 
+# --- 究極のAPI対策：キャッシュ読み込み関数 ---
 @st.cache_data(ttl=600)
-def get_full_sheet_data(sheet_id, sheet_map, update_tick):
+def get_full_sheet_data(sheet_id, update_tick): # 引数をシンプルに
     """全投稿シートのデータを一括で取得してキャッシュする"""
     results = {}
-    for acc_name, s_name in sheet_map.items():
+    # 定義済みの SHEET_MAP {"駅ちかA": "投稿駅ちかA", ...} を使う
+    for acc_name, s_name in SHEET_MAP.items():
         try:
             ws = GC.open_by_key(sheet_id).worksheet(s_name)
             data = ws.get_all_values()
@@ -83,17 +85,7 @@ def get_full_sheet_data(sheet_id, sheet_map, update_tick):
         except:
             results[acc_name] = []
     return results
-
-@st.cache_data(ttl=600)
-def get_usable_diary_data(update_tick):
-    """Tab 3用の使用可能日記文を取得してキャッシュする"""
-    try:
-        tmp_sprs = GC.open_by_key(USABLE_DIARY_SHEET_ID)
-        tmp_ws = tmp_sprs.sheet1
-        return tmp_ws.get_all_values()
-    except:
-        return []
-
+    
 # =========================================================
 # --- 3. UI 構築 ---
 # =========================================================
@@ -351,6 +343,7 @@ with tab4:
                     if st.button("🗑 削除", key=f"del_{b_name}"):
                         bucket.blob(b_name).delete()
                         st.cache_data.clear(); st.rerun()
+
 
 
 
