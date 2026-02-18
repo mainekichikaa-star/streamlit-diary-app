@@ -438,8 +438,22 @@ def main():
                 # --- 投稿件数カウントロジックの修正 ---
                 def count_valid_rows(rows):
                     if not rows or len(rows) <= 1: return 0
-                    # 1行目(ヘッダー)を除外し、各行の「どこかに文字がある」行を数える(より安全)
-                    return len([r for r in rows[1:] if any(cell.strip() for cell in r)])
+                    
+                    count = 0
+                    for r in rows[1:]:
+                        # 行の長さが足りない場合はスキップ
+                        if len(r) < 2: continue
+                        
+                        # [修正ポイント] 
+                        # 2列目(インデックス1)の「店名」が空でないこと
+                        # かつ、3列目(インデックス2)の「投稿時間」が空でないこと
+                        # この2条件が揃っている行だけを「投稿データ」とみなす
+                        shop_name = r[1].strip()
+                        post_time = r[2].strip() if len(r) > 2 else ""
+                        
+                        if shop_name != "" and post_time != "":
+                            count += 1
+                    return count
 
                 # Aアカウント
                 count_a = count_valid_rows(all_data_cached.get(f"{media_name}A", []))
@@ -491,6 +505,7 @@ def main():
             
 if __name__ == "__main__":
     main()
+
 
 
 
