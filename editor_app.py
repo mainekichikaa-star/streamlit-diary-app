@@ -380,87 +380,85 @@ def main():
             st.info("「不備チェックを開始」ボタンを押すと、スプレッドシートと画像の照合を開始します。")
 
     # =========================================================================
-# --- TAB 3: 店舗アカウント状況 (UIブラッシュアップ版) ---
-# =========================================================================
-with tab3:
-    # --- スタイル定義（既存のものはそのまま維持） ---
-    st.markdown("""
-        <style>
-        [data-testid="stMetric"] {
-            background-color: #f8f9fb;
-            padding: 15px;
-            border-radius: 10px;
-            box-shadow: inset 0 0 5px rgba(0,0,0,0.05);
-            border: 1px solid #eee;
+    # --- TAB 3: 店舗アカウント状況 (UIブラッシュアップ版) ---
+    # =========================================================================
+    with tab3:
+        # --- スタイル定義 ---
+        st.markdown("""
+            <style>
+            [data-testid="stMetric"] {
+                background-color: #f8f9fb;
+                padding: 15px;
+                border-radius: 10px;
+                box-shadow: inset 0 0 5px rgba(0,0,0,0.05);
+                border: 1px solid #eee;
+            }
+            .status-area-card {
+                background-color: #ffffff;
+                border: 1px solid #e1e4e8;
+                padding: 12px;
+                border-radius: 8px;
+                margin-bottom: 12px;
+                min-height: 100px;
+            }
+            .area-title {
+                color: #FF4B4B;
+                font-weight: 800;
+                font-size: 0.9em;
+                border-bottom: 1.5px solid #f0f2f6;
+                margin-bottom: 8px;
+                padding-bottom: 4px;
+            }
+            .shop-list {
+                font-size: 0.85em;
+                line-height: 1.5;
+                color: #333;
+            }
+            </style>
+        """, unsafe_allow_html=True)
+
+        # --- 曜日判定ロジック ---
+        import datetime
+        now = datetime.datetime.now()
+        logic_date = now - datetime.timedelta(days=1) if now.hour < 6 else now
+        weekday = logic_date.weekday()
+        is_pattern_a = weekday in [0, 2, 4] # 月水金判定
+
+        def get_status_card_html(p_name, p_days, is_active):
+            style = (
+                "flex: 1; padding: 15px; border-radius: 12px; position: relative; "
+                "border: 2px solid #FF4B4B; background-color: #fff1f1; opacity: 1;"
+                if is_active else
+                "flex: 1; padding: 15px; border-radius: 12px; position: relative; "
+                "border: 1px solid #eee; background-color: #fcfcfc; opacity: 0.4;"
+            )
+            badge = '<div style="color: #FF4B4B; font-weight: bold; font-size: 0.8rem; margin-top: 5px;">● 現在の稼働曜日</div>' if is_active else ""
+            return f"""
+            <div style="{style}">
+                <div style="font-size: 0.75rem; color: #666; margin-bottom: 2px;">{p_name}</div>
+                <div style="font-weight: bold; font-size: 1rem; color: #333;">{p_days}</div>
+                {badge}
+            </div>
+            """
+
+        # 共通の稼働表示
+        st.markdown(f"""
+            <div style="display: flex; gap: 12px; margin-bottom: 20px; align-items: stretch;">
+                {get_status_card_html("PATTERN A", "月曜 ・ 水曜 ・ 金曜", is_pattern_a)}
+                {get_status_card_html("PATTERN B", "火曜 ・ 木曜 ・ 土曜 ・ 日曜", not is_pattern_a)}
+            </div>
+        """, unsafe_allow_html=True)
+
+        st.markdown(f"## 📊 店舗稼働ステータス <small style='font-size:0.5em; color:#999;'>（判定基準日: {logic_date.strftime('%m/%d')}）</small>", unsafe_allow_html=True)
+        st.caption("管理シートに基づいた店舗リストと、現在のアカウント投稿件数を表示しています。")
+        st.divider()
+
+        # --- 管理シート読み込み ---
+        status_sheets = {
+            "駅ちか": "駅ちかアカウント",
+            "デリじゃ": "デリじゃアカウント",
+            "デイズ": "デイズアカウント"
         }
-        .status-area-card {
-            background-color: #ffffff;
-            border: 1px solid #e1e4e8;
-            padding: 12px;
-            border-radius: 8px;
-            margin-bottom: 12px;
-            min-height: 100px;
-        }
-        .area-title {
-            color: #FF4B4B;
-            font-weight: 800;
-            font-size: 0.9em;
-            border-bottom: 1.5px solid #f0f2f6;
-            margin-bottom: 8px;
-            padding-bottom: 4px;
-        }
-        .shop-list {
-            font-size: 0.85em;
-            line-height: 1.5;
-            color: #333;
-        }
-        </style>
-    """, unsafe_allow_html=True)
-
-    # --- 【追加】曜日判定ロジックと共通UI ---
-    import datetime
-    now = datetime.datetime.now()
-    # 朝6時より前なら、判定用の日付を「昨日」にする
-    logic_date = now - datetime.timedelta(days=1) if now.hour < 6 else now
-    weekday = logic_date.weekday()
-    is_pattern_a = weekday in [0, 2, 4] # 月水金判定
-
-    def get_status_card_html(p_name, p_days, is_active):
-        style = (
-            "flex: 1; padding: 15px; border-radius: 12px; position: relative; "
-            "border: 2px solid #FF4B4B; background-color: #fff1f1; opacity: 1;"
-            if is_active else
-            "flex: 1; padding: 15px; border-radius: 12px; position: relative; "
-            "border: 1px solid #eee; background-color: #fcfcfc; opacity: 0.4;"
-        )
-        badge = '<div style="color: #FF4B4B; font-weight: bold; font-size: 0.8rem; margin-top: 5px;">● 現在の稼働曜日</div>' if is_active else ""
-        return f"""
-        <div style="{style}">
-            <div style="font-size: 0.75rem; color: #666; margin-bottom: 2px;">{p_name}</div>
-            <div style="font-weight: bold; font-size: 1rem; color: #333;">{p_days}</div>
-            {badge}
-        </div>
-        """
-
-    # 共通の稼働表示
-    st.markdown(f"""
-        <div style="display: flex; gap: 12px; margin-bottom: 20px; align-items: stretch;">
-            {get_status_card_html("PATTERN A", "月曜 ・ 水曜 ・ 金曜", is_pattern_a)}
-            {get_status_card_html("PATTERN B", "火曜 ・ 木曜 ・ 土曜 ・ 日曜", not is_pattern_a)}
-        </div>
-    """, unsafe_allow_html=True)
-
-    # ヘッダー部分（判定基準日を追加）
-    st.markdown(f"## 📊 店舗稼働ステータス <small style='font-size:0.5em; color:#999;'>（判定基準日: {logic_date.strftime('%m/%d')}）</small>", unsafe_allow_html=True)
-    st.caption("管理シートに基づいた店舗リストと、現在のアカウント投稿件数を表示しています。")
-    st.divider()
-
-    # --- 以下、既存の管理シート読み込みロジック ---
-    status_sheets = {
-        "駅ちか": "駅ちかアカウント",
-        "デリじゃ": "デリじゃアカウント",
-        "デイズ": "デイズアカウント"
-    }
 
         try:
             status_sprs = GC.open_by_key(ACCOUNT_STATUS_SHEET_ID)
@@ -468,29 +466,18 @@ with tab3:
                 st.markdown(f"### 📱 {media_name} グループ")
                 m_col1, m_col2 = st.columns(2)
                 
-                # --- 投稿件数カウントロジックの修正 ---
                 def count_valid_rows(rows):
                     if not rows or len(rows) <= 1: return 0
-                    
                     count = 0
                     for r in rows[1:]:
-                        # 行の長さが足りない場合はスキップ
                         if len(r) < 2: continue
-                        
-                        # [修正ポイント] 
-                        # 2列目(インデックス1)の「店名」が空でないこと
-                        # かつ、3列目(インデックス2)の「投稿時間」が空でないこと
-                        # この2条件が揃っている行だけを「投稿データ」とみなす
                         shop_name = r[1].strip()
                         post_time = r[2].strip() if len(r) > 2 else ""
-                        
                         if shop_name != "" and post_time != "":
                             count += 1
                     return count
 
-                # Aアカウント
                 count_a = count_valid_rows(all_data_cached.get(f"{media_name}A", []))
-                # Bアカウント
                 count_b = count_valid_rows(all_data_cached.get(f"{media_name}B", []))
 
                 with m_col1:
@@ -498,22 +485,19 @@ with tab3:
                 with m_col2:
                     st.metric(label=f"👤 {media_name}B 投稿数", value=f"{count_b} 件")
 
-                # --- 下段：管理シートに基づく店舗リスト (カード並列表示) ---
                 ws_link = status_sprs.worksheet(ws_name)
                 link_data = ws_link.get_all_values()
                 
                 if len(link_data) > 1:
-                    # エリアごとに店舗をまとめる
                     area_map = {}
                     for r in link_data[1:]:
                         if len(r) >= 2:
                             area = r[0].strip() if r[0].strip() else "未設定"
                             shop = r[1].strip()
-                            if shop: # 店名がある場合のみ
+                            if shop:
                                 if area not in area_map: area_map[area] = []
                                 area_map[area].append(shop)
                     
-                    # エリアカードを横並びで表示 (最大4列)
                     sorted_areas = sorted(area_map.keys())
                     if sorted_areas:
                         cols_status = st.columns(4)
@@ -538,6 +522,7 @@ with tab3:
             
 if __name__ == "__main__":
     main()
+
 
 
 
