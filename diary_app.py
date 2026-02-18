@@ -263,28 +263,29 @@ with tab2:
     weekday = logic_date.weekday()  # 0:月...6:日
     is_pattern_a = weekday in [0, 2, 4] # 月水金判定
     
-    # --- UIデザインの修正（閉じタグ漏れ・崩れ対策） ---
-    # カードの基本スタイル
-    base_card = "flex: 1; padding: 18px; border-radius: 12px; position: relative; transition: 0.3s;"
-    active_style = f"{base_card} border: 2px solid #FF4B4B; background-color: #fff1f1; opacity: 1; box-shadow: 0 4px 12px rgba(255,75,75,0.1);"
-    inactive_style = f"{base_card} border: 1px solid #eee; background-color: #fcfcfc; opacity: 0.4;"
-
-    # ラベル（現在稼働中の時だけ表示）
-    badge_a = '<div style="color: #FF4B4B; font-weight: bold; font-size: 0.85rem; margin-top: 8px;">● 現在の稼働曜日</div>' if is_pattern_a else ""
-    badge_b = '<div style="color: #FF4B4B; font-weight: bold; font-size: 0.85rem; margin-top: 8px;">● 現在の稼働曜日</div>' if not is_pattern_a else ""
+    # --- UIデザインの修正（タグ漏れ・崩れを完全に防ぐ構造） ---
+    def get_card_html(p_name, p_days, is_active):
+        style = (
+            "flex: 1; padding: 18px; border-radius: 12px; position: relative; "
+            "border: 2px solid #FF4B4B; background-color: #fff1f1; opacity: 1; box-shadow: 0 4px 12px rgba(255,75,75,0.1);"
+            if is_active else
+            "flex: 1; padding: 18px; border-radius: 12px; position: relative; "
+            "border: 1px solid #eee; background-color: #fcfcfc; opacity: 0.4;"
+        )
+        badge = '<div style="color: #FF4B4B; font-weight: bold; font-size: 0.85rem; margin-top: 8px;">● 現在の稼働曜日</div>' if is_active else ""
+        
+        return f"""
+        <div style="{style}">
+            <div style="font-size: 0.8rem; color: #666; margin-bottom: 4px; letter-spacing: 0.05em;">{p_name}</div>
+            <div style="font-weight: bold; font-size: 1.1rem; color: #333;">{p_days}</div>
+            {badge}
+        </div>
+        """
 
     st.markdown(f"""
         <div style="display: flex; gap: 15px; margin-bottom: 30px; align-items: stretch;">
-            <div style="{active_style if is_pattern_a else inactive_style}">
-                <div style="font-size: 0.8rem; color: #666; margin-bottom: 4px; letter-spacing: 0.05em;">PATTERN A</div>
-                <div style="font-weight: bold; font-size: 1.1rem; color: #333;">月曜 ・ 水曜 ・ 金曜</div>
-                {badge_a}
-            </div>
-            <div style="{active_style if not is_pattern_a else inactive_style}">
-                <div style="font-size: 0.8rem; color: #666; margin-bottom: 4px; letter-spacing: 0.05em;">PATTERN B</div>
-                <div style="font-weight: bold; font-size: 1.1rem; color: #333;">火曜 ・ 木曜 ・ 土曜 ・ 日曜</div>
-                {badge_b}
-            </div>
+            {get_card_html("PATTERN A", "月曜 ・ 水曜 ・ 金曜", is_pattern_a)}
+            {get_card_html("PATTERN B", "火曜 ・ 木曜 ・ 土曜 ・ 日曜", not is_pattern_a)}
         </div>
     """, unsafe_allow_html=True)
 
@@ -301,16 +302,16 @@ with tab2:
     st.caption("※ API保護のため10分間キャッシュされます。")
     st.divider()
 
-    # 2. キャッシュされたデータを取得（関数名は適宜合わせてください）
+    # 2. キャッシュされたデータを取得
     with st.spinner("データを取得中..."):
         all_data_cached = get_all_accounts_data_cached(st.session_state.update_tick)
 
-    # 3. 表示ロジック（取得済みの all_data_cached を使うのでAPI消費ゼロ）
-    groups = {
+    # 3. 表示ロジック（そのまま継続）
+    groups = {{
         "駅ちか": ["駅ちかA", "駅ちかB"],
         "デリじゃ": ["デリじゃA", "デリじゃB"],
         "デイズ": ["デイズA", "デイズB"]
-    }
+    }}
 
     for label, accounts in groups.items():
         with st.container():
@@ -335,6 +336,7 @@ with tab2:
             if valid_dfs:
                 st.markdown("#### 📍 登録中の店舗一覧")
                 full_df = pd.concat(valid_dfs)
+                # 2列目（インデックス1）が店名
                 full_df = full_df[full_df[1].str.strip() != ""]
                 
                 area_map = {}
@@ -405,6 +407,7 @@ with tab4:
                     if st.button("🗑 削除", key=f"del_{b_name}"):
                         bucket.blob(b_name).delete()
                         st.cache_data.clear(); st.rerun()
+
 
 
 
