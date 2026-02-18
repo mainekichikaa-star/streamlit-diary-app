@@ -148,24 +148,33 @@ with tab1:
         submit_button = st.form_submit_button("🔥 データを一括登録する", type="primary", use_container_width=True)
 
     if submit_button:
-        # (登録ロジック：媒体列なし・左詰め・店名スペース削除・0落ち防止)
         valid_data = [e for e in form_entries if e['投稿時間'] and e['女の子の名前']]
         if not valid_data or not global_area or not global_store:
             st.error("⚠️ 入力不足：エリア、店名、および少なくとも1件以上の「時間・名前」を入力してください。")
         else:
+            # フォーム送信直後にキャッシュをクリア
+            st.cache_data.clear()
+            
             progress_text = st.empty()
             try:
+                # 1. フォルダ名用
                 clean_store_name = normalize_text(global_store) 
+                
+                # 2. 画像
                 progress_text.info("📸 画像をアップロード中...")
                 for e in valid_data:
                     if e['img']: 
                         gcs_upload_wrapper(e['img'], e, global_area, clean_store_name, target_media, target_acc)
                 
-                progress_text.info("📝 日記文を登録中...")
+                # 3. 日記文 (ここが重要)
+                progress_text.info(f"📝 {target_acc} のシートに書き込み中...")
                 ws_main = GC.open_by_key(SHEET_ID).worksheet(SHEET_MAP[target_acc])
                 rows_main = [[global_area, global_store, f"'{e['投稿時間']}", e['女の子の名前'], e['タイトル'], e['本文']] for e in valid_data]
+                
+                # append_rows を確実に完了させる
                 ws_main.append_rows(rows_main, value_input_option='USER_ENTERED')
                 
+                # 4. ログイン情報
                 progress_text.info("🔐 ログイン情報を登録中...")
                 ws_status = GC.open_by_key(ACCOUNT_STATUS_SHEET_ID).worksheet(f"{target_media}アカウント")
                 if target_media == "デイズ":
@@ -174,12 +183,17 @@ with tab1:
                     status_row = [global_area, global_store, login_id, login_pw]
                 ws_status.append_row(status_row, value_input_option='USER_ENTERED')
                 
+                # 完了表示
                 progress_text.empty()
-                st.success(f"✅ {len(valid_data)}件のデータを正常に登録しました！")
-                st.cache_data.clear()
+                st.success(f"✅ {len(valid_data)}件の登録に成功しました。")
+                
+                # 画面更新を確実にするための短い待機
+                import time
+                time.sleep(1)
                 st.rerun()
+
             except Exception as e:
-                st.error(f"❌ 登録エラーが発生しました: {e}")
+                st.error(f"❌ 登録中にエラーが発生しました: {e}")
                 
 # =========================================================
 # --- Tab 2: 📊 ② 店舗アカウント状況 (UIブラッシュアップ版) ---
@@ -330,6 +344,7 @@ with tab4:
                     if st.button("🗑 削除", key=f"del_{b_name}"):
                         bucket.blob(b_name).delete()
                         st.cache_data.clear(); st.rerun()
+
 
 
 
