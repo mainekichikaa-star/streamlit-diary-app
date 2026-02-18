@@ -247,34 +247,42 @@ with tab1:
                     st.error(f"❌ 登録エラーが発生しました: {e}")
                 
 # =========================================================
-# --- Tab 2: 📊 ② 店舗アカウント状況 (究極API対策版) ---
+# --- Tab 2: 📊 ② 店舗アカウント状況 ---
 # =========================================================
 with tab2:
-    # 1. 更新用ボタンとヘッダーの準備
+    # 1. 更新用ボタンを配置
     if 'update_tick' not in st.session_state:
         st.session_state.update_tick = 0
     
-    # --- 【改善】スケジュール案内は横幅いっぱいに表示 ---
+    # --- 【営業時間（10時〜翌6時）を考慮した曜日判定】 ---
     import datetime
+    # 現在時刻を取得
     now = datetime.datetime.now()
-    weekday = now.weekday()  # 0:月...6:日
-    is_pattern_a = weekday in [0, 2, 4]
     
-    active_bg = "#fff1f1"
-    active_border = "#FF4B4B"
-    inactive_alpha = "0.5"
+    # 朝6時より前なら、判定用の日付を「昨日」にする
+    if now.hour < 6:
+        logic_date = now - datetime.timedelta(days=1)
+    else:
+        logic_date = now
+    
+    weekday = logic_date.weekday()  # 0:月...6:日
+    is_pattern_a = weekday in [0, 2, 4] # 月水金
+    
+    # UI表示用
+    active_style = "border: 2px solid #FF4B4B; background-color: #fff1f1; opacity: 1;"
+    inactive_style = "border: 1px solid #eee; background-color: #f9f9f9; opacity: 0.4;"
 
     st.markdown(f"""
         <div style="display: flex; gap: 15px; margin-bottom: 25px; align-items: stretch;">
-            <div style="flex: 1; padding: 15px; border-radius: 12px; border: 2px solid {' ' + active_border if is_pattern_a else '#eee'}; background-color: {' ' + active_bg if is_pattern_a else '#f9f9f9'}; opacity: {' 1' if is_pattern_a else inactive_alpha}; position: relative;">
-                {'<span style="position: absolute; top: -10px; right: 10px; background: #FF4B4B; color: white; padding: 2px 10px; border-radius: 10px; font-size: 0.75rem; font-weight: bold;">✨ 本日の推奨</span>' if is_pattern_a else ''}
+            <div style="flex: 1; padding: 15px; border-radius: 12px; {active_style if is_pattern_a else inactive_style}">
                 <div style="font-size: 0.85rem; color: #666; margin-bottom: 5px;">【パターン A】</div>
                 <div style="font-weight: bold; font-size: 1rem;">月曜 ・ 水曜 ・ 金曜</div>
+                {"<div style='color: #FF4B4B; font-weight: bold; font-size: 0.8rem; margin-top: 5px;'>● 現在の稼働曜日</div>" if is_pattern_a else ""}
             </div>
-            <div style="flex: 1; padding: 15px; border-radius: 12px; border: 2px solid {' ' + active_border if not is_pattern_a else '#eee'}; background-color: {' ' + active_bg if not is_pattern_a else '#f9f9f9'}; opacity: {' 1' if not is_pattern_a else inactive_alpha}; position: relative;">
-                {'<span style="position: absolute; top: -10px; right: 10px; background: #FF4B4B; color: white; padding: 2px 10px; border-radius: 10px; font-size: 0.75rem; font-weight: bold;">✨ 本日の推奨</span>' if not is_pattern_a else ''}
+            <div style="flex: 1; padding: 15px; border-radius: 12px; {active_style if not is_pattern_a else inactive_style}">
                 <div style="font-size: 0.85rem; color: #666; margin-bottom: 5px;">【パターン B】</div>
                 <div style="font-weight: bold; font-size: 1rem;">火曜 ・ 木曜 ・ 土曜 ・ 日曜</div>
+                {"<div style='color: #FF4B4B; font-weight: bold; font-size: 0.8rem; margin-top: 5px;'>● 現在の稼働曜日</div>" if not is_pattern_a else ""}
             </div>
         </div>
     """, unsafe_allow_html=True)
@@ -396,6 +404,7 @@ with tab4:
                     if st.button("🗑 削除", key=f"del_{b_name}"):
                         bucket.blob(b_name).delete()
                         st.cache_data.clear(); st.rerun()
+
 
 
 
