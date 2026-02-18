@@ -157,24 +157,28 @@ with tab1:
         else:
             progress_text = st.empty()
             try:
+                # --- 画像アップロード ---
                 progress_text.info("📸 画像をアップロード中...")
                 for e in valid_data:
                     if e['img']: 
                         gcs_upload_wrapper(e['img'], e, global_area, global_store, target_media, target_acc)
                 
+                # --- 日記文を登録 (媒体列を削除し左詰め) ---
                 progress_text.info("📝 日記文を登録中...")
                 ws_main = GC.open_by_key(SHEET_ID).worksheet(SHEET_MAP[target_acc])
                 
-                if target_media == "デイズ":
-                    rows_main = [[global_area, global_store, target_media, e['投稿時間'], e['女の子の名前'], "", e['タイトル'], e['本文']] for e in valid_data]
-                else:
-                    rows_main = [[global_area, global_store, target_media, e['投稿時間'], e['女の子の名前'], e['タイトル'], e['本文']] for e in valid_data]
+                # 媒体(target_media)とデイズの空列を削除した構成
+                # A:エリア, B:店名, C:時間, D:名前, E:タイトル, F:本文
+                rows_main = [[global_area, global_store, e['投稿時間'], e['女の子の名前'], e['タイトル'], e['本文']] for e in valid_data]
                 
                 ws_main.append_rows(rows_main, value_input_option='USER_ENTERED')
                 
+                # --- ログイン情報を登録 (媒体列を削除し左詰め) ---
                 progress_text.info("🔐 ログイン情報を登録中...")
                 ws_status = GC.open_by_key(ACCOUNT_STATUS_SHEET_ID).worksheet(f"{target_media}アカウント")
-                ws_status.append_row([global_area, global_store, target_media, login_id, login_pw], value_input_option='USER_ENTERED')
+                
+                # A:エリア, B:店名, C:ID, D:パスワード
+                ws_status.append_row([global_area, global_store, login_id, login_pw], value_input_option='USER_ENTERED')
                 
                 progress_text.empty()
                 st.success(f"✅ {len(valid_data)}件のデータを正常に登録しました！")
@@ -332,6 +336,7 @@ with tab4:
                     if st.button("🗑 削除", key=f"del_{b_name}"):
                         bucket.blob(b_name).delete()
                         st.cache_data.clear(); st.rerun()
+
 
 
 
