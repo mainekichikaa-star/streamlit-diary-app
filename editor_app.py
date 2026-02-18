@@ -464,3 +464,6 @@ def main():
 
         except Exception as e:
             st.error(f"❌ データの取得中にエラーが発生しました: {e}")
+            
+if __name__ == "__main__":
+    main()
