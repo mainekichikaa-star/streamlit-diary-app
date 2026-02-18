@@ -101,15 +101,29 @@ def get_clients():
 
 GC, GCS_CLIENT = get_clients()
 
+# --- 究極のAPI対策：一括取得キャッシュ ---
+@st.cache_data(ttl=600)
+def get_all_accounts_data_cached(update_tick):
+    """全てのアカウントの全データを一回で取得してキャッシュする"""
+    results = {}
+    for acc_name, s_name in SHEET_MAP.items():
+        try:
+            sh = GC.open_by_key(SHEET_ID)
+            ws = sh.worksheet(s_name)
+            results[acc_name] = ws.get_all_values()
+        except:
+            results[acc_name] = []
+    return results
+
+# 既存の関数は互換性のために残す（または書き換え）
 @st.cache_data(ttl=600)
 def get_full_sheet_data(sheet_key, worksheet_name):
+    # この関数は単発用として維持
     try:
-        if not worksheet_name:
-            return None
         sh = GC.open_by_key(sheet_key)
         ws = sh.worksheet(worksheet_name)
         return ws.get_all_values()
-    except Exception as e:
+    except:
         return None
 
 # --- 4. UI構築 ---
@@ -129,7 +143,14 @@ st.markdown("""
 
 def main():
     st.title("📸 写メ日記投稿データ管理")
-
+    
+    # API更新用のカウンター
+    if 'update_tick' not in st.session_state:
+        st.session_state.update_tick = 0
+    
+    # 全データを一括取得（全タブでこれを使い回す）
+    all_data_cached = get_all_accounts_data_cached(st.session_state.update_tick)
+    
     tab1, tab2, tab3 = st.tabs(["📝 日記編集・画像管理", "🔍 データ不備チェック", "📊 店舗アカウント状況"])
 
     # =========================================================================
@@ -148,7 +169,7 @@ def main():
                 st.cache_data.clear()
                 st.rerun()
         
-        data = get_full_sheet_data(SHEET_ID, SHEET_MAP[sel_acc])
+        data = all_data_cached.get(sel_acc, [])
         
         if not data or len(data) <= 1:
             st.warning("有効なデータがありません。")
@@ -311,7 +332,7 @@ def main():
 
         # 自動実行を防ぎ、ボタン押下時のみスキャンする
         if st.button("🔍 不備チェック（画像なし確認）を開始", key="run_scan_tab2", type="primary", use_container_width=True):
-            data_tab2 = get_full_sheet_data(SHEET_ID, SHEET_MAP[sel_acc_tab2])
+            data_tab2 = all_data_cached.get(sel_acc_tab2, [])
             if data_tab2 and len(data_tab2) > 1:
                 raw_df2 = pd.DataFrame(data_tab2[1:])
                 if "デイズ" in sel_acc_tab2:
@@ -417,18 +438,15 @@ def main():
                 # --- 上段：投稿件数メトリック (A/B横並び) ---
                 m_col1, m_col2 = st.columns(2)
                 
-                # Aアカウント：店名(1番目のインデックス)が空でない行だけをカウント
-                rows_a = get_full_sheet_data(SHEET_ID, SHEET_MAP.get(f"{media_name}A", ""))
+                # --- Aアカウントの修正 ---
+                rows_a = all_data_cached.get(f"{media_name}A", [])
                 if rows_a and len(rows_a) > 1:
                     count_a = len([r for r in rows_a[1:] if len(r) > 1 and r[1].strip() != ""])
                 else:
                     count_a = 0
                 
-                with m_col1:
-                    st.metric(label=f"👤 {media_name}A 投稿数", value=f"{count_a} 件")
-                    
-                # Bアカウント：店名(1番目のインデックス)が空でない行だけをカウント
-                rows_b = get_full_sheet_data(SHEET_ID, SHEET_MAP.get(f"{media_name}B", ""))
+                # --- Bアカウントの修正 ---
+                rows_b = all_data_cached.get(f"{media_name}B", [])
                 if rows_b and len(rows_b) > 1:
                     count_b = len([r for r in rows_b[1:] if len(r) > 1 and r[1].strip() != ""])
                 else:
@@ -477,6 +495,7 @@ def main():
             
 if __name__ == "__main__":
     main()
+
 
 
 
