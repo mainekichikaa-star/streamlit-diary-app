@@ -1,218 +1,253 @@
 import streamlit as st
 import pandas as pd
 import gspread
+import zipfile
 import datetime
 import re
 import urllib.parse
-from google.cloud import storage
+from io import BytesIO
+from google.cloud import storage 
 from google.oauth2.service_account import Credentials
 
-# =========================================================================
-# 1. 定数・設定 (浜松版オリジナル)
-# =========================================================================
+# =========================================================
+# --- 1. 定数と初期設定 (浜松版オリジナル) ---
+# =========================================================
 try:
-    # スプレッドシートID
+    # 浜松版スプレッドシートID
     SHEET_ID = "168X-3PJmQi07mP_FRkyhTHVtUNp5BsCM0rFgabABQUY"
     ACCOUNT_STATUS_SHEET_ID = "1hlGAbImOpxREC25JW7xeApoYC-cJEt4O2Qz9xZT2EHE"
+    USABLE_DIARY_SHEET_ID = "1e-iLey43A1t0bIBoijaXP55t5fjONdb0ODiTS53beqM"
     
-    # GCS設定
+    # 浜松版GCSバケット
     GCS_BUCKET_NAME = "hamamatsu-auto-poster-images"
-    
-    # アカウント設定
+
+    # 投稿アカウント設定
     ACCOUNT_OPTIONS = ["駅ちかA", "駅ちかB", "デリじゃA", "デリじゃB", "デイズA", "デイズB"]
     SHEET_MAP = {opt: f"投稿{opt}" for opt in ACCOUNT_OPTIONS}
     
-    # 標準列定義
-    DF_COLS = ["エリア", "店名", "投稿時間", "女の子の名前", "タイトル", "本文", "投稿ステータス"]
+    MEDIA_OPTIONS = ["駅ちか", "デリじゃ", "デイズ"]
     
 except Exception as e:
     st.error(f"🚨 設定の読み込みに失敗しました: {e}")
     st.stop()
 
-# =========================================================================
-# 2. API接続 & キャッシュ
-# =========================================================================
+INPUT_HEADERS = ["投稿時間", "女の子の名前", "タイトル", "本文"]
+
+# =========================================================
+# --- 2. 各種API連携 ---
+# =========================================================
 @st.cache_resource(ttl=3600)
 def get_clients():
-    creds = st.secrets["gcp_service_account"]
-    gc = gspread.service_account_from_dict(creds)
-    gcs = storage.Client.from_service_account_info(creds)
+    creds_dict = st.secrets["gcp_service_account"]
+    gc = gspread.service_account_from_dict(creds_dict)
+    gcs = storage.Client.from_service_account_info(creds_dict)
     return gc, gcs
 
 GC, GCS_CLIENT = get_clients()
 
-@st.cache_data(ttl=600)
-def get_full_sheet_data(sheet_key, worksheet_name):
+def gcs_upload_wrapper(uploaded_file, entry, area, store, media, sel_acc):
     try:
-        sh = GC.open_by_key(sheet_key)
-        ws = sh.worksheet(worksheet_name)
-        return ws.get_all_values()
-    except:
-        return None
+        bucket = GCS_CLIENT.bucket(GCS_BUCKET_NAME)
+        # 浜松版ルール: A/Bの接尾辞をフォルダ名に付与
+        suffix = "【A】" if "A" in sel_acc else "【B】"
+        base_folder = f"{media}{store}" if media in ["デリじゃ", "デイズ"] else store
+        folder_name = f"{base_folder}{suffix}"
+        
+        ext = uploaded_file.name.split('.')[-1]
+        blob_path = f"{area}/{folder_name}/{entry['投稿時間'].strip()}_{entry['女の子の名前'].strip()}.{ext}"
+        blob = bucket.blob(blob_path)
+        blob.upload_from_string(uploaded_file.getvalue(), content_type=uploaded_file.type)
+        return True
+    except Exception as e:
+        st.error(f"❌ GCSアップロード失敗: {e}")
+        return False
 
-def normalize_text(s):
-    if not s: return ""
-    return re.sub(r'\s+', '', str(s)).replace('　', '').lower()
+def get_cached_url(blob_name):
+    safe_path = urllib.parse.quote(blob_name)
+    return f"https://storage.googleapis.com/{GCS_BUCKET_NAME}/{safe_path}"
 
-# =========================================================================
-# 3. UI 構築
-# =========================================================================
-st.set_page_config(layout="wide", page_title="浜松日記エディタ")
+# =========================================================
+# --- 3. UI 構築 ---
+# =========================================================
+st.set_page_config(layout="wide", page_title="浜松・写メ日記投稿登録")
 
-# タブデザイン
+# 大宮版スタイルのCSS
 st.markdown("""
     <style>
-    .stTabs [data-baseweb="tab-list"] { gap: 10px; }
+    .block-container { padding-top: 0rem !important; padding-bottom: 0rem !important; }
+    header[data-testid="stHeader"] { display: none !important; }
+    .stTabs [data-baseweb="tab-list"] { gap: 10px; height: 80px; }
     button[data-baseweb="tab"] {
-        font-size: 20px !important; font-weight: bold !important;
-        padding: 10px 20px !important;
+        font-size: 28px !important; font-weight: 800 !important; height: 70px !important;
+        padding: 0px 30px !important; background-color: #f0f2f6 !important;
+        border-radius: 10px 10px 0px 0px !important; margin-right: 5px !important;
+    }
+    button[data-baseweb="tab"][aria-selected="true"] {
+        color: white !important; background-color: #FF4B4B !important;
     }
     </style>
 """, unsafe_allow_html=True)
 
-tab1, tab2 = st.tabs(["📝 日記エディタ", "📊 店舗アカウント状況"])
+tab1, tab2, tab3, tab4 = st.tabs([
+    "📝 ① データ登録", 
+    "📊 ② 店舗アカウント状況", 
+    "📚 ③ 使用可能日記文",
+    "🖼 ④ 使用可能画像"
+])
 
-# ---------------------------------------------------------
-# Tab 1: 📝 日記エディタ (大宮版ベース＋デイズ補正)
-# ---------------------------------------------------------
+# =========================================================
+# --- Tab 1: 📝 ① データ登録 (大宮版の一括登録を完全移植) ---
+# =========================================================
 with tab1:
-    c1, c2, c3, c4 = st.columns([1.5, 1.5, 1.5, 2])
-    sel_acc = c1.selectbox("👤 アカウント", ACCOUNT_OPTIONS)
+    st.header("1️⃣ 浜松版：新規データ登録")
     
-    data = get_full_sheet_data(SHEET_ID, SHEET_MAP.get(sel_acc))
-    
-    if data and len(data) > 1:
-        # デイズの列ズレ補正 (4列目のURLを飛ばす)
-        raw_df = pd.DataFrame(data[1:])
-        if "デイズ" in sel_acc:
-            full_df = raw_df[[0, 1, 2, 3, 5, 6, 7]] # 4列目(URL)をスキップ
+    with st.form("diary_input_form", clear_on_submit=False):
+        c1, c2, c3, c4 = st.columns(4)
+        target_acc = c1.selectbox("👤 投稿アカウント", ACCOUNT_OPTIONS, key="sel_acc_f")
+        target_media = c2.selectbox("🌐 媒体", MEDIA_OPTIONS, key="sel_media_f")
+        global_area = c3.text_input("📍 エリア", key="in_area_f")
+        global_store = c4.text_input("🏢 店名", key="in_store_f")
+        
+        st.subheader("🔑 ログイン情報")
+        c5, c6 = st.columns(2)
+        login_id = c5.text_input("ID", key="login_id_f")
+        login_pw = c6.text_input("パスワード", key="login_pw_f")
+        
+        st.markdown("---")
+        st.subheader("📸 投稿内容入力 (最大40件)")
+
+        st.markdown("""
+            <div style="display: flex; flex-direction: row; border-bottom: 2px solid #444; background-color: #f0f2f6; padding: 10px; border-radius: 5px 5px 0 0;">
+                <div style="flex: 1; font-weight: bold; color: black;">時間</div>
+                <div style="flex: 1; font-weight: bold; color: black;">名前</div>
+                <div style="flex: 2; font-weight: bold; color: black;">タイトル</div>
+                <div style="flex: 3; font-weight: bold; color: black;">本文</div>
+                <div style="flex: 2; font-weight: bold; color: black;">画像</div>
+            </div>
+        """, unsafe_allow_html=True)
+
+        form_entries = []
+        for i in range(40):
+            cols = st.columns([1, 1, 2, 3, 2])
+            e_time = cols[0].text_input(f"t{i}", key=f"f_t_{i}", label_visibility="collapsed")
+            e_name = cols[1].text_input(f"n{i}", key=f"f_n_{i}", label_visibility="collapsed")
+            e_title = cols[2].text_area(f"ti{i}", key=f"f_ti_{i}", height=68, label_visibility="collapsed")
+            e_body = cols[3].text_area(f"b{i}", key=f"f_b_{i}", height=68, label_visibility="collapsed")
+            e_img = cols[4].file_uploader(f"g{i}", key=f"f_img_{i}", label_visibility="collapsed")
+            form_entries.append({'投稿時間': e_time, '女の子の名前': e_name, 'タイトル': e_title, '本文': e_body, 'img': e_img})
+
+        submit_button = st.form_submit_button("🔥 データを一括登録する", type="primary", use_container_width=True)
+
+    if submit_button:
+        valid_data = [e for e in form_entries if e['投稿時間'] and e['女の子の名前']]
+        if not valid_data or not global_area or not global_store:
+            st.error("⚠️ 入力不足：エリア、店名、および少なくとも1件以上の「時間・名前」を入力してください。")
         else:
-            full_df = raw_df.iloc[:, :7]
-            
-        full_df.columns = DF_COLS
-        full_df['__row__'] = range(2, len(data) + 1)
-        
-        # フィルタリング
-        areas = sorted(full_df["エリア"].unique())
-        sel_area = c2.selectbox("📍 エリア", ["未選択"] + areas)
-        
-        stores = []
-        if sel_area != "未選択":
-            stores = sorted(full_df[full_df["エリア"] == sel_area]["店名"].unique())
-        sel_store = c3.selectbox("🏢 店舗", ["未選択"] + stores)
-        
-        search_q = c4.text_input("🔍 検索", placeholder="名前やタイトルで検索...")
-        
-        # 絞り込み実行
-        disp_df = full_df.copy()
-        if sel_area != "未選択": disp_df = disp_df[disp_df["エリア"] == sel_area]
-        if sel_store != "未選択": disp_df = disp_df[disp_df["店名"] == sel_store]
-        if search_q:
-            disp_df = disp_df[disp_df.apply(lambda r: search_q.lower() in "".join(map(str, r)).lower(), axis=1)]
+            progress_text = st.empty()
+            try:
+                progress_text.info("📸 画像をアップロード中...")
+                for e in valid_data:
+                    if e['img']: gcs_upload_wrapper(e['img'], e, global_area, global_store, target_media, target_acc)
+                
+                progress_text.info("📝 日記文を登録中...")
+                ws_main = GC.open_by_key(SHEET_ID).worksheet(SHEET_MAP[target_acc])
+                
+                # デイズ補正ロジック: 空のURL列を4列目に挿入
+                if "デイズ" in target_acc:
+                    rows_main = [[global_area, global_store, target_media, e['投稿時間'], e['女の子の名前'], "", e['タイトル'], e['本文']] for e in valid_data]
+                else:
+                    rows_main = [[global_area, global_store, target_media, e['投稿時間'], e['女の子の名前'], e['タイトル'], e['本文']] for e in valid_data]
+                
+                ws_main.append_rows(rows_main, value_input_option='USER_ENTERED')
+                
+                progress_text.info("🔐 ログイン情報を登録中...")
+                ws_status = GC.open_by_key(ACCOUNT_STATUS_SHEET_ID).worksheet(f"{target_media}アカウント")
+                ws_status.append_row([global_area, global_store, target_media, login_id, login_pw], value_input_option='USER_ENTERED')
+                
+                progress_text.empty()
+                st.success(f"✅ {len(valid_data)}件のデータを正常に登録しました！")
+                st.cache_data.clear()
+                st.rerun()
+            except Exception as e:
+                st.error(f"❌ 登録エラーが発生しました: {e}")
 
-        st.divider()
-        
-        # エディタ表示
-        for _, row in disp_df.iterrows():
-            with st.expander(f"👤 {row['女の子の名前']} | {row['投稿時間']} | {row['タイトル'][:20]}..."):
-                with st.form(key=f"form_{sel_acc}_{row['__row__']}"):
-                    col_img, col_txt = st.columns([1, 2])
-                    
-                    # 画像表示 (GCSから取得)
-                    with col_img:
-                        bucket = GCS_CLIENT.bucket(GCS_BUCKET_NAME)
-                        suffix = "【A】" if "A" in sel_acc else "【B】"
-                        # プレフィックス作成
-                        base_p = f"デリじゃ{row['店名']}" if "デリじゃ" in sel_acc else (f"デイズ{row['店名']}" if "デイズ" in sel_acc else row['店名'])
-                        folder_name = f"{base_p}{suffix}"
-                        
-                        # 簡易的に最初の1枚を表示
-                        blobs = list(bucket.list_blobs(prefix=f"{row['エリア']}/{folder_name}/"))
-                        img_found = False
-                        for b in blobs:
-                            if b.name.lower().endswith(('.jpg', '.jpeg', '.png')):
-                                st.image(f"https://storage.googleapis.com/{GCS_BUCKET_NAME}/{urllib.parse.quote(b.name)}", use_container_width=True)
-                                img_found = True
-                                break
-                        if not img_found: st.caption("画像なし")
-
-                    # テキスト編集
-                    with col_txt:
-                        new_title = st.text_input("タイトル", value=row["タイトル"])
-                        new_body = st.text_area("本文", value=row["本文"], height=150)
-                        
-                        if st.form_submit_button("💾 この日記を更新"):
-                            ws = GC.open_by_key(SHEET_ID).worksheet(SHEET_MAP[sel_acc])
-                            # デイズなら書き込み先を+1列ずらす補正
-                            offset = 1 if "デイズ" in sel_acc else 0
-                            ws.update_cell(row['__row__'], 5 + offset, new_title) # タイトル
-                            ws.update_cell(row['__row__'], 6 + offset, new_body)  # 本文
-                            st.success("更新しました")
-                            st.cache_data.clear()
-                            st.rerun()
-    else:
-        st.info("データがありません")
-
-# ---------------------------------------------------------
-# Tab 2: 📊 店舗アカウント状況 (大宮版ロジック移植)
-# ---------------------------------------------------------
+# =========================================================
+# --- Tab 2: 📊 ② 店舗アカウント状況 (大宮版＋浜松定数) ---
+# =========================================================
 with tab2:
     st.markdown("## 📊 店舗アカウント状況")
-    
-    status_sheets = {
-        "駅ちか": "駅ちかアカウント",
-        "デリじゃ": "デリじゃアカウント",
-        "デイズ": "デイズアカウント"
-    }
+    c_a, c_b = st.columns(2)
+    for idx, acc_code in enumerate(ACCOUNT_OPTIONS):
+        with [c_a, c_b][idx % 2]:
+            try:
+                ws_work = GC.open_by_key(SHEET_ID).worksheet(SHEET_MAP[acc_code])
+                count = len([x for x in ws_work.col_values(2)[1:] if x.strip()])
+            except: count = 0
+            st.metric(label=f"👤 {acc_code}", value=f"{count} 件")
+
+# =========================================================
+# --- Tab 3: 📚 ③ 使用可能日記文 (大宮版移植) ---
+# =========================================================
+with tab3:
+    st.header("3️⃣ 使用可能日記文")
+    @st.cache_data(ttl=600)
+    def get_usable_diary_data():
+        tmp_sprs = GC.open_by_key(USABLE_DIARY_SHEET_ID)
+        return tmp_sprs.sheet1.get_all_values()
+
+    if st.button("🔄 データを更新"): st.cache_data.clear(); st.rerun()
 
     try:
-        status_sprs = GC.open_by_key(ACCOUNT_STATUS_SHEET_ID)
+        tmp_data = get_usable_diary_data()
+        if len(tmp_data) > 1:
+            df_usable = pd.DataFrame(tmp_data[1:], columns=tmp_data[0])
+            st.dataframe(df_usable, use_container_width=True, height=600, hide_index=True)
+    except Exception as e: st.error(f"読み込みエラー: {e}")
+
+# =========================================================
+# --- Tab 4: 🖼 ④ 使用可能画像 (大宮版の画像処理を移植) ---
+# =========================================================
+with tab4:
+    st.header("🖼 使用可能画像ブラウザ（落ち店）")
+    ROOT_PATH = "【落ち店】/"
+    bucket = GCS_CLIENT.bucket(GCS_BUCKET_NAME)
+
+    @st.cache_data(ttl=300)
+    def get_ochimise_folders():
+        blobs = GCS_CLIENT.list_blobs(GCS_BUCKET_NAME, prefix=ROOT_PATH, delimiter='/')
+        list(blobs)
+        return blobs.prefixes
+
+    folders = get_ochimise_folders()
+    show_all = st.checkbox("📂 全画像表示（一括モード）")
+
+    # 画像取得・ZIP・削除ロジック
+    if folders or show_all:
+        if not show_all:
+            folder_opts = {f.replace(ROOT_PATH, "").replace("/", ""): f for f in folders}
+            sel = st.selectbox("📁 店舗を選択", ["未選択"] + list(folder_opts.keys()))
+            if sel == "未選択": st.stop()
+            target_p = folder_opts[sel]
+        else: target_p = ROOT_PATH
+
+        blobs = list(bucket.list_blobs(prefix=target_p))
+        img_names = [b.name for b in blobs if b.name.lower().endswith(('.jpg', '.jpeg', '.png'))]
         
-        for media_name, ws_name in status_sheets.items():
-            st.markdown(f"### 📱 {media_name}")
+        if img_names:
+            selected = [n for n in img_names if st.sidebar.checkbox(n.split('/')[-1], key=f"side_{n}")] if len(img_names)<50 else []
+            # ZIPダウンロード
+            if st.button("📦 選択した画像をZIPで固める"):
+                zip_buf = BytesIO()
+                with zipfile.ZipFile(zip_buf, "w") as zf:
+                    for p in img_names: # ここでは簡易的に全件対象
+                        zf.writestr(p.split('/')[-1], bucket.blob(p).download_as_bytes())
+                st.download_button("💾 ZIPをダウンロード", zip_buf.getvalue(), "images.zip")
             
-            # --- 件数表示 (B列のみ取得で爆速化) ---
-            c_a, c_b = st.columns(2)
-            for i, suffix in enumerate(["A", "B"]):
-                acc_key = f"{media_name}{suffix}"
-                with [c_a, c_b][i]:
-                    try:
-                        s_name = SHEET_MAP.get(acc_key)
-                        ws_work = GC.open_by_key(SHEET_ID).worksheet(s_name)
-                        # B列(店名)のみ取得
-                        count = len([x for x in ws_work.col_values(2)[1:] if x.strip()])
-                    except: count = 0
-                    st.metric(label=f"{acc_key} 投稿数", value=f"{count} 件")
-            
-            # --- エリア別店舗リスト (横並び) ---
-            ws_link = status_sprs.worksheet(ws_name)
-            link_data = ws_link.get_all_values()
-            
-            if len(link_data) > 1:
-                area_map = {}
-                for r in link_data[1:]:
-                    if len(r) >= 2:
-                        area, shop = r[0].strip(), r[1].strip()
-                        if not area: area = "不明"
-                        if area not in area_map: area_map[area] = []
-                        area_map[area].append(shop)
-                
-                # エリアごとにカラムを動的生成
-                areas = sorted(area_map.keys())
-                if areas:
-                    cols = st.columns(len(areas))
-                    for idx, a_name in enumerate(areas):
-                        with cols[idx]:
-                            st.info(f"📍 **{a_name}**")
-                            for s in sorted(area_map[a_name]):
-                                st.write(f"• {s}")
-            else:
-                st.caption("登録なし")
-            st.divider()
-
-    except Exception as e:
-        st.error(f"ステータス取得エラー: {e}")
-
-# --- 実行 ---
-if __name__ == "__main__":
-    pass
+            # 画像グリッド表示
+            cols = st.columns(6)
+            for idx, b_name in enumerate(img_names):
+                with cols[idx % 6]:
+                    st.image(get_cached_url(b_name), use_container_width=True)
+                    if st.button("🗑 削除", key=f"del_{b_name}"):
+                        bucket.blob(b_name).delete()
+                        st.cache_data.clear(); st.rerun()
