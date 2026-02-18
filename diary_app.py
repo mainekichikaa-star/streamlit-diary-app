@@ -184,37 +184,73 @@ with tab1:
                 st.error(f"❌ 登録エラーが発生しました: {e}")
                 
 # =========================================================
-# --- Tab 2: 📊 ② 店舗アカウント状況 (大宮版＋浜松定数) ---
+# --- Tab 2: 📊 ② 店舗アカウント状況 (統合表示版) ---
 # =========================================================
 with tab2:
     st.markdown("## 📊 店舗アカウント状況")
-    c_a, c_b = st.columns(2)
-    for idx, acc_code in enumerate(ACCOUNT_OPTIONS):
-        with [c_a, c_b][idx % 2]:
+    
+    # 統合するグループの定義
+    groups = {
+        "駅ちか": ["駅ちかA", "駅ちかB"],
+        "デリじゃ": ["デリじゃA", "デリじゃB"],
+        "デイズ": ["デイズA", "デイズB"]
+    }
+
+    for label, accounts in groups.items():
+        st.markdown(f"### 📱 {label}")
+        
+        # --- 上段：件数表示 (AとBを横並び) ---
+        c_met1, c_met2 = st.columns(2)
+        combined_rows = []
+        
+        for idx, acc_name in enumerate(accounts):
             try:
-                ws_work = GC.open_by_key(SHEET_ID).worksheet(SHEET_MAP[acc_code])
-                count = len([x for x in ws_work.col_values(2)[1:] if x.strip()])
-            except: count = 0
-            st.metric(label=f"👤 {acc_code}", value=f"{count} 件")
-
-# =========================================================
-# --- Tab 3: 📚 ③ 使用可能日記文 (大宮版移植) ---
-# =========================================================
-with tab3:
-    st.header("3️⃣ 使用可能日記文")
-    @st.cache_data(ttl=600)
-    def get_usable_diary_data():
-        tmp_sprs = GC.open_by_key(USABLE_DIARY_SHEET_ID)
-        return tmp_sprs.sheet1.get_all_values()
-
-    if st.button("🔄 データを更新"): st.cache_data.clear(); st.rerun()
-
-    try:
-        tmp_data = get_usable_diary_data()
-        if len(tmp_data) > 1:
-            df_usable = pd.DataFrame(tmp_data[1:], columns=tmp_data[0])
-            st.dataframe(df_usable, use_container_width=True, height=600, hide_index=True)
-    except Exception as e: st.error(f"読み込みエラー: {e}")
+                ws = GC.open_by_key(SHEET_ID).worksheet(SHEET_MAP[acc_name])
+                # 全データ取得 (エリア, 店名が含まれる)
+                data = ws.get_all_values()
+                if len(data) > 1:
+                    df = pd.DataFrame(data[1:])
+                    # B列(店名)が空でないものをカウント
+                    count = len(df[df[1].str.strip() != ""])
+                    # 統合表示用にデータをストック
+                    combined_rows.append(df)
+                else:
+                    count = 0
+            except:
+                count = 0
+            
+            with [c_met1, c_met2][idx]:
+                st.metric(label=f"{acc_name} 投稿数", value=f"{count} 件")
+        
+        # --- 下段：エリア・店名の統合表示 ---
+        if combined_rows:
+            # AとBのデータを合体させて重複を排除
+            full_df = pd.concat(combined_rows)
+            # 0:エリア, 1:店名 (空文字除外)
+            full_df = full_df[full_df[1].str.strip() != ""]
+            
+            # エリアごとに辞書化
+            area_map = {}
+            for _, r in full_df.iterrows():
+                area = r[0].strip() if r[0] else "未設定"
+                shop = r[1].strip()
+                if area not in area_map:
+                    area_map[area] = set()
+                area_map[area].add(shop)
+            
+            # エリアを横並びのカラムで表示
+            areas = sorted(area_map.keys())
+            if areas:
+                area_cols = st.columns(len(areas))
+                for i, area_name in enumerate(areas):
+                    with area_cols[i]:
+                        st.info(f"📍 **{area_name}**")
+                        for shop in sorted(area_map[area_name]):
+                            st.write(f"• {shop}")
+        else:
+            st.caption("登録データはありません")
+            
+        st.divider()
 
 # =========================================================
 # --- Tab 4: 🖼 ④ 使用可能画像 (大宮版の画像処理を移植) ---
@@ -263,5 +299,6 @@ with tab4:
                     if st.button("🗑 削除", key=f"del_{b_name}"):
                         bucket.blob(b_name).delete()
                         st.cache_data.clear(); st.rerun()
+
 
 
