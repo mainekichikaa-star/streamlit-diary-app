@@ -73,13 +73,14 @@ def get_cached_url(blob_name):
 
 # --- 究極のAPI対策：キャッシュ読み込み関数 ---
 @st.cache_data(ttl=600)
-def get_full_sheet_data(sheet_id, update_tick): # 引数をシンプルに
+def get_all_accounts_data_cached(update_tick): # ← get_full_sheet_data から変更
     """全投稿シートのデータを一括で取得してキャッシュする"""
     results = {}
-    # 定義済みの SHEET_MAP {"駅ちかA": "投稿駅ちかA", ...} を使う
+    # 全てのアカウントのシートを巡回して取得
     for acc_name, s_name in SHEET_MAP.items():
         try:
-            ws = GC.open_by_key(sheet_id).worksheet(s_name)
+            # 引数から sheet_id ではなく SHEET_ID を直接参照
+            ws = GC.open_by_key(SHEET_ID).worksheet(s_name)
             data = ws.get_all_values()
             results[acc_name] = data if len(data) > 1 else []
         except:
@@ -302,17 +303,18 @@ with tab2:
     st.caption("※ API保護のため10分間キャッシュされます。")
     st.divider()
 
-    # 2. キャッシュされたデータを取得
+    # 2. キャッシュされたデータを取得（上の修正で名前が一致するのでOK）
     with st.spinner("データを取得中..."):
         all_data_cached = get_all_accounts_data_cached(st.session_state.update_tick)
 
-    # 3. 表示ロジック（そのまま継続）
-    groups = {{
+    # 3. 表示ロジック
+    groups = {  # ← {{ を { に修正
         "駅ちか": ["駅ちかA", "駅ちかB"],
         "デリじゃ": ["デリじゃA", "デリじゃB"],
         "デイズ": ["デイズA", "デイズB"]
-    }}
+    } # ← }} を } に修正
 
+    
     for label, accounts in groups.items():
         with st.container():
             st.markdown(f"### 📱 {label} グループ")
@@ -407,6 +409,7 @@ with tab4:
                     if st.button("🗑 削除", key=f"del_{b_name}"):
                         bucket.blob(b_name).delete()
                         st.cache_data.clear(); st.rerun()
+
 
 
 
