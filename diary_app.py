@@ -101,17 +101,18 @@ tab1, tab2, tab3, tab4 = st.tabs([
 with tab1:
     st.header("1️⃣ 浜松版：新規データ登録")
     
+    # 【重要】アカウント選択だけフォームの外に出す（これで即座に切り替わる）
+    c1, c2, c3 = st.columns(3)
+    target_acc = c1.selectbox("👤 投稿アカウント", ACCOUNT_OPTIONS, key="sel_acc_f")
+    
+    # 媒体の自動判別
+    target_media = "駅ちか" if "駅ちか" in target_acc else "デリじゃ" if "デリじゃ" in target_acc else "デイズ" if "デイズ" in target_acc else "不明"
+    
+    global_area = c2.text_input("📍 エリア", key="in_area_f")
+    global_store = c3.text_input("🏢 店名", key="in_store_f")
+
     # フォームの開始
     with st.form("diary_input_form", clear_on_submit=False):
-        # 1. 基本情報
-        c1, c2, c3 = st.columns(3)
-        target_acc = c1.selectbox("👤 投稿アカウント", ACCOUNT_OPTIONS, key="sel_acc_f")
-        
-        # 媒体の自動判別
-        target_media = "駅ちか" if "駅ちか" in target_acc else "デリじゃ" if "デリじゃ" in target_acc else "デイズ" if "デイズ" in target_acc else "不明"
-            
-        global_area = c2.text_input("📍 エリア", key="in_area_f")
-        global_store = c3.text_input("🏢 店名", key="in_store_f")
         
         st.subheader("🔑 ログイン情報")
         # デイズの場合のみ「管理画面ナンバー」を表示
@@ -129,18 +130,8 @@ with tab1:
         st.markdown("---")
         st.subheader("📸 投稿内容入力 (最大40件)")
 
-        # ヘッダー
-        st.markdown("""
-            <div style="display: flex; flex-direction: row; border-bottom: 2px solid #444; background-color: #f0f2f6; padding: 10px; border-radius: 5px 5px 0 0;">
-                <div style="flex: 1; font-weight: bold; color: black;">時間</div>
-                <div style="flex: 1; font-weight: bold; color: black;">名前</div>
-                <div style="flex: 2; font-weight: bold; color: black;">タイトル</div>
-                <div style="flex: 3; font-weight: bold; color: black;">本文</div>
-                <div style="flex: 2; font-weight: bold; color: black;">画像</div>
-            </div>
-        """, unsafe_allow_html=True)
-
-        # 入力行の生成
+        # (以下、投稿内容入力フォームとボタンのコードは前回と同じ)
+        # 40件の入力行を生成...
         form_entries = []
         for i in range(40):
             cols = st.columns([1, 1, 2, 3, 2])
@@ -151,7 +142,6 @@ with tab1:
             e_img = cols[4].file_uploader(f"g{i}", key=f"f_img_{i}", label_visibility="collapsed")
             form_entries.append({'投稿時間': e_time, '女の子の名前': e_name, 'タイトル': e_title, '本文': e_body, 'img': e_img})
 
-        # 【重要】ボタンは必ず with の中で定義する
         submit_button = st.form_submit_button("🔥 データを一括登録する", type="primary", use_container_width=True)
 
     # フォームの外でボタンクリック後の処理を行う
@@ -357,6 +347,7 @@ with tab4:
                     if st.button("🗑 削除", key=f"del_{b_name}"):
                         bucket.blob(b_name).delete()
                         st.cache_data.clear(); st.rerun()
+
 
 
 
