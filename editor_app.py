@@ -360,65 +360,63 @@ def main():
     with tab3:
         st.markdown("## 📊 店舗アカウント状況")
         
+        # 管理シートの定義
         status_sheets = {
             "駅ちか": "駅ちかアカウント",
             "デリじゃ": "デリじゃアカウント",
             "デイズ": "デイズアカウント"
         }
 
-        # ボタンなしで表示されると重くなる可能性があるため、念のため軽量な取得を心がけます
         try:
             status_sprs = GC.open_by_key(ACCOUNT_STATUS_SHEET_ID)
             
-            # 3カラム構成
-            m1, m2, m3 = st.columns(3)
-            media_cols = {"駅ちか": m1, "デリじゃ": m2, "デイズ": m3}
-
-            for media_name, ws_name in status_sheets.items():
-                with media_cols[media_name]:
-                    st.subheader(f"📱 {media_name}")
+            # 媒体ごとに横並びで表示
+            cols = st.columns(3)
+            
+            for i, (media_name, ws_name) in enumerate(status_sheets.items()):
+                with cols[i]:
+                    st.markdown(f"### 📱 {media_name}")
                     
-                    # --- 1. 件数表示 (AとB) ---
-                    for suffix in ["A", "B"]:
-                        acc_key = f"{media_name}{suffix}"
-                        # get_full_sheet_dataだと重いので、件数カウント用の軽量処理
-                        try:
-                            target_sid = SHEET_MAP.get(acc_key, "")
-                            if target_sid:
-                                # 店名が入っているB列(2列目)だけを取得してカウント
-                                ws_count = GC.open_by_key(SHEET_ID).worksheet(target_sid)
-                                col_b = ws_count.col_values(2) 
-                                actual_count = len([x for x in col_b[1:] if x.strip()])
-                            else:
-                                actual_count = 0
-                        except:
-                            actual_count = "ERR"
-                        
-                        st.write(f"{acc_key}")
-                        st.markdown(f"## {actual_count} 件")
-
+                    # --- 投稿件数の取得 ---
+                    # Aアカウント
+                    rows_a = get_full_sheet_data(SHEET_ID, SHEET_MAP.get(f"{media_name}A", ""))
+                    count_a = len(rows_a) - 1 if rows_a else 0
+                    
+                    # Bアカウント
+                    rows_b = get_full_sheet_data(SHEET_ID, SHEET_MAP.get(f"{media_name}B", ""))
+                    count_b = len(rows_b) - 1 if rows_b else 0
+                    
+                    # 件数表示
+                    st.metric(label=f"{media_name}A", value=f"{count_a} 件")
+                    st.metric(label=f"{media_name}B", value=f"{count_b} 件")
+                    
                     st.divider()
 
-                    # --- 2. 店舗リスト表示 (ボックスなし・最初から表示) ---
-                    st.markdown("##### 📍 登録店舗一覧")
-                    try:
-                        ws_link = status_sprs.worksheet(ws_name)
-                        link_data = ws_link.get_all_values()
+                    # --- 管理シートに基づく店舗リスト表示 ---
+                    ws_link = status_sprs.worksheet(ws_name)
+                    link_data = ws_link.get_all_values()
+                    
+                    if len(link_data) > 1:
+                        # エリアごとに店舗をまとめる
+                        area_map = {}
+                        for r in link_data[1:]:
+                            if len(r) >= 2:
+                                area, shop = r[0].strip(), r[1].strip()
+                                if not area: area = "その他"
+                                if area not in area_map: area_map[area] = []
+                                area_map[area].append(shop)
                         
-                        if len(link_data) > 1:
-                            # エリアごとにまとめて表示
-                            df_link = pd.DataFrame(link_data[1:])
-                            # 0列目:エリア, 1列目:店名
-                            for area_name, group in df_link.groupby(0):
-                                st.markdown(f"**【{area_name}】**")
-                                for shop in sorted(group[1].unique()):
-                                    if shop.strip():
-                                        st.text(f"  • {shop}")
-                                st.write("") # スペース
-                        else:
-                            st.caption("登録店舗なし")
-                    except:
-                        st.caption("店舗情報の取得に失敗")
+                        # エリアごとに展開表示
+                        for area_name, shops in area_map.items():
+                            with st.expander(f"📍 {area_name} ({len(shops)}店舗)"):
+                                for s in sorted(shops):
+                                    st.write(f"• {s}")
+                    else:
+                        st.caption("管理シートに登録がありません")
 
         except Exception as e:
-            st.error(f"データの取得に失敗しました: {e}")
+            st.error(f"データの取得中にエラーが発生しました: {e}")
+
+# --- スクリプト末尾 ---
+if __name__ == "__main__":
+    main()
