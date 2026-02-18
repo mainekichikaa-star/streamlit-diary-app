@@ -241,7 +241,7 @@ with tab2:
     
     # 2. キャッシュされたデータを取得（ここがAPI節約のキモ）
     with st.spinner("データを取得中..."):
-        all_data_cached = get_full_sheet_data(SHEET_ID, ACCOUNT_OPTIONS, st.session_state.update_tick)
+        all_data_cached = get_full_sheet_data(SHEET_ID, st.session_state.update_tick)
 
     # 3. 表示ロジック（取得済みの all_data_cached を使うのでAPI消費ゼロ）
     groups = {
@@ -343,6 +343,7 @@ with tab4:
                     if st.button("🗑 削除", key=f"del_{b_name}"):
                         bucket.blob(b_name).delete()
                         st.cache_data.clear(); st.rerun()
+
 
 
 
