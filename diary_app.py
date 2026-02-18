@@ -180,18 +180,35 @@ with tab1:
                 
                 # 3. 日記文を一括登録
                 progress_text.info("📝 日記データを一括送信中...")
-                ws_main = GC.open_by_key(SHEET_ID).worksheet(SHEET_MAP[target_acc])
-                rows_main = [[
-                    global_area, 
-                    global_store, 
-                    f"'{e['投稿時間']}", 
-                    e['女の子の名前'], 
-                    e['タイトル'], 
-                    e['本文']
-                ] for e in valid_data]
-                
-                # ここで一括書き込み (1回のリクエスト)
-                ws_main.append_rows(rows_main, value_input_option='USER_ENTERED')
+ws_main = GC.open_by_key(SHEET_ID).worksheet(SHEET_MAP[target_acc])
+
+rows_main = []
+for e in valid_data:
+    if "デイズ" in target_acc:
+        # デイズ専用：0:エリア, 1:店名, 2:時間, 3:名前, 4:URL(空), 5:タイトル, 6:本文
+        row = [
+            global_area, 
+            global_store, 
+            f"'{e['投稿時間']}", 
+            e['女の子の名前'], 
+            "", # 4列目のURL列を空にする
+            e['タイトル'], 
+            e['本文']
+        ]
+    else:
+        # その他：0:エリア, 1:店名, 2:時間, 3:名前, 4:タイトル, 5:本文
+        row = [
+            global_area, 
+            global_store, 
+            f"'{e['投稿時間']}", 
+            e['女の子の名前'], 
+            e['タイトル'], 
+            e['本文']
+        ]
+    rows_main.append(row)
+
+# 書き込み実行
+ws_main.append_rows(rows_main, value_input_option='USER_ENTERED')
                 
                 # 4. ログイン情報を登録
                 progress_text.info("🔐 ログイン情報を登録中...")
@@ -343,6 +360,7 @@ with tab4:
                     if st.button("🗑 削除", key=f"del_{b_name}"):
                         bucket.blob(b_name).delete()
                         st.cache_data.clear(); st.rerun()
+
 
 
 
