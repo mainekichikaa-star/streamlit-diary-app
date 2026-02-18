@@ -96,17 +96,17 @@ tab1, tab2, tab3, tab4 = st.tabs([
 ])
 
 # =========================================================
-# --- Tab 1: 📝 ① データ登録 (媒体自動判別版) ---
+# --- Tab 1: 📝 ① データ登録 (媒体表示削除版) ---
 # =========================================================
 with tab1:
     st.header("1️⃣ 浜松版：新規データ登録")
     
     with st.form("diary_input_form", clear_on_submit=False):
-        # 媒体ボックスを削除し、3カラム構成に変更
+        # 3カラム構成
         c1, c2, c3 = st.columns(3)
         target_acc = c1.selectbox("👤 投稿アカウント", ACCOUNT_OPTIONS, key="sel_acc_f")
         
-        # --- 媒体の自動判別ロジック ---
+        # --- 媒体の自動判別ロジック (内部処理用) ---
         if "駅ちか" in target_acc:
             target_media = "駅ちか"
         elif "デリじゃ" in target_acc:
@@ -125,7 +125,8 @@ with tab1:
         login_pw = c6.text_input("パスワード", key="login_pw_f")
         
         st.markdown("---")
-        st.subheader(f"📸 投稿内容入力 (最大40件) - 判別媒体: {target_media}")
+        # 修正箇所：「- 判別媒体: ○○」の表示を削除
+        st.subheader("📸 投稿内容入力 (最大40件)")
 
         st.markdown("""
             <div style="display: flex; flex-direction: row; border-bottom: 2px solid #444; background-color: #f0f2f6; padding: 10px; border-radius: 5px 5px 0 0;">
@@ -159,13 +160,11 @@ with tab1:
                 progress_text.info("📸 画像をアップロード中...")
                 for e in valid_data:
                     if e['img']: 
-                        # 自動判別したtarget_mediaを渡す
                         gcs_upload_wrapper(e['img'], e, global_area, global_store, target_media, target_acc)
                 
                 progress_text.info("📝 日記文を登録中...")
                 ws_main = GC.open_by_key(SHEET_ID).worksheet(SHEET_MAP[target_acc])
                 
-                # デイズ補正ロジック: 4列目に空のURL列を挿入
                 if target_media == "デイズ":
                     rows_main = [[global_area, global_store, target_media, e['投稿時間'], e['女の子の名前'], "", e['タイトル'], e['本文']] for e in valid_data]
                 else:
@@ -174,7 +173,6 @@ with tab1:
                 ws_main.append_rows(rows_main, value_input_option='USER_ENTERED')
                 
                 progress_text.info("🔐 ログイン情報を登録中...")
-                # 判別された媒体に基づいたシートに書き込み
                 ws_status = GC.open_by_key(ACCOUNT_STATUS_SHEET_ID).worksheet(f"{target_media}アカウント")
                 ws_status.append_row([global_area, global_store, target_media, login_id, login_pw], value_input_option='USER_ENTERED')
                 
@@ -184,7 +182,7 @@ with tab1:
                 st.rerun()
             except Exception as e:
                 st.error(f"❌ 登録エラーが発生しました: {e}")
-
+                
 # =========================================================
 # --- Tab 2: 📊 ② 店舗アカウント状況 (大宮版＋浜松定数) ---
 # =========================================================
@@ -265,4 +263,5 @@ with tab4:
                     if st.button("🗑 削除", key=f"del_{b_name}"):
                         bucket.blob(b_name).delete()
                         st.cache_data.clear(); st.rerun()
+
 
