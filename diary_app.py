@@ -237,21 +237,28 @@ with tab1:
                 st.error(f"❌ 登録エラー: {e}")
 
 # =========================================
-# --- Tab 2: 🔗 ② デイズURL取得 (完全移植版) ---
+# --- Tab 2: 🔗 ② デイズURL取得 (API対策版) ---
 # =========================================
 with tab2:
     st.header("🔗 デイズURL自動巡回・一括取得")
     
-    if st.button("🚀 ローカル版と同じロジックで実行", use_container_width=True):
+    if st.button("🚀 API負荷を抑えて実行", use_container_width=True):
         try:
-            # 1. シートの準備 (定数 ID を使用)
+            # --- 1. 最初の一括読み込み (APIリクエストを最小化) ---
+            st.write("📂 データを一括読み込み中...")
             input_spreadsheet = GC.open_by_key(ACCOUNT_STATUS_SHEET_ID)
             output_spreadsheet = GC.open_by_key(SHEET_ID)
             
             input_sheet = input_spreadsheet.worksheet("デイズアカウント")
             output_sheets = [output_spreadsheet.worksheet("投稿デイズA"), output_spreadsheet.worksheet("投稿デイズB")]
             
-            # 2. ブラウザ起動設定 (Streamlit Cloud 用)
+            # 全シートの全データを最初に取得（ループ内では二度と読み込まない）
+            all_output_data_list = [sh.get_all_values() for sh in output_sheets]
+            input_rows = input_sheet.get_all_values()[1:]
+            
+            time.sleep(1) # API制限対策の微休止
+
+            # --- 2. ブラウザ起動 ---
             options = Options()
             options.add_argument("--headless")
             options.add_argument("--no-sandbox")
@@ -262,21 +269,15 @@ with tab2:
             wait = WebDriverWait(driver, 25)
 
             try:
-                # 3. メインロジック開始
-                all_output_data = [sh.get_all_values() for sh in output_sheets]
-                input_rows = input_sheet.get_all_values()[1:]
-
                 for r in input_rows:
                     if not any(r) or len(r) < 5: continue
                     place, shop_name, admin_num, login_id, password = r[0], r[1], r[2], r[3], r[4]
 
-                    # --- スキップ判定 (ここがローカル版と同じ) ---
+                    # --- スキップ判定 (メモリ上のデータで判定) ---
                     is_any_empty = False
-                    for sheet_data in all_output_data:
+                    for sheet_data in all_output_data_list:
                         for row in sheet_data:
-                            # エリアと店名が一致
                             if len(row) >= 4 and row[0] == place and row[1] == shop_name:
-                                # URL(5列目)が空かどうか
                                 if len(row) < 5 or not row[4].strip():
                                     is_any_empty = True
                                     break
@@ -286,10 +287,8 @@ with tab2:
                         st.write(f"✅ スキップ済み: {shop_name}")
                         continue
 
-                    # --- 巡回開始 ---
+                    # --- 巡回・取得ロジック (変更なし) ---
                     st.write(f"🚀 巡回開始: {shop_name}")
-                    
-                    # ログイン処理
                     login_url = f"https://www{admin_num}.daysnavi.info/ad-shop/login.php"
                     driver.get(login_url)
                     time.sleep(2)
@@ -297,14 +296,12 @@ with tab2:
                     driver.find_element(By.ID, "exampleInputPassword1").send_keys(password)
                     driver.find_element(By.CSS_SELECTOR, "button[type='submit']").click()
                     
-                    # サイドバー操作
                     sidebar_element = wait.until(EC.presence_of_element_located((By.ID, "sidebar")))
-                    time.sleep(3)
+                    time.sleep(2)
                     driver.execute_script("arguments[0].click();", sidebar_element)
-                    time.sleep(1)
-
+                    
                     found_parent = None
-                    for _ in range(1, 20):
+                    for _ in range(1, 15):
                         try:
                             parent = driver.find_element(By.CSS_SELECTOR, "a[href='#girls-bbs']")
                             if parent.is_displayed():
@@ -312,19 +309,18 @@ with tab2:
                                 break
                         except: pass
                         driver.execute_script("arguments[0].scrollTop += 300;", sidebar_element)
-                        time.sleep(0.5)
+                        time.sleep(0.3)
 
                     if not found_parent:
-                        st.error(f"❌ {shop_name}: メニューが見つかりません")
+                        st.error(f"❌ {shop_name}: メニュー未発見")
                         continue
 
                     driver.execute_script("arguments[0].click();", found_parent)
                     time.sleep(2)
                     child_menu = wait.until(EC.element_to_be_clickable((By.XPATH, "//a[contains(text(), '写メ日記登録')]")))
                     driver.execute_script("arguments[0].click();", child_menu)
-                    time.sleep(6)
+                    time.sleep(5)
 
-                    # URL一覧取得
                     girl_elements = driver.find_elements(By.CSS_SELECTOR, "div.product-item")
                     url_map = {}
                     diary_links = []
@@ -338,21 +334,20 @@ with tab2:
                     for item in diary_links:
                         try:
                             driver.get(item["href"])
-                            time.sleep(4)
-                            driver.execute_script("window.scrollTo(0, document.body.scrollHeight);")
-                            time.sleep(1)
+                            time.sleep(3)
                             copy_btn = wait.until(EC.presence_of_element_located((By.CSS_SELECTOR, "button[data-clipboard-text]")))
                             g_url = copy_btn.get_attribute("data-clipboard-text")
                             if g_url:
                                 url_map[item["name"]] = g_url
-                                st.write(f"  └ ✅ URL成功: {item['name']}")
+                                st.write(f"  └ ✅ URL取得: {item['name']}")
                         except: continue
 
-                    # 書き込み処理 (ここもローカル版を移植)
+                    # --- 書き込み処理 (店舗ごとに一括更新) ---
                     if url_map:
-                        for target_sheet in output_sheets:
+                        for s_idx, target_sheet in enumerate(output_sheets):
                             try:
-                                data = target_sheet.get_all_values()
+                                # 既にメモリにあるデータを使って更新箇所を特定
+                                data = all_output_data_list[s_idx]
                                 updates = []
                                 for idx, row in enumerate(data):
                                     if len(row) >= 4 and row[0] == place and row[1] == shop_name:
@@ -364,11 +359,12 @@ with tab2:
                                             })
                                 if updates:
                                     target_sheet.batch_update(updates)
-                                    st.write(f"  📝 {target_sheet.title} へ書き込み完了")
+                                    st.write(f"  📝 {target_sheet.title} へまとめて書き込み完了")
+                                    time.sleep(1) # API連続叩き防止
                             except Exception as e:
                                 st.error(f"  ⚠️ 書き込みエラー: {e}")
 
-                st.success("✨ 全工程終了。")
+                st.success("✨ すべての処理が完了しました。")
                 st.cache_data.clear()
 
             finally:
@@ -487,6 +483,7 @@ with tab5:
                     if st.button("🗑 削除", key=f"del_{b_name}"):
                         bucket.blob(b_name).delete()
                         st.cache_data.clear(); st.rerun()
+
 
 
 
