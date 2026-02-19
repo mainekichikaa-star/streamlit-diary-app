@@ -144,6 +144,17 @@ except: pass
 with tab1:
     st.header("1️⃣ 新規データ登録")
 
+    # --- 💡 投稿ラッシュ時間帯のアナウンス ---
+    st.markdown("""
+        <div style="background-color: #fff3cd; padding: 15px; border-radius: 10px; border-left: 5px solid #ffc107; margin-bottom: 20px;">
+            <strong style="color: #856404;">⚠️ 投稿集中時間帯の注意</strong><br>
+            <span style="font-size: 0.9rem; color: #856404;">
+                <b>19:00〜21:00</b> および <b>23:00〜00:00</b> は日記が非常に多くなります。<br>
+                入力漏れがないか、下の「現在の入力件数」を確認しながら進めてください。
+            </span>
+        </div>
+    """, unsafe_allow_html=True)
+
     with st.expander("📖 はじめての方へ：新規データ登録の使い方（クリックで開閉）", expanded=False):
         st.markdown("""
         ### 1. 共通情報の入力
@@ -360,3 +371,4 @@ with tab4:
                     st.caption(f":grey[{b_name.split('/')[-1][:10]}]")
 
     ochimise_action_fragment(folders, show_all)
+
