@@ -149,7 +149,7 @@ with tab1:
         <div style="background-color: #fff3cd; padding: 15px; border-radius: 10px; border-left: 5px solid #ffc107; margin-bottom: 20px;">
             <strong style="color: #856404;">⚠️ 投稿集中時間帯の注意</strong><br>
             <span style="font-size: 0.9rem; color: #856404;">
-                <b>19:00〜21:00</b> および <b>23:00〜00:00</b> は日記が非常に多くなります。<br>
+                <b>19:00〜21:00</b> および <b>23:00〜00:00</b> は日記が非常に多く、投稿漏れが起きています。<br>
                 入力漏れがないか、下の「現在の入力件数」を確認しながら進めてください。
             </span>
         </div>
@@ -371,4 +371,5 @@ with tab4:
                     st.caption(f":grey[{b_name.split('/')[-1][:10]}]")
 
     ochimise_action_fragment(folders, show_all)
+
 
