@@ -8,12 +8,28 @@ import urllib.parse
 from io import BytesIO
 from google.cloud import storage 
 from google.oauth2.service_account import Credentials
-
-# --- 追加: Selenium関連のインポート ---
+import streamlit as st
+import time
+import gspread
 from selenium import webdriver
+from selenium.webdriver.common.by import By
 from selenium.webdriver.chrome.service import Service
 from selenium.webdriver.chrome.options import Options
-from webdriver_manager.chrome import ChromeDriverManager
+from selenium.webdriver.support.ui import WebDriverWait
+from selenium.webdriver.support import expected_conditions as EC
+from selenium.webdriver.common.action_chains import ActionChains
+from selenium.webdriver.common.keys import Keys
+
+# --- Selenium設定 (Streamlit Cloud用) ---
+def setup_driver():
+    options = Options()
+    options.add_argument("--headless")
+    options.add_argument("--no-sandbox")
+    options.add_argument("--disable-dev-shm-usage")
+    options.add_argument("--window-size=1600,1200")
+    # Streamlit Cloudの環境パスを指定
+    service = Service("/usr/bin/chromedriver") 
+    return webdriver.Chrome(service=service, options=options)
 
 # =========================================================
 # --- 1. 定数と初期設定 (浜松版オリジナル) ---
@@ -220,35 +236,108 @@ with tab1:
             except Exception as e:
                 st.error(f"❌ 登録エラー: {e}")
 
-# =========================================================
-# --- Tab 2: 🔗 ② デイズURL取得 (新規追加) ---
-# =========================================================
+# =========================================
+# --- Tab 2: 🔗 ② デイズURL取得 ---
+# =========================================
 with tab2:
-    st.header("🔗 デイズURL自動取得（ヘッドレスモード）")
-    st.info("デイズ管理画面にログインして、投稿済みの日記からURLを自動的に抽出します。")
-    
-    col_d1, col_d2, col_d3 = st.columns(3)
-    d_num = col_d1.text_input("管理画面No", key="d_num")
-    d_id = col_d2.text_input("ID", key="d_id")
-    d_pw = col_d3.text_input("PW", key="d_pw", type="password")
-    
+    st.header("🔗 デイズURL自動取得")
+    st.info("スプレッドシートのURL未入力分だけを自動で取得して埋めます。")
+
+    # 入力フォーム
+    col1, col2, col3, col4 = st.columns(4)
+    with col1: d_target = st.selectbox("対象", ["デイズA", "デイズB"])
+    with col2: d_num = st.text_input("管理画面No", placeholder="30xxx")
+    with col3: d_id = st.text_input("ID")
+    with col4: d_pw = st.text_input("PW", type="password")
+
     if st.button("🚀 URL取得開始", use_container_width=True):
         if not (d_num and d_id and d_pw):
             st.warning("⚠️ ログイン情報を入力してください。")
         else:
-            with st.spinner("ブラウザを起動してURLを取得中..."):
-                try:
-                    driver = setup_headless_driver()
-                    # --- ここにデイズ特有のスクレイピングロジックを記述 ---
-                    # 例: driver.get(f"https://www.ps-days.jp/{d_num}/login/") ...
+            try:
+                # 1. シートの読み込み
+                ws_name = f"投稿{d_target}"
+                ws = GC.open_by_key(SHEET_ID).worksheet(ws_name)
+                all_data = ws.get_all_values()
+                
+                # 未入力行（名前があってURLが空）の抽出
+                targets = []
+                for idx, row in enumerate(all_data):
+                    if idx == 0: continue # ヘッダー無視
+                    name = row[3] if len(row) > 3 else ""
+                    url = row[4] if len(row) > 4 else ""
+                    if name and not url.strip():
+                        targets.append({"row": idx + 1, "name": name})
+
+                if not targets:
+                    st.success("✅ 全てのURLが入力済みです。")
+                else:
+                    st.write(f"🔍 {len(targets)}件の未入力を発見。ブラウザを起動します...")
+                    driver = setup_driver()
+                    wait = WebDriverWait(driver, 20)
                     
-                    st.success("✅ 正常にブラウザが動作しました（ここに取得結果を表示）")
-                    # ダミー表示
-                    st.code("取得したURLがここに表示されます")
+                    # 2. ログイン処理
+                    login_url = f"https://www{d_num}.daysnavi.info/ad-shop/login.php"
+                    driver.get(login_url)
+                    time.sleep(2)
+                    driver.find_element(By.ID, "exampleInputEmail1").send_keys(d_id)
+                    driver.find_element(By.ID, "exampleInputPassword1").send_keys(d_pw)
+                    driver.find_element(By.CSS_SELECTOR, "button[type='submit']").click()
+                    
+                    # サイドバー待機
+                    sidebar = wait.until(EC.presence_of_element_located((By.ID, "sidebar")))
+                    time.sleep(2)
+
+                    # 3. メニュー操作 (ローカルのロジックを移植)
+                    driver.execute_script("arguments[0].scrollTop += 500;", sidebar)
+                    parent = wait.until(EC.element_to_be_clickable((By.CSS_SELECTOR, "a[href='#girls-bbs']")))
+                    driver.execute_script("arguments[0].click();", parent)
+                    
+                    child_xpath = "//a[contains(text(), '写メ日記登録')]"
+                    child_menu = wait.until(EC.element_to_be_clickable((By.XPATH, child_xpath)))
+                    driver.execute_script("arguments[0].click();", child_menu)
+                    time.sleep(5)
+
+                    # 4. URL取得
+                    st.write("📋 女の子一覧からURLを取得中...")
+                    girl_elements = driver.find_elements(By.CSS_SELECTOR, "div.product-item")
+                    diary_links = []
+                    for girl in girl_elements:
+                        try:
+                            g_name = girl.find_element(By.CLASS_NAME, "product-title").text.strip()
+                            # 対象リストにある名前のみピックアップ
+                            if any(t["name"] == g_name for t in targets):
+                                href = girl.find_element(By.XPATH, ".//a[contains(text(), '写メ日記')]").get_attribute("href")
+                                diary_links.append({"name": g_name, "href": href})
+                        except: continue
+
+                    # 個別巡回してURLコピー
+                    updates = []
+                    for item in diary_links:
+                        driver.get(item["href"])
+                        time.sleep(3)
+                        copy_btn = driver.find_element(By.CSS_SELECTOR, "button[data-clipboard-text]")
+                        final_url = copy_btn.get_attribute("data-clipboard-text")
+                        
+                        # 対象の行番号を特定して更新リストへ
+                        for t in targets:
+                            if t["name"] == item["name"]:
+                                updates.append({
+                                    'range': f'E{t["row"]}',
+                                    'values': [[final_url]]
+                                })
+                                st.write(f"✅ 取得成功: {item['name']}")
+
+                    # 5. スプレッドシートへ一括書き込み
+                    if updates:
+                        ws.batch_update(updates)
+                        st.success(f"🎉 {len(updates)}件のURLを更新しました！")
                     
                     driver.quit()
-                except Exception as e:
-                    st.error(f"❌ ブラウザ実行エラー: {e}")
+
+            except Exception as e:
+                st.error(f"❌ エラーが発生しました: {e}")
+                if 'driver' in locals(): driver.quit()
 
 # =========================================================
 # --- Tab 3: 📊 ③ 店舗アカウント状況 (旧 Tab 2) ---
@@ -360,3 +449,4 @@ with tab5:
                     if st.button("🗑 削除", key=f"del_{b_name}"):
                         bucket.blob(b_name).delete()
                         st.cache_data.clear(); st.rerun()
+
