@@ -1,12 +1,7 @@
 streamlit
 gspread
-google-api-python-client
-google-auth-httplib2
-google-auth-oauthlib
-google-cloud-storage
 google-auth
-google-cloud-bigquery
-db-dtypes
+google-cloud-storage
 pandas
 selenium
 webdriver-manager
