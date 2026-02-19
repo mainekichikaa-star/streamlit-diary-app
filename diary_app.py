@@ -241,64 +241,80 @@ with tab1:
 # =========================================
 with tab2:
     st.header("🔗 デイズURL自動巡回・一括取得")
-    st.info("「デイズアカウント」シートの情報を元に、URL未入力分を全て自動で取得します。")
+    st.info("「デイズアカウント」名簿を元に、URL未入力分を全て自動で埋めます。")
 
     if st.button("🚀 全店舗の未入力URLを自動取得する", use_container_width=True):
         try:
-            # 1. アカウント情報の読み込み
-            # スプレッドシート名などは環境に合わせて適宜修正してください
-            ac_sheet = GC.open_by_key(SHEET_ID).worksheet("デイズアカウント")
-            ac_data = ac_sheet.get_all_values()[1:] # ヘッダー飛ばし
+            # 1. 名簿シートの読み込み
+            st.write("📂 アカウント名簿（デイズアカウント）を読み込み中...")
+            try:
+                # 既に定義されている ACCOUNT_STATUS_SHEET_ID を使用
+                input_ss = GC.open_by_key(ACCOUNT_STATUS_SHEET_ID)
+                # ここで「デイズアカウント」という名前のタブを探します
+                ac_sheet = input_ss.worksheet("デイズアカウント")
+                ac_data = ac_sheet.get_all_values()[1:] # ヘッダー飛ばし
+            except gspread.exceptions.WorksheetNotFound:
+                st.error("❌ スプレッドシート内に「デイズアカウント」という名前のタブが見つかりません。タブ名に余計な空白がないか確認してください。")
+                st.stop()
+            except Exception as e:
+                st.error(f"❌ 名簿シートの読み込みエラー: {e}")
+                st.stop()
             
+            # 2. 投稿先シートの準備
+            output_ss = GC.open_by_key(SHEET_ID)
             output_sheet_names = ["投稿デイズA", "投稿デイズB"]
             
-            # ブラウザ起動（1回だけ起動して使い回す）
+            # ブラウザ起動
             st.write("⏳ ブラウザを準備中...")
             driver = setup_driver()
-            wait = WebDriverWait(driver, 20)
+            wait = WebDriverWait(driver, 25)
 
             for ac_row in ac_data:
                 if not any(ac_row) or len(ac_row) < 5: continue
                 
-                place = ac_row[0]      # エリア
-                shop_name = ac_row[1]  # 店名
-                admin_num = ac_row[2]  # 管理画面No
-                login_id = ac_row[3]   # ID
-                password = ac_row[4]   # PW
+                # 名簿の構成: 0:エリア, 1:店名, 2:管理No, 3:ID, 4:PW
+                place = ac_row[0]
+                shop_name = ac_row[1]
+                admin_num = ac_row[2]
+                login_id = ac_row[3]
+                password = ac_row[4]
 
-                # この店の未入力があるか確認
+                # この店の未入力URLがあるか、各投稿シートをチェック
                 targets = []
                 for s_name in output_sheet_names:
-                    ws = GC.open_by_key(SHEET_ID).worksheet(s_name)
-                    rows = ws.get_all_values()
-                    for i, r in enumerate(rows):
-                        if i == 0: continue
-                        # エリア・店名が一致し、かつURL(5列目)が空
-                        if len(r) >= 4 and r[0] == place and r[1] == shop_name:
-                            url = r[4] if len(r) > 4 else ""
-                            if not url.strip():
-                                targets.append({"ws": ws, "row": i + 1, "name": r[3]})
+                    try:
+                        ws = output_ss.worksheet(s_name)
+                        rows = ws.get_all_values()
+                        for i, r in enumerate(rows):
+                            if i == 0: continue
+                            # エリア・店名が一致し、かつURL(5列目/インデックス4)が空
+                            if len(r) >= 4 and r[0] == place and r[1] == shop_name:
+                                url = r[4] if len(r) > 4 else ""
+                                if not url.strip():
+                                    targets.append({"ws": ws, "row": i + 1, "name": r[3]})
+                    except:
+                        continue
 
                 if not targets:
-                    st.write(f"✅ {shop_name}: 更新不要")
+                    st.write(f"✅ {shop_name}: すべて入力済み")
                     continue
 
                 st.write(f"🚀 {shop_name} の巡回を開始します... ({len(targets)}件取得待ち)")
 
-                # 2. ログイン処理
-                login_url = f"https://www{admin_num}.daysnavi.info/ad-shop/login.php"
-                driver.get(login_url)
-                time.sleep(2)
-                
+                # 3. ログイン処理
                 try:
+                    login_url = f"https://www{admin_num}.daysnavi.info/ad-shop/login.php"
+                    driver.get(login_url)
+                    time.sleep(2)
+                    
                     driver.find_element(By.ID, "exampleInputEmail1").send_keys(login_id)
                     driver.find_element(By.ID, "exampleInputPassword1").send_keys(password)
                     driver.find_element(By.CSS_SELECTOR, "button[type='submit']").click()
                     
-                    # サイドバー待機（ログイン成功確認）
+                    # ログイン成功待機
                     sidebar = wait.until(EC.presence_of_element_located((By.ID, "sidebar")))
                     
-                    # 3. メニュー操作（写メ日記登録へ）
+                    # 4. メニュー操作（ローカル版のロジック）
                     driver.execute_script("arguments[0].scrollTop += 500;", sidebar)
                     parent = wait.until(EC.element_to_be_clickable((By.CSS_SELECTOR, "a[href='#girls-bbs']")))
                     driver.execute_script("arguments[0].click();", parent)
@@ -308,41 +324,38 @@ with tab2:
                     driver.execute_script("arguments[0].click();", child_menu)
                     time.sleep(5)
 
-                    # 4. URL取得ロジック
+                    # 5. URL取得
                     girl_elements = driver.find_elements(By.CSS_SELECTOR, "div.product-item")
                     url_map = {}
                     
-                    # 一覧から「写メ日記」ボタンのリンクを一旦全てメモ
                     diary_links = []
                     for girl in girl_elements:
                         try:
                             g_name = girl.find_element(By.CLASS_NAME, "product-title").text.strip()
-                            # ターゲットに存在する名前だけ
                             if any(t["name"] == g_name for t in targets):
                                 href = girl.find_element(By.XPATH, ".//a[contains(text(), '写メ日記')]").get_attribute("href")
                                 diary_links.append({"name": g_name, "href": href})
                         except: continue
 
-                    # 各ページへ飛んでURLをコピー
                     for item in diary_links:
                         driver.get(item["href"])
                         time.sleep(3)
                         copy_btn = driver.find_element(By.CSS_SELECTOR, "button[data-clipboard-text]")
-                        final_url = copy_btn.get_attribute("data-clipboard-text")
-                        url_map[item["name"]] = final_url
+                        url_map[item["name"]] = copy_btn.get_attribute("data-clipboard-text")
 
-                    # 5. シートへ書き戻し
+                    # 6. 書き込み
                     for t in targets:
                         if t["name"] in url_map:
                             t["ws"].update_cell(t["row"], 5, url_map[t["name"]])
                             st.write(f"  └ ✅ {t['name']} 取得完了")
 
                 except Exception as e:
-                    st.error(f"  └ ❌ {shop_name} でエラー: {e}")
+                    st.error(f"  └ ❌ {shop_name} でエラーが発生しました。ログイン情報等を確認してください。")
                     continue
 
             driver.quit()
             st.success("✨ 全店舗の巡回が完了しました！")
+            st.cache_data.clear()
 
         except Exception as e:
             st.error(f"❌ 致命的なエラー: {e}")
@@ -458,5 +471,6 @@ with tab5:
                     if st.button("🗑 削除", key=f"del_{b_name}"):
                         bucket.blob(b_name).delete()
                         st.cache_data.clear(); st.rerun()
+
 
 
