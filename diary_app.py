@@ -237,130 +237,146 @@ with tab1:
                 st.error(f"❌ 登録エラー: {e}")
 
 # =========================================
-# --- Tab 2: 🔗 ② デイズURL取得 ---
+# --- Tab 2: 🔗 ② デイズURL取得 (完全移植版) ---
 # =========================================
 with tab2:
     st.header("🔗 デイズURL自動巡回・一括取得")
-    st.info("「デイズアカウント」名簿を元に、URL未入力分を全て自動で埋めます。")
-
-    if st.button("🚀 全店舗の未入力URLを自動取得する", use_container_width=True):
+    
+    if st.button("🚀 ローカル版と同じロジックで実行", use_container_width=True):
         try:
-            # 1. 名簿シートの読み込み
-            st.write("📂 アカウント名簿（デイズアカウント）を読み込み中...")
-            try:
-                # 既に定義されている ACCOUNT_STATUS_SHEET_ID を使用
-                input_ss = GC.open_by_key(ACCOUNT_STATUS_SHEET_ID)
-                # ここで「デイズアカウント」という名前のタブを探します
-                ac_sheet = input_ss.worksheet("デイズアカウント")
-                ac_data = ac_sheet.get_all_values()[1:] # ヘッダー飛ばし
-            except gspread.exceptions.WorksheetNotFound:
-                st.error("❌ スプレッドシート内に「デイズアカウント」という名前のタブが見つかりません。タブ名に余計な空白がないか確認してください。")
-                st.stop()
-            except Exception as e:
-                st.error(f"❌ 名簿シートの読み込みエラー: {e}")
-                st.stop()
+            # 1. シートの準備 (定数 ID を使用)
+            input_spreadsheet = GC.open_by_key(ACCOUNT_STATUS_SHEET_ID)
+            output_spreadsheet = GC.open_by_key(SHEET_ID)
             
-            # 2. 投稿先シートの準備
-            output_ss = GC.open_by_key(SHEET_ID)
-            output_sheet_names = ["投稿デイズA", "投稿デイズB"]
+            input_sheet = input_spreadsheet.worksheet("デイズアカウント")
+            output_sheets = [output_spreadsheet.worksheet("投稿デイズA"), output_spreadsheet.worksheet("投稿デイズB")]
             
-            # ブラウザ起動
-            st.write("⏳ ブラウザを準備中...")
-            driver = setup_driver()
+            # 2. ブラウザ起動設定 (Streamlit Cloud 用)
+            options = Options()
+            options.add_argument("--headless")
+            options.add_argument("--no-sandbox")
+            options.add_argument("--disable-dev-shm-usage")
+            options.add_argument("--window-size=1600,1200")
+            service = Service("/usr/bin/chromedriver")
+            driver = webdriver.Chrome(service=service, options=options)
             wait = WebDriverWait(driver, 25)
 
-            for ac_row in ac_data:
-                if not any(ac_row) or len(ac_row) < 5: continue
-                
-                # 名簿の構成: 0:エリア, 1:店名, 2:管理No, 3:ID, 4:PW
-                place = ac_row[0]
-                shop_name = ac_row[1]
-                admin_num = ac_row[2]
-                login_id = ac_row[3]
-                password = ac_row[4]
+            try:
+                # 3. メインロジック開始
+                all_output_data = [sh.get_all_values() for sh in output_sheets]
+                input_rows = input_sheet.get_all_values()[1:]
 
-                # この店の未入力URLがあるか、各投稿シートをチェック
-                targets = []
-                for s_name in output_sheet_names:
-                    try:
-                        ws = output_ss.worksheet(s_name)
-                        rows = ws.get_all_values()
-                        for i, r in enumerate(rows):
-                            if i == 0: continue
-                            # エリア・店名が一致し、かつURL(5列目/インデックス4)が空
-                            if len(r) >= 4 and r[0] == place and r[1] == shop_name:
-                                url = r[4] if len(r) > 4 else ""
-                                if not url.strip():
-                                    targets.append({"ws": ws, "row": i + 1, "name": r[3]})
-                    except:
+                for r in input_rows:
+                    if not any(r) or len(r) < 5: continue
+                    place, shop_name, admin_num, login_id, password = r[0], r[1], r[2], r[3], r[4]
+
+                    # --- スキップ判定 (ここがローカル版と同じ) ---
+                    is_any_empty = False
+                    for sheet_data in all_output_data:
+                        for row in sheet_data:
+                            # エリアと店名が一致
+                            if len(row) >= 4 and row[0] == place and row[1] == shop_name:
+                                # URL(5列目)が空かどうか
+                                if len(row) < 5 or not row[4].strip():
+                                    is_any_empty = True
+                                    break
+                        if is_any_empty: break
+
+                    if not is_any_empty:
+                        st.write(f"✅ スキップ済み: {shop_name}")
                         continue
 
-                if not targets:
-                    st.write(f"✅ {shop_name}: すべて入力済み")
-                    continue
-
-                st.write(f"🚀 {shop_name} の巡回を開始します... ({len(targets)}件取得待ち)")
-
-                # 3. ログイン処理
-                try:
+                    # --- 巡回開始 ---
+                    st.write(f"🚀 巡回開始: {shop_name}")
+                    
+                    # ログイン処理
                     login_url = f"https://www{admin_num}.daysnavi.info/ad-shop/login.php"
                     driver.get(login_url)
                     time.sleep(2)
-                    
                     driver.find_element(By.ID, "exampleInputEmail1").send_keys(login_id)
                     driver.find_element(By.ID, "exampleInputPassword1").send_keys(password)
                     driver.find_element(By.CSS_SELECTOR, "button[type='submit']").click()
                     
-                    # ログイン成功待機
-                    sidebar = wait.until(EC.presence_of_element_located((By.ID, "sidebar")))
-                    
-                    # 4. メニュー操作（ローカル版のロジック）
-                    driver.execute_script("arguments[0].scrollTop += 500;", sidebar)
-                    parent = wait.until(EC.element_to_be_clickable((By.CSS_SELECTOR, "a[href='#girls-bbs']")))
-                    driver.execute_script("arguments[0].click();", parent)
-                    
-                    child_xpath = "//a[contains(text(), '写メ日記登録')]"
-                    child_menu = wait.until(EC.element_to_be_clickable((By.XPATH, child_xpath)))
-                    driver.execute_script("arguments[0].click();", child_menu)
-                    time.sleep(5)
+                    # サイドバー操作
+                    sidebar_element = wait.until(EC.presence_of_element_located((By.ID, "sidebar")))
+                    time.sleep(3)
+                    driver.execute_script("arguments[0].click();", sidebar_element)
+                    time.sleep(1)
 
-                    # 5. URL取得
+                    found_parent = None
+                    for _ in range(1, 20):
+                        try:
+                            parent = driver.find_element(By.CSS_SELECTOR, "a[href='#girls-bbs']")
+                            if parent.is_displayed():
+                                found_parent = parent
+                                break
+                        except: pass
+                        driver.execute_script("arguments[0].scrollTop += 300;", sidebar_element)
+                        time.sleep(0.5)
+
+                    if not found_parent:
+                        st.error(f"❌ {shop_name}: メニューが見つかりません")
+                        continue
+
+                    driver.execute_script("arguments[0].click();", found_parent)
+                    time.sleep(2)
+                    child_menu = wait.until(EC.element_to_be_clickable((By.XPATH, "//a[contains(text(), '写メ日記登録')]")))
+                    driver.execute_script("arguments[0].click();", child_menu)
+                    time.sleep(6)
+
+                    # URL一覧取得
                     girl_elements = driver.find_elements(By.CSS_SELECTOR, "div.product-item")
                     url_map = {}
-                    
                     diary_links = []
                     for girl in girl_elements:
                         try:
-                            g_name = girl.find_element(By.CLASS_NAME, "product-title").text.strip()
-                            if any(t["name"] == g_name for t in targets):
-                                href = girl.find_element(By.XPATH, ".//a[contains(text(), '写メ日記')]").get_attribute("href")
-                                diary_links.append({"name": g_name, "href": href})
+                            name = girl.find_element(By.CLASS_NAME, "product-title").text.strip()
+                            href = girl.find_element(By.XPATH, ".//a[contains(text(), '写メ日記')]").get_attribute("href")
+                            diary_links.append({"name": name, "href": href})
                         except: continue
 
                     for item in diary_links:
-                        driver.get(item["href"])
-                        time.sleep(3)
-                        copy_btn = driver.find_element(By.CSS_SELECTOR, "button[data-clipboard-text]")
-                        url_map[item["name"]] = copy_btn.get_attribute("data-clipboard-text")
+                        try:
+                            driver.get(item["href"])
+                            time.sleep(4)
+                            driver.execute_script("window.scrollTo(0, document.body.scrollHeight);")
+                            time.sleep(1)
+                            copy_btn = wait.until(EC.presence_of_element_located((By.CSS_SELECTOR, "button[data-clipboard-text]")))
+                            g_url = copy_btn.get_attribute("data-clipboard-text")
+                            if g_url:
+                                url_map[item["name"]] = g_url
+                                st.write(f"  └ ✅ URL成功: {item['name']}")
+                        except: continue
 
-                    # 6. 書き込み
-                    for t in targets:
-                        if t["name"] in url_map:
-                            t["ws"].update_cell(t["row"], 5, url_map[t["name"]])
-                            st.write(f"  └ ✅ {t['name']} 取得完了")
+                    # 書き込み処理 (ここもローカル版を移植)
+                    if url_map:
+                        for target_sheet in output_sheets:
+                            try:
+                                data = target_sheet.get_all_values()
+                                updates = []
+                                for idx, row in enumerate(data):
+                                    if len(row) >= 4 and row[0] == place and row[1] == shop_name:
+                                        name = row[3]
+                                        if name in url_map and (len(row) < 5 or not row[4].strip()):
+                                            updates.append({
+                                                'range': gspread.utils.rowcol_to_a1(idx + 1, 5),
+                                                'values': [[url_map[name]]]
+                                            })
+                                if updates:
+                                    target_sheet.batch_update(updates)
+                                    st.write(f"  📝 {target_sheet.title} へ書き込み完了")
+                            except Exception as e:
+                                st.error(f"  ⚠️ 書き込みエラー: {e}")
 
-                except Exception as e:
-                    st.error(f"  └ ❌ {shop_name} でエラーが発生しました。ログイン情報等を確認してください。")
-                    continue
+                st.success("✨ 全工程終了。")
+                st.cache_data.clear()
 
-            driver.quit()
-            st.success("✨ 全店舗の巡回が完了しました！")
-            st.cache_data.clear()
+            finally:
+                driver.quit()
 
         except Exception as e:
-            st.error(f"❌ 致命的なエラー: {e}")
-            if 'driver' in locals(): driver.quit()
-
+            st.error(f"❌ エラー発生: {e}")
+            
 # =========================================================
 # --- Tab 3: 📊 ③ 店舗アカウント状況 (旧 Tab 2) ---
 # =========================================================
@@ -471,6 +487,7 @@ with tab5:
                     if st.button("🗑 削除", key=f"del_{b_name}"):
                         bucket.blob(b_name).delete()
                         st.cache_data.clear(); st.rerun()
+
 
 
 
