@@ -147,7 +147,7 @@ tab1, tab2, tab3, tab4, tab5 = st.tabs([
 # --- Tab 1: 📝 ① データ登録 (変更なし) ---
 # =========================================================
 with tab1:
-    st.header("1️⃣ 浜松版：新規データ登録")
+    st.header("1️⃣ 浜松：新規データ登録")
     st.markdown("""
         <div style="background-color: #f0f2f6; padding: 15px; border-radius: 10px; border-left: 5px solid #FF4B4B; margin-bottom: 20px;">
             <p style="margin: 0; font-size: 0.9rem; color: #555;">📅 <b>投稿スケジュール説明</b></p>
@@ -483,6 +483,7 @@ with tab5:
                     if st.button("🗑 削除", key=f"del_{b_name}"):
                         bucket.blob(b_name).delete()
                         st.cache_data.clear(); st.rerun()
+
 
 
 
