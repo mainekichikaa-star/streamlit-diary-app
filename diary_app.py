@@ -240,55 +240,65 @@ with tab1:
 # --- Tab 2: 🔗 ② デイズURL取得 ---
 # =========================================
 with tab2:
-    st.header("🔗 デイズURL自動取得")
-    st.info("スプレッドシートのURL未入力分だけを自動で取得して埋めます。")
+    st.header("🔗 デイズURL自動巡回・一括取得")
+    st.info("「デイズアカウント」シートの情報を元に、URL未入力分を全て自動で取得します。")
 
-    # 入力フォーム
-    col1, col2, col3, col4 = st.columns(4)
-    with col1: d_target = st.selectbox("対象", ["デイズA", "デイズB"])
-    with col2: d_num = st.text_input("管理画面No", placeholder="30xxx")
-    with col3: d_id = st.text_input("ID")
-    with col4: d_pw = st.text_input("PW", type="password")
+    if st.button("🚀 全店舗の未入力URLを自動取得する", use_container_width=True):
+        try:
+            # 1. アカウント情報の読み込み
+            # スプレッドシート名などは環境に合わせて適宜修正してください
+            ac_sheet = GC.open_by_key(SHEET_ID).worksheet("デイズアカウント")
+            ac_data = ac_sheet.get_all_values()[1:] # ヘッダー飛ばし
+            
+            output_sheet_names = ["投稿デイズA", "投稿デイズB"]
+            
+            # ブラウザ起動（1回だけ起動して使い回す）
+            st.write("⏳ ブラウザを準備中...")
+            driver = setup_driver()
+            wait = WebDriverWait(driver, 20)
 
-    if st.button("🚀 URL取得開始", use_container_width=True):
-        if not (d_num and d_id and d_pw):
-            st.warning("⚠️ ログイン情報を入力してください。")
-        else:
-            try:
-                # 1. シートの読み込み
-                ws_name = f"投稿{d_target}"
-                ws = GC.open_by_key(SHEET_ID).worksheet(ws_name)
-                all_data = ws.get_all_values()
+            for ac_row in ac_data:
+                if not any(ac_row) or len(ac_row) < 5: continue
                 
-                # 未入力行（名前があってURLが空）の抽出
+                place = ac_row[0]      # エリア
+                shop_name = ac_row[1]  # 店名
+                admin_num = ac_row[2]  # 管理画面No
+                login_id = ac_row[3]   # ID
+                password = ac_row[4]   # PW
+
+                # この店の未入力があるか確認
                 targets = []
-                for idx, row in enumerate(all_data):
-                    if idx == 0: continue # ヘッダー無視
-                    name = row[3] if len(row) > 3 else ""
-                    url = row[4] if len(row) > 4 else ""
-                    if name and not url.strip():
-                        targets.append({"row": idx + 1, "name": name})
+                for s_name in output_sheet_names:
+                    ws = GC.open_by_key(SHEET_ID).worksheet(s_name)
+                    rows = ws.get_all_values()
+                    for i, r in enumerate(rows):
+                        if i == 0: continue
+                        # エリア・店名が一致し、かつURL(5列目)が空
+                        if len(r) >= 4 and r[0] == place and r[1] == shop_name:
+                            url = r[4] if len(r) > 4 else ""
+                            if not url.strip():
+                                targets.append({"ws": ws, "row": i + 1, "name": r[3]})
 
                 if not targets:
-                    st.success("✅ 全てのURLが入力済みです。")
-                else:
-                    st.write(f"🔍 {len(targets)}件の未入力を発見。ブラウザを起動します...")
-                    driver = setup_driver()
-                    wait = WebDriverWait(driver, 20)
-                    
-                    # 2. ログイン処理
-                    login_url = f"https://www{d_num}.daysnavi.info/ad-shop/login.php"
-                    driver.get(login_url)
-                    time.sleep(2)
-                    driver.find_element(By.ID, "exampleInputEmail1").send_keys(d_id)
-                    driver.find_element(By.ID, "exampleInputPassword1").send_keys(d_pw)
+                    st.write(f"✅ {shop_name}: 更新不要")
+                    continue
+
+                st.write(f"🚀 {shop_name} の巡回を開始します... ({len(targets)}件取得待ち)")
+
+                # 2. ログイン処理
+                login_url = f"https://www{admin_num}.daysnavi.info/ad-shop/login.php"
+                driver.get(login_url)
+                time.sleep(2)
+                
+                try:
+                    driver.find_element(By.ID, "exampleInputEmail1").send_keys(login_id)
+                    driver.find_element(By.ID, "exampleInputPassword1").send_keys(password)
                     driver.find_element(By.CSS_SELECTOR, "button[type='submit']").click()
                     
-                    # サイドバー待機
+                    # サイドバー待機（ログイン成功確認）
                     sidebar = wait.until(EC.presence_of_element_located((By.ID, "sidebar")))
-                    time.sleep(2)
-
-                    # 3. メニュー操作 (ローカルのロジックを移植)
+                    
+                    # 3. メニュー操作（写メ日記登録へ）
                     driver.execute_script("arguments[0].scrollTop += 500;", sidebar)
                     parent = wait.until(EC.element_to_be_clickable((By.CSS_SELECTOR, "a[href='#girls-bbs']")))
                     driver.execute_script("arguments[0].click();", parent)
@@ -298,46 +308,45 @@ with tab2:
                     driver.execute_script("arguments[0].click();", child_menu)
                     time.sleep(5)
 
-                    # 4. URL取得
-                    st.write("📋 女の子一覧からURLを取得中...")
+                    # 4. URL取得ロジック
                     girl_elements = driver.find_elements(By.CSS_SELECTOR, "div.product-item")
+                    url_map = {}
+                    
+                    # 一覧から「写メ日記」ボタンのリンクを一旦全てメモ
                     diary_links = []
                     for girl in girl_elements:
                         try:
                             g_name = girl.find_element(By.CLASS_NAME, "product-title").text.strip()
-                            # 対象リストにある名前のみピックアップ
+                            # ターゲットに存在する名前だけ
                             if any(t["name"] == g_name for t in targets):
                                 href = girl.find_element(By.XPATH, ".//a[contains(text(), '写メ日記')]").get_attribute("href")
                                 diary_links.append({"name": g_name, "href": href})
                         except: continue
 
-                    # 個別巡回してURLコピー
-                    updates = []
+                    # 各ページへ飛んでURLをコピー
                     for item in diary_links:
                         driver.get(item["href"])
                         time.sleep(3)
                         copy_btn = driver.find_element(By.CSS_SELECTOR, "button[data-clipboard-text]")
                         final_url = copy_btn.get_attribute("data-clipboard-text")
-                        
-                        # 対象の行番号を特定して更新リストへ
-                        for t in targets:
-                            if t["name"] == item["name"]:
-                                updates.append({
-                                    'range': f'E{t["row"]}',
-                                    'values': [[final_url]]
-                                })
-                                st.write(f"✅ 取得成功: {item['name']}")
+                        url_map[item["name"]] = final_url
 
-                    # 5. スプレッドシートへ一括書き込み
-                    if updates:
-                        ws.batch_update(updates)
-                        st.success(f"🎉 {len(updates)}件のURLを更新しました！")
-                    
-                    driver.quit()
+                    # 5. シートへ書き戻し
+                    for t in targets:
+                        if t["name"] in url_map:
+                            t["ws"].update_cell(t["row"], 5, url_map[t["name"]])
+                            st.write(f"  └ ✅ {t['name']} 取得完了")
 
-            except Exception as e:
-                st.error(f"❌ エラーが発生しました: {e}")
-                if 'driver' in locals(): driver.quit()
+                except Exception as e:
+                    st.error(f"  └ ❌ {shop_name} でエラー: {e}")
+                    continue
+
+            driver.quit()
+            st.success("✨ 全店舗の巡回が完了しました！")
+
+        except Exception as e:
+            st.error(f"❌ 致命的なエラー: {e}")
+            if 'driver' in locals(): driver.quit()
 
 # =========================================================
 # --- Tab 3: 📊 ③ 店舗アカウント状況 (旧 Tab 2) ---
@@ -449,4 +458,5 @@ with tab5:
                     if st.button("🗑 削除", key=f"del_{b_name}"):
                         bucket.blob(b_name).delete()
                         st.cache_data.clear(); st.rerun()
+
 
