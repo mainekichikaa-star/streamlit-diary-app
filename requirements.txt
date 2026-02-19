@@ -4,9 +4,9 @@ google-api-python-client
 google-auth-httplib2
 google-auth-oauthlib
 google-cloud-storage
-pandas
 google-auth
 google-cloud-bigquery
 db-dtypes
+pandas
 selenium
 webdriver-manager
