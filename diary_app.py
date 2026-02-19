@@ -240,9 +240,9 @@ with tab1:
 # --- Tab 2: 🔗 ② デイズURL取得 (API対策版) ---
 # =========================================
 with tab2:
-    st.header("🔗 デイズURL自動巡回・一括取得")
+    st.header("🔗 デイズURL自動取得")
     
-    if st.button("🚀 API負荷を抑えて実行", use_container_width=True):
+    if st.button("🚀 実行", use_container_width=True):
         try:
             # --- 1. 最初の一括読み込み (APIリクエストを最小化) ---
             st.write("📂 データを一括読み込み中...")
@@ -483,6 +483,7 @@ with tab5:
                     if st.button("🗑 削除", key=f"del_{b_name}"):
                         bucket.blob(b_name).delete()
                         st.cache_data.clear(); st.rerun()
+
 
 
 
