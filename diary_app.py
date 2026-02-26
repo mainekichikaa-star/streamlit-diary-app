@@ -144,7 +144,7 @@ tab1, tab2, tab3, tab4, tab5 = st.tabs([
 ])
 
 # =========================================================
-# --- Tab 1: 📝 ① データ登録 (変更なし) ---
+# --- Tab 1: 📝 ① データ登録 (修正版) ---
 # =========================================================
 with tab1:
     st.header("1️⃣ 浜松：新規データ登録")
@@ -164,18 +164,26 @@ with tab1:
     global_area = c2.text_input("📍 エリア", key="in_area_f")
     global_store = c3.text_input("🏢 店名", key="in_store_f")
 
+    # --- 既存店チェックボックス ---
+    is_existing_store = st.checkbox("✅ 既存店（ログイン情報の登録をスキップする）", key="chk_existing")
+
     with st.form("diary_input_form", clear_on_submit=False):
-        st.subheader("🔑 ログイン情報")
-        if target_media == "デイズ":
-            lc1, lc2, lc3 = st.columns(3)
-            login_num = lc1.text_input("管理画面ナンバー", key="login_num_f") 
-            login_id = lc2.text_input("ID", key="login_id_f")
-            login_pw = lc3.text_input("パスワード", key="login_pw_f")
+        # 既存店でない場合のみログイン情報入力欄を表示
+        if not is_existing_store:
+            st.subheader("🔑 ログイン情報（新規登録用）")
+            if target_media == "デイズ":
+                lc1, lc2, lc3 = st.columns(3)
+                login_num = lc1.text_input("管理画面ナンバー", key="login_num_f") 
+                login_id = lc2.text_input("ID", key="login_id_f")
+                login_pw = lc3.text_input("パスワード", key="login_pw_f")
+            else:
+                lc1, lc2 = st.columns(2)
+                login_id = lc1.text_input("ID", key="login_id_f")
+                login_pw = lc2.text_input("パスワード", key="login_pw_f")
+                login_num = "" 
         else:
-            lc1, lc2 = st.columns(2)
-            login_id = lc1.text_input("ID", key="login_id_f")
-            login_pw = lc2.text_input("パスワード", key="login_pw_f")
-            login_num = "" 
+            # チェック時は内部変数を空にする
+            login_id, login_pw, login_num = "", "", ""
 
         st.markdown("---")
         st.subheader("📸 投稿内容入力 (最大40件)")
@@ -218,13 +226,17 @@ with tab1:
 
                 ws_main.append_rows(rows_main, value_input_option='USER_ENTERED')
                 
-                progress_text.info("🔐 ログイン情報を登録中...")
-                ws_status = GC.open_by_key(ACCOUNT_STATUS_SHEET_ID).worksheet(f"{target_media}アカウント")
-                if target_media == "デイズ":
-                    status_row = [global_area, global_store, login_num, login_id, login_pw]
+                # --- ログイン情報の登録判定 ---
+                if not is_existing_store:
+                    progress_text.info("🔐 ログイン情報を登録中...")
+                    ws_status = GC.open_by_key(ACCOUNT_STATUS_SHEET_ID).worksheet(f"{target_media}アカウント")
+                    if target_media == "デイズ":
+                        status_row = [global_area, global_store, login_num, login_id, login_pw]
+                    else:
+                        status_row = [global_area, global_store, login_id, login_pw]
+                    ws_status.append_row(status_row, value_input_option='USER_ENTERED')
                 else:
-                    status_row = [global_area, global_store, login_id, login_pw]
-                ws_status.append_row(status_row, value_input_option='USER_ENTERED')
+                    progress_text.info("ℹ️ 既存店のためログイン情報の登録をスキップしました。")
                 
                 progress_text.empty()
                 st.success(f"✅ {len(valid_data)}件のデータを正常に登録しました！")
@@ -483,6 +495,7 @@ with tab5:
                     if st.button("🗑 削除", key=f"del_{b_name}"):
                         bucket.blob(b_name).delete()
                         st.cache_data.clear(); st.rerun()
+
 
 
 
