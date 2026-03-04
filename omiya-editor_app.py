@@ -22,6 +22,7 @@ except KeyError:
 # --- 2. 補助関数 ---
 def normalize_text(s):
     if not s: return ""
+    # 全角・半角スペースをすべて除去して比較用にする
     return re.sub(r'\s+', '', str(s)).replace('　', '').lower()
 
 def parse_to_datetime(t_str):
@@ -43,6 +44,23 @@ def is_time_match(base_time, target_filename, window_min=20):
 
 def get_cached_url(blob_name):
     return f"https://storage.googleapis.com/{GCS_BUCKET_NAME}/{urllib.parse.quote(blob_name)}"
+
+def get_actual_folder_name(bucket, area, store_name, media_type):
+    """GCS上の実際のフォルダ名をスペースを無視して特定する"""
+    # 比較用のベース文字列 (例: デリじゃutopia)
+    search_base = normalize_text(f"デリじゃ{store_name}" if media_type == "デリじゃ" else store_name)
+    
+    # エリア配下のディレクトリ(プレフィックス)を取得
+    blobs = bucket.list_blobs(prefix=f"{area}/", delimiter='/')
+    next(blobs, None) 
+    existing_folders = [prefix.split('/')[-2] for prefix in blobs.prefixes]
+    
+    for folder in existing_folders:
+        if normalize_text(folder) == search_base:
+            return folder
+            
+    # 見つからない場合はデフォルト（半角スペース）を返す
+    return f"デリじゃ {store_name}" if media_type == "デリじゃ" else store_name
 
 # --- 3. API接続 & キャッシュ設定 ---
 @st.cache_resource(ttl=3600)
@@ -135,18 +153,16 @@ def main():
             with c5:
                 st.write("")
                 if sel_store != "未選択":
-                    store_data_for_zip = full_df[(full_df["エリア"] == sel_area) & (full_df["店名"] == sel_store)]
-                    target_folders = set()
-                    for _, r in store_data_for_zip.iterrows():
-                        m_type = str(r["媒体"]).strip()
-                        if m_type == "デリじゃ":
-                            target_folders.add(f"デリじゃ {sel_store}")
-                        else:
-                            target_folders.add(sel_store)
-
                     bucket = GCS_CLIENT.bucket(GCS_BUCKET_NAME)
-                    all_matched_blobs = []
                     
+                    # 【修正】ZIP保存時のフォルダ特定も柔軟に
+                    # 「デリじゃ」と「通常」両方の可能性を考慮して取得
+                    target_folders = set()
+                    possible_media = full_df[full_df["店名"] == sel_store]["媒体"].unique()
+                    for m in possible_media:
+                        target_folders.add(get_actual_folder_name(bucket, sel_area, sel_store, str(m).strip()))
+
+                    all_matched_blobs = []
                     for folder in target_folders:
                         prefix = f"{sel_area}/{folder}/"
                         all_matched_blobs.extend(list(bucket.list_blobs(prefix=prefix)))
@@ -198,7 +214,8 @@ def main():
 
                 for idx, row in target_df.iterrows():
                     media_type = str(row["媒体"]).strip()
-                    target_folder = f"デリじゃ {sel_store}" if media_type == "デリじゃ" else sel_store
+                    # 【修正】スペース不問で実際のフォルダ名を取得
+                    target_folder = get_actual_folder_name(bucket, sel_area, sel_store, media_type)
                     
                     prefix = f"{sel_area}/{target_folder}/"
                     current_blobs = list(bucket.list_blobs(prefix=prefix))
@@ -230,6 +247,7 @@ def main():
                                     for old_path in matched_files:
                                         old_filename = old_path.split('/')[-1]
                                         new_filename = old_filename.replace(row["投稿時間"], new_time)
+                                        # 保存先も正しいフォルダ名を使用
                                         new_path = f"{sel_area}/{target_folder}/{new_filename}"
                                         old_blob = bucket.blob(old_path)
                                         bucket.copy_blob(old_blob, bucket, new_path)
@@ -255,13 +273,14 @@ def main():
                                 if st.button("🚀 アップ", key=f"u_btn_{idx}"):
                                     ext = up_file.name.split('.')[-1]
                                     final_time = new_time if new_time else row['投稿時間']
+                                    # アップロード先も正しいフォルダ名を使用
                                     new_blob_name = f"{sel_area}/{target_folder}/{final_time}_{row['女の子の名前']}.{ext}"
                                     blob = bucket.blob(new_blob_name)
                                     blob.upload_from_string(up_file.getvalue(), content_type=up_file.type)
                                     st.rerun()
                         
                         st.markdown("<div class='diary-divider'></div>", unsafe_allow_html=True)
-                        
+
     # =========================================================================
     # TAB 2: データ不備チェック
     # =========================================================================
@@ -292,8 +311,14 @@ def main():
             for _, row in df2.iterrows():
                 b_time = parse_to_datetime(row["投稿時間"])
                 n_norm = normalize_text(row["女の子の名前"])
+                # チェック時もスペース除去して比較
                 s_norm = normalize_text(row["店名"])
-                store_blobs = [b.name for b in all_blobs if s_norm in normalize_text(b.name)]
+                m_type = str(row["媒体"]).strip()
+                target_base = normalize_text(f"デリじゃ{row['店名']}" if m_type == "デリじゃ" else row['店名'])
+                
+                # フォルダ名部分を抽出して比較
+                store_blobs = [b.name for b in all_blobs if target_base == normalize_text(b.name.split('/')[1])]
+                
                 matched = [img for img in store_blobs if (n_norm in normalize_text(img) or normalize_text(img) in n_norm) and is_time_match(b_time, img.split('/')[-1])]
                 if not matched and row["女の子の名前"].strip() != "":
                     missing_images.append(row)
@@ -318,7 +343,7 @@ def main():
                     st.success("全店舗20件以上あります。")
 
     # =========================================================================
-    # TAB 3: 店舗アカウント状況 (旧Tab2)
+    # TAB 3: 店舗アカウント状況
     # =========================================================================
     with tab3:
         st.markdown("## 📊 店舗アカウント状況")
@@ -376,6 +401,7 @@ def main():
                                         ws_stock.append_row([None, None, row[5], row[6]], value_input_option='USER_ENTERED')
                                         time.sleep(2.0)
                                         ws_main.delete_rows(row_idx)
+                                
                                 status_sprs = GC.open_by_key(ACCOUNT_STATUS_SHEET_ID)
                                 ws_link = status_sprs.worksheet(SHEET_MAP[item['acc']])
                                 link_data = ws_link.get_all_values()
@@ -383,16 +409,23 @@ def main():
                                     if len(link_data[row_idx-1]) >= 2 and link_data[row_idx-1][1] == item['shop']:
                                         ws_link.delete_rows(row_idx)
                                         break
+                                
                                 bucket = GCS_CLIENT.bucket(GCS_BUCKET_NAME)
-                                found_blobs = []
-                                for pfx in [f"{item['area']}/{item['shop']}/", f"{item['area']}/デリじゃ {item['shop']}/"]:
-                                    blobs = list(bucket.list_blobs(prefix=pfx))
-                                    if blobs: found_blobs = blobs; break
-                                for b in found_blobs:
+                                # 移動時のフォルダ特定も柔軟に
+                                actual_f = get_actual_folder_name(bucket, item['area'], item['shop'], "デリじゃ") # 一旦デリじゃで検索
+                                blobs = list(bucket.list_blobs(prefix=f"{item['area']}/{actual_f}/"))
+                                
+                                # もし見つからなければ通常店名で再検索
+                                if not blobs:
+                                    actual_f = get_actual_folder_name(bucket, item['area'], item['shop'], "通常")
+                                    blobs = list(bucket.list_blobs(prefix=f"{item['area']}/{actual_f}/"))
+
+                                for b in blobs:
                                     file_name = b.name.split('/')[-1]
                                     new_name = f"【落ち店】/{item['shop']}/{file_name}"
                                     bucket.copy_blob(b, bucket, new_name)
                                     b.delete()
+                                    
                             st.success("🎉 移動完了！ 最新データにするには更新ボタンを押してください。")
                             st.session_state.confirm_move = False
                         except Exception as e:
@@ -400,6 +433,3 @@ def main():
 
 if __name__ == "__main__":
     main()
-
-
-
