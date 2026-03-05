@@ -48,11 +48,28 @@ async def run_automation(data):
             await page.click("#form_submit")
             await page.goto("https://ranking-deli.jp/admin/girls/create/")
 
-            # 2. プロフィール入力 (テスト用)
+            # 2. プロフィール入力 
+            st.info("✍️ 基本情報を入力中...")
             await page.fill("#form_name", data['name'])
-            await page.locator('input[name="p_genre[1]"]').check()
-            await page.locator('input[name="genre[1]"]').check()
+
+            # --- タグ選択（追加修正箇所） ---
+            st.info("🏷️ 優先タグとジャンルを選択中...")
             
+            # 優先タグ (No.1) - labelのテキストで特定して隣のinputをチェック
+            await page.locator('label:has-text("No.1")').locator('xpath=preceding-sibling::input[1]').check()
+
+            # ジャンル (指定されたものをすべてチェック)
+            genres = [
+                "スレンダー", "美乳", "美尻", "美肌", "美脚", "色白", 
+                "テクニシャン", "敏感", "サービス抜群", "愛嬌抜群", 
+                "ｲﾁｬｲCHA好き", "濃厚サービス", "3Ｐ可", "ごっくん"
+            ]
+            for genre_name in genres:
+                # テキストに一致するラベルの直前にあるチェックボックスを選択
+                target = page.locator(f'label:has-text("{genre_name}")').locator('xpath=preceding-sibling::input[1]')
+                if await target.count() > 0:
+                    await target.check()
+
             st.info("💾 基本情報を登録中...")
             async with page.expect_navigation(timeout=60000):
                 await page.click("#form_update-btn", force=True)
@@ -76,11 +93,9 @@ async def run_automation(data):
                 await page.mouse.move(box["x"] + box["width"], box["y"] + box["height"], steps=20)
                 await page.mouse.up()
             
-            # 5. 「修正する」ボタンで確定 (★修正箇所)
+            # 5. 「修正する」ボタンで確定
             st.info("✅ 修正ボタンをクリック...")
-            # 文字列指定を避け、role または class で指定
             fix_btn = page.get_by_role("button", name="修正する")
-            # もし上記でダメなら fix_btn = page.locator('input.btn').last など
             await fix_btn.wait_for(state="visible")
             await fix_btn.click()
             
@@ -103,7 +118,7 @@ async def run_automation(data):
             if os.path.exists(tmp_image): os.remove(tmp_image)
 
 # --- Streamlit UI ---
-st.title("👸 女の子一括登録（エラー完全回避版）")
+st.title("👸 女の子一括登録（タグ固定版）")
 
 test_data = {
     "name": "るか",
@@ -111,7 +126,7 @@ test_data = {
     "age": 22,
     "height": 160,
     "ai_catchphrase": "全選択ドラッグテスト",
-    "ai_description": "属性エラーを回避して修正ボタンをクリックします。",
+    "ai_description": "指定タグをすべて自動チェックします。",
     "image_url": "https://drive.google.com/file/d/1uF4r8coNfFkhTiB4aH2ztUWjNw33HrtW/view?usp=drive_link"
 }
 
