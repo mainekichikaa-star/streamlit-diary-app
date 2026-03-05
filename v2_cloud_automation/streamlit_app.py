@@ -3,6 +3,7 @@ import asyncio
 import os
 import subprocess
 import requests
+import re
 from playwright.async_api import async_playwright
 
 @st.cache_resource
@@ -14,27 +15,38 @@ def install_playwright():
 
 install_playwright()
 
-# 画像をURLからダウンロードする関数
-def download_image(url, save_path):
+# GoogleドライブのURLを直リンクに変換してダウンロードする関数
+def download_google_drive_image(url, save_path):
     try:
-        response = requests.get(url, timeout=10)
+        # URLからファイルIDを抽出
+        match = re.search(r'd/([a-zA-Z0-9_-]+)', url)
+        if not match:
+            st.error("GoogleドライブのURLからIDを抽出できませんでした。")
+            return False
+        
+        file_id = match.group(1)
+        # 直リンクURLに変換
+        direct_url = f'https://drive.google.com/uc?export=download&id={file_id}'
+        
+        response = requests.get(direct_url, timeout=15)
         if response.status_code == 200:
             with open(save_path, 'wb') as f:
                 f.write(response.content)
             return True
-        return False
+        else:
+            st.error(f"ダウンロード失敗 (Status: {response.status_code})")
+            return False
     except Exception as e:
-        st.error(f"画像ダウンロード失敗: {e}")
+        st.error(f"画像取得エラー: {e}")
         return False
 
 async def run_automation(data):
-    # 一時保存用のファイル名
-    tmp_image = "temp_upload.jpg"
+    tmp_image = "temp_girl_photo.jpg"
     
-    # 1. 画像の事前準備 (URLからダウンロード)
-    st.info(f"📸 画像をダウンロード中: {data['image_url']}")
-    if not download_image(data['image_url'], tmp_image):
-        return {"status": "error", "message": "画像の取得に失敗しました。URLを確認してください。"}
+    # 1. 画像の事前準備
+    st.info("📸 Googleドライブから画像をダウンロード中...")
+    if not download_google_drive_image(data['image_url'], tmp_image):
+        return {"status": "error", "message": "画像の取得に失敗しました。"}
 
     async with async_playwright() as p:
         browser = await p.chromium.launch(headless=True, args=['--lang=ja-JP']) 
@@ -42,7 +54,7 @@ async def run_automation(data):
         page = await context.new_page()
 
         try:
-            # 2. ログイン
+            # 2. ログイン処理
             st.info("🌐 ログイン中...")
             await page.goto("https://ranking-deli.jp/admin/login")
             await page.fill("#form_email", "38652")
@@ -55,7 +67,7 @@ async def run_automation(data):
             await page.goto("https://ranking-deli.jp/admin/girls/create/")
 
             # 4. プロフィール入力
-            st.info("✍️ プロフィールを入力中...")
+            st.info("✍️ プロフィール入力中...")
             await page.fill("#form_name", data['name'])
             cup_map = {"A":"1","B":"2","C":"3","D":"4","E":"5","F":"6","G":"7","H":"8","I":"9","J":"10"}
             await page.select_option("#form_cup", value=cup_map.get(data['cup'].upper(), "3"))
@@ -65,7 +77,6 @@ async def run_automation(data):
             await page.fill("#form_comments", data['ai_description'])
 
             # 5. タグ選択
-            st.info("🏷️ タグを選択中...")
             await page.locator('input[name="p_genre[1]"]').check()
             await page.locator('input[name="genre[1]"]').check()
 
@@ -74,62 +85,60 @@ async def run_automation(data):
             async with page.expect_navigation(timeout=60000):
                 await page.click("#form_update-btn", force=True)
 
-            # 7. 画像アップロード
-            st.info("🔍 登録完了を確認。画像をアップロードします...")
-            success_locator = page.get_by_text("データを登録しました。")
-            await success_locator.wait_for(state="visible", timeout=15000)
+            # 7. 画像アップロード工程
+            st.info("🔍 登録成功を確認。画像をアップロードします...")
+            await page.get_by_text("データを登録しました。").wait_for(state="visible", timeout=15000)
             
-            # 画像編集ボタン(モーダル)をクリック
-            # ページ上の「写真設定」などのボタン(data-target="con1")を探す
-            upload_btn = page.locator('a[data-target="con1"]')
-            await upload_btn.wait_for(state="visible")
-            await upload_btn.click()
+            # 写真設定モーダルを開く
+            await page.click('a[data-target="con1"]')
             
-            # モーダル内のファイル選択
-            # サイトによって input が複数ある場合があるため .first を使用
-            st.info("📤 ファイルを送信中...")
+            # ファイルを選択
+            st.info("📤 ファイルを選択中...")
             file_input = page.locator('input[type="file"]').first
             await file_input.set_input_files(tmp_image)
             
-            # 保存処理を待つための待機（必要に応じて「保存」ボタンのクリックを追加）
+            # 【追加】アップロードボタンをクリック
+            st.info("🚀 アップロードボタンをクリック...")
+            upload_btn = page.locator('button.upbtn:has-text("アップロード")')
+            await upload_btn.click()
+            
+            # 反映を待つ
             await asyncio.sleep(5) 
             
-            st.success("✅ 画像のアップロードが完了しました。")
+            st.success("✅ 全行程が完了しました！")
             await page.screenshot(path="final_result.png")
-            return {"status": "success", "message": "すべて完了"}
+            return {"status": "success", "message": "画像反映まで完了"}
 
         except Exception as e:
             await page.screenshot(path="error_log.png")
-            return {"status": "error", "message": f"エラー: {str(e)}"}
+            return {"status": "error", "message": f"実行エラー: {str(e)}"}
         finally:
             await browser.close()
-            # 使い終わった一時ファイルを削除
             if os.path.exists(tmp_image):
                 os.remove(tmp_image)
 
 # --- Streamlit UI ---
-st.title("👸 女の子一括登録 & 画像自動DL")
+st.title("👸 女の子一括登録（画像完全自動版）")
 
-# テスト用の画像URL（適宜変更してください）
-# ※Googleドライブの直リンクURLなど
-default_img = "https://drive.google.com/file/d/1uF4r8coNfFkhTiB4aH2ztUWjNw33HrtW/view?usp=drive_link"
+# ユーザー指定の画像URL
+target_url = "https://drive.google.com/file/d/1uF4r8coNfFkhTiB4aH2ztUWjNw33HrtW/view?usp=drive_link"
 
-if st.button("🚀 画像URLテスト込みで実行"):
+if st.button("🚀 この画像URLを使って登録実行"):
     test_data = {
         "name": "るか",
         "cup": "C",
         "age": 22,
         "height": 160,
-        "ai_catchphrase": "URLから画像を自動取得",
-        "ai_description": "スプレッドシートのURLから画像を保存してアップロードするテストです。",
-        "image_url": default_img  # ここにスプレッドシートのURLが入る想定
+        "ai_catchphrase": "画像自動アップロードテスト",
+        "ai_description": "Googleドライブの画像URLから直接アップロードするテストです。",
+        "image_url": target_url
     }
     
     with st.status("自動処理中...") as status:
         res = asyncio.run(run_automation(test_data))
         if res["status"] == "success":
-            status.update(label="完了！", state="complete")
+            status.update(label="すべて成功！", state="complete")
             st.image("final_result.png")
         else:
-            status.update(label="失敗", state="error")
+            status.update(label="エラー", state="error")
             st.error(res["message"])
