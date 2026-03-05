@@ -2,4 +2,4 @@ streamlit
 playwright
 groq
 Pillow
-asyncio
+requests
