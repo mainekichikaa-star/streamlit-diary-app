@@ -18,7 +18,6 @@ install_playwright()
 
 async def run_automation(data):
     async with async_playwright() as p:
-        # 画面を見やすくするため少し大きめのウィンドウで起動
         browser = await p.chromium.launch(headless=True) 
         context = await browser.new_context(
             user_agent="Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
@@ -27,7 +26,7 @@ async def run_automation(data):
         page = await context.new_page()
 
         try:
-            # 1. ログイン (ご提示の情報を固定)
+            # 1. ログイン (ID/PASS固定)
             st.info("🌐 ログイン実行中...")
             await page.goto("https://ranking-deli.jp/admin/login")
             await page.fill("#form_email", "38652")
@@ -43,50 +42,46 @@ async def run_automation(data):
             await page.wait_for_load_state("networkidle")
             await asyncio.sleep(5)
 
-            # 3. 【新ロジック】赤いボタンのリンク先を直接抽出して移動
+            # 3. 赤いボタンのリンク先を直接抽出して移動
             st.info("🔴 新規登録ボタンを解析してジャンプします...")
             target_url = await page.evaluate("""() => {
-                // 'regist' を含むリンクを探す
                 const link = document.querySelector('a[href*="regist"]');
                 return link ? link.href : null;
             }""")
 
             if target_url:
-                # ボタンをクリックするのではなく、そのリンク先に直接ページを飛ばす
                 await page.goto(target_url)
-                st.info("✅ 登録画面への遷移を試みました")
+                st.info("✅ 登録画面へ遷移しました")
             else:
-                st.warning("⚠️ リンクが見つかりません。強制クリックを試行...")
+                st.warning("⚠️ リンクが見つかりません。座標クリック...")
                 await page.mouse.click(180, 520) 
             
             await asyncio.sleep(7)
 
-            # 4. プロフィール入力 (ここが動けば成功)
+            # 4. プロフィール入力
             st.info("✍️ プロフィールを入力中...")
             name_field = page.locator('input[name="name"]').first
-            # フォームが見えるまで最大20秒待機
             await name_field.wait_for(state="visible", timeout=20000)
             
             await name_field.fill(data['name'])
             await page.select_option('select[name="cup"]', data['cup'])
             await page.fill('input[name="age"]', str(data['age']))
             await page.fill('input[name="tall"]', str(data['height']))
-            
-            # メッセージ（テキストエリア）
             await page.fill('textarea[name="comment"]', data['ai_description'])
             await page.fill('input[name="catch"]', data['ai_catchphrase'])
             
-            st.success("🎉 入力欄への書き込みに成功しました！")
+            st.success("🎉 プロフィール入力成功！")
 
-            # 5. タグ選択（順次クリック）
+            # 5. タグ選択（波括弧エラーを修正）
             st.info("🏷️ タグを設定中...")
             for tag_id in data.get('tag_ids', []):
-                await page.evaluate(f"() => { const e = document.querySelector('#genre{tag_id}'); if(e) e.click(); }")
+                # Pythonのf-stringでJSの{}を使う場合は {{ }} と書く必要があります
+                await page.evaluate(f"() => {{ const e = document.querySelector('#genre{tag_id}'); if(e) e.click(); }}")
                 await asyncio.sleep(0.3)
 
             # 6. 画像アップロード
             if data.get('image_url'):
-                st.info("📸 画像をアップロード中...")
+                st.info("📸 画像を準備中...")
                 img_res = requests.get(data['image_url'])
                 with open("upload.jpg", "wb") as f:
                     f.write(img_res.content)
@@ -97,7 +92,7 @@ async def run_automation(data):
 
         except Exception as e:
             await page.screenshot(path="debug_error.png")
-            return {"status": "error", "message": f"停止位置でエラー: {str(e)}"}
+            return {"status": "error", "message": f"エラー箇所: {str(e)}"}
         finally:
             await browser.close()
 
@@ -113,9 +108,9 @@ if st.button("シミュレーションを開始する"):
         "cup": "C",
         "age": 22,
         "height": 160,
-        "ai_description": "AIが生成した魅力的な紹介文がここに入ります。",
-        "ai_catchphrase": "期待の新人登場！",
-        "tag_ids": ["7", "10", "41"], # 画像image_3e7d2a.jpgのチェックボックスID
+        "ai_description": "AI紹介文テストです。",
+        "ai_catchphrase": "期待の新人！",
+        "tag_ids": ["7", "10", "41"],
         "image_url": "https://dummyimage.com/600x800/000/fff.jpg"
     }
     
@@ -128,4 +123,4 @@ if st.button("シミュレーションを開始する"):
             status.update(label="エラー発生", state="error")
             st.error(result["message"])
             if os.path.exists("debug_error.png"):
-                st.image("debug_error.png", caption="エラー発生時の画面（ここに入力欄が映っていれば惜しいです）")
+                st.image("debug_error.png")
