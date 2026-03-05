@@ -16,10 +16,6 @@ def install_playwright():
 
 install_playwright()
 
-# --- 人間らしい待機 ---
-async def human_delay(min_sec=3, max_sec=6):
-    await asyncio.sleep(random.uniform(min_sec, max_sec))
-
 # --- メインの自動化ロジック ---
 async def run_automation(data):
     async with async_playwright() as p:
@@ -31,87 +27,64 @@ async def run_automation(data):
         page = await context.new_page()
 
         try:
-            # 1. ログイン（ここは成功済み）
+            # 1. ログイン
             st.info("🌐 ログイン中...")
             await page.goto("https://ranking-deli.jp/admin/login")
-            await page.type("#form_email", data['portal_id'], delay=random.randint(50, 100))
-            await page.type("#form_password", data['portal_pass'], delay=random.randint(50, 100))
+            await page.type("#form_email", data['portal_id'], delay=100)
+            await page.type("#form_password", data['portal_pass'], delay=100)
             await page.click("#form_submit")
-            await human_delay(4, 6)
+            await asyncio.sleep(5)
 
-            # 2. 一覧ページへ
-            st.info("📑 一覧ページへ移動中...")
-            # 「女性管理」をJSで直接クリック
-            await page.evaluate("() => { [...document.querySelectorAll('a, span')].find(e => e.innerText.includes('女性管理'))?.click(); }")
-            await human_delay(2, 3)
-            # 「女の子一覧」をJSで直接クリック
-            await page.evaluate("() => { [...document.querySelectorAll('a')].find(e => e.innerText.includes('女の子一覧'))?.click(); }")
-            await human_delay(6, 8)
+            # 2. 【変更点】ボタンを無視して登録画面へ直接ジャンプ
+            st.info("🚀 登録画面へ直接移動します...")
+            await page.goto("https://ranking-deli.jp/admin/girls/regist/") 
+            await asyncio.sleep(5)
 
-            # 3. 【超強化】赤い「新規登録」ボタンを力技で踏む
-            st.info("🔴 赤いボタンを解析中...")
-            
-            # 対策A: ページ内の全リンクから「regist」を含むものを探して強制クリック
-            found = await page.evaluate("""() => {
-                const links = Array.from(document.querySelectorAll('a'));
-                const registLink = links.find(a => a.href.includes('regist') || a.className.includes('red'));
-                if (registLink) {
-                    registLink.click();
-                    return true;
-                }
-                return false;
-            }""")
-
-            if not found:
-                # 対策B: もしAがダメなら、ボタンの「座標」を直接叩く
-                # image_30610b.jpg の位置関係から、青いボタンの左側を狙う
-                st.warning("⚠️ ボタンが特定できません。座標クリックを試みます。")
-                await page.mouse.click(180, 520) # 画面左上の「新規登録」がありそうな位置
-            
-            await human_delay(5, 7)
-
-            # 4. 入力フォーム（image_3e7d2a.jpg に基づく）
+            # 3. プロフィール入力 (image_3e7d2a.jpg に基づく)
             st.info("✍️ プロフィールを入力中...")
-            # セレクタをIDベースに変更
-            await page.fill('input[name="name"]', data['name'])
-            await page.select_option('select[name="cup"]', data['cup'])
-            await page.fill('input[name="age"]', str(data['age']))
-            await page.fill('input[name="tall"]', str(data['height']))
-            
-            # メッセージ (画像 image_3e7d2a.jpg のtextarea)
-            await page.fill('textarea[name="comment"]', data['ai_description'])
-            await page.fill('input[name="catch"]', data['ai_catchphrase'])
+            # フォームが存在するか確認
+            if await page.query_selector('input[name="name"]'):
+                await page.fill('input[name="name"]', data['name'])
+                await page.select_option('select[name="cup"]', data['cup'])
+                await page.fill('input[name="age"]', str(data['age']))
+                await page.fill('input[name="tall"]', str(data['height']))
+                
+                # メッセージ (画像 image_3e7d2a.jpg のtextarea)
+                await page.fill('textarea[name="comment"]', data['ai_description'])
+                await page.fill('input[name="catch"]', data['ai_catchphrase'])
+                
+                st.success("✅ フォームへの入力に成功しました！")
+            else:
+                raise Exception("登録フォームが見つかりませんでした。URLが違う可能性があります。")
 
-            # 5. タグ選択（image_3e7ca6.png）
+            # 4. タグ選択（image_3e7ca6.png）
             st.info("🏷️ タグを設定中...")
             for tag_id in data.get('tag_ids', []):
                 await page.evaluate(f"() => document.querySelector('#genre{tag_id}')?.click()")
                 await asyncio.sleep(0.3)
 
-            # 6. 画像アップロード
+            # 5. 画像アップロード
             if data.get('image_url'):
                 st.info("📸 画像をセット中...")
                 img_res = requests.get(data['image_url'])
                 with open("upload.jpg", "wb") as f:
                     f.write(img_res.content)
-                
-                # input要素を探して直接流し込む
                 await page.set_input_files('input[type="file"]', "upload.jpg")
-                await human_delay(10, 15)
+                await asyncio.sleep(5)
 
-            # 登録実行
-            await page.click(".btn-red, #form_update-btn, button[type='submit']", force=True)
+            # 登録ボタン（最終確認）
+            # await page.click("#form_update-btn", force=True)
             
             return {"status": "success", "message": "シミュレーション完了！"}
 
         except Exception as e:
-            await page.screenshot(path="error_capture.png")
+            await page.screenshot(path="last_error.png")
             return {"status": "error", "message": str(e)}
         finally:
             await browser.close()
 
-# --- UI (前回と同じ) ---
-st.title("🚀 駅ちか投稿ロボ・アルティメット")
+# --- UI ---
+st.title("🚀 駅ちか投稿ロボ（URL直撃版）")
 with st.form("sim_form"):
     p_id = st.text_input("ログインID")
     p_pass = st.text_input("パスワード", type="password")
@@ -122,9 +95,9 @@ if submit:
     res = asyncio.run(run_automation({
         "portal_id": p_id, "portal_pass": p_pass, "name": c_name,
         "cup": "C", "age": 22, "height": 160,
-        "ai_description": "AI紹介文...", "ai_catchphrase": "キャッチコピー",
+        "ai_description": "紹介文テスト", "ai_catchphrase": "キャッチコピー",
         "tag_ids": ["7", "10"], "image_url": "https://dummyimage.com/600x800/000/fff.jpg"
     }))
     st.write(res)
-    if os.path.exists("error_capture.png"):
-        st.image("error_capture.png")
+    if os.path.exists("last_error.png"):
+        st.image("last_error.png", caption="実行後の画面（入力できているか確認してください）")
