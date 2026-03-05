@@ -17,20 +17,14 @@ install_playwright()
 
 async def run_automation(data):
     async with async_playwright() as p:
-        # 【文字化け対策】言語設定とフォントレンダリングを日本語に最適化
+        # 文字化け対策を施したブラウザ起動
         browser = await p.chromium.launch(
             headless=True,
-            args=[
-                '--lang=ja-JP',
-                '--disable-blink-features=AutomationControlled',
-            ]
+            args=['--lang=ja-JP']
         ) 
-        
         context = await browser.new_context(
-            user_agent="Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
             viewport={'width': 1280, 'height': 2000},
-            locale="ja-JP",
-            timezone_id="Asia/Tokyo"
+            locale="ja-JP"
         )
         page = await context.new_page()
 
@@ -41,69 +35,70 @@ async def run_automation(data):
             await page.fill("#form_email", "38652")
             await page.fill("#form_password", "loveoppai1")
             await page.click("#form_submit")
-            await asyncio.sleep(3)
+            await page.wait_for_load_state("networkidle")
 
-            # 2. 一覧ページから新規登録へ
+            # 2. 登録画面へ直接移動
             st.info("📑 登録画面へ移動中...")
             await page.goto("https://ranking-deli.jp/admin/girls/create/")
             await page.wait_for_load_state("networkidle")
 
-            # 3. プロフィール入力 (提供されたHTMLに基づく修正)
-            st.info("✍️ プロフィールを入力中...")
-            
+            # 3. プロフィール入力
+            st.info("✍️ 基本情報を入力中...")
             # 名前
-            await page.fill("#form_name", data['name']) if await page.query_selector("#form_name") else await page.fill('input[name="name"]', data['name'])
-
-            # カップ (MapでValueに変換)
+            await page.fill("#form_name", data['name'])
+            
+            # カップ (value値で指定)
             cup_map = {
-                "-": "0", "A": "1", "B": "2", "C": "3", "D": "4", "E": "5",
+                "A": "1", "B": "2", "C": "3", "D": "4", "E": "5",
                 "F": "6", "G": "7", "H": "8", "I": "9", "J": "10"
             }
-            target_cup = cup_map.get(data['cup'].upper(), "0")
+            target_cup = cup_map.get(data['cup'].upper().replace("カップ", ""), "0")
             await page.select_option("#form_cup", value=target_cup)
 
             # 年齢・身長
             await page.fill('input[name="age"]', str(data['age']))
             await page.fill('input[name="tall"]', str(data['height']))
             
-            # 【重要】キャッチコピー (name="catchcopy")
-            st.info("📢 キャッチコピーを入力中...")
+            # 4. キャッチコピー・メッセージ (HTML解析に基づき修正)
+            st.info("📢 キャッチコピー・本文を入力中...")
+            # キャッチコピー (id="form_catchcopy")
             await page.fill("#form_catchcopy", data['ai_catchphrase'])
-            
-            # 【重要】メッセージタイトル (name="title")
+            # メッセージタイトル (id="form_title")
             await page.fill("#form_title", "新人スタッフの紹介")
-            
-            # 【重要】メッセージ本文 (name="comments")
-            st.info("📝 本文を入力中...")
+            # メッセージ本文 (id="form_comments")
             await page.fill("#form_comments", data['ai_description'])
             
-            # 4. タグ選択 (提供されたチェックボックス群)
+            # 5. タグ選択 (id="genreXX" を使用)
             st.info("🏷️ タグを選択中...")
-            for tag_id in data.get('tag_ids', []):
-                # ID指定で確実にクリック
-                selector = f"#genre{tag_id}"
-                if await page.query_selector(selector):
-                    await page.check(selector)
-                    await asyncio.sleep(0.1)
+            if 'tag_ids' in data:
+                for tid in data['tag_ids']:
+                    selector = f"#genre{tid}"
+                    if await page.query_selector(selector):
+                        await page.check(selector)
 
-            # 5. 画像アップロード
+            # 6. 画像アップロード (もしURLがあれば)
             if data.get('image_url'):
                 st.info("📸 画像をアップロード中...")
                 img_res = requests.get(data['image_url'])
-                with open("upload.jpg", "wb") as f:
+                with open("temp_girl.jpg", "wb") as f:
                     f.write(img_res.content)
-                await page.set_input_files('input[type="file"]', "upload.jpg")
-                await asyncio.sleep(5)
+                await page.set_input_files('input[type="file"]', "temp_girl.jpg")
+                await asyncio.sleep(2)
 
-            # 6. 登録ボタン (id="form_update-btn")
+            # 7. 登録実行
             st.info("💾 登録ボタンを押します...")
-            # 実際の登録を防ぐ場合はここをコメントアウトしてください
-            # await page.click("#form_update-btn")
+            # 提供されたHTMLの id="form_update-btn" をクリック
+            submit_button = page.locator("#form_update-btn")
+            await submit_button.scroll_into_view_if_needed()
             
-            st.success("🎉 すべての項目の入力に成功しました！")
-            await page.screenshot(path="complete_screen.png")
+            # クリック後にナビゲーション（完了画面への遷移）を待機
+            async with page.expect_navigation(timeout=60000):
+                await submit_button.click()
+            
+            st.success("🎉 登録が完了しました！")
+            await page.screenshot(path="after_registration.png")
 
-            return {"status": "success", "message": "全項目入力完了"}
+            return {"status": "success", "message": "登録完了"}
 
         except Exception as e:
             await page.screenshot(path="error_final.png")
@@ -111,28 +106,28 @@ async def run_automation(data):
         finally:
             await browser.close()
 
-# --- UI ---
-st.title("🤖 最終調整版・自動投稿ロボ")
-st.write("解析したHTML構造に基づき、キャッチコピーやタグ入力を最適化しました。")
+# --- UI部分 ---
+st.title("🤖 最終修正版・自動投稿ロボ")
 
-if st.button("自動入力シミュレーション開始"):
+if st.button("登録を実行する"):
+    # テストデータ
     test_data = {
         "name": "るか",
         "cup": "C",
-        "age": "22",
-        "height": "160",
+        "age": 22,
+        "height": 160,
         "ai_catchphrase": "最高に可愛い新人が入店しました！",
-        "ai_description": "丁寧な接客と最高の笑顔でお迎えします。ぜひ会いに来てください！",
-        "tag_ids": ["10", "21", "41"] # 可愛い系, 美少女系, サービス抜群
+        "ai_description": "丁寧な接客でお迎えします。ぜひ会いに来てください！",
+        "tag_ids": ["10", "21"] # 可愛い系, 美少女系
     }
     
-    with st.status("操作実行中...") as status:
+    with st.status("自動登録を実行中...") as status:
         res = asyncio.run(run_automation(test_data))
         if res["status"] == "success":
-            status.update(label="入力完了！", state="complete")
-            st.image("complete_screen.png", caption="入力済みの画面（文字化け修正確認）")
+            status.update(label="登録成功！", state="complete")
+            st.image("after_registration.png", caption="完了後の画面")
         else:
-            status.update(label="エラー", state="error")
+            status.update(label="エラー発生", state="error")
             st.error(res["message"])
             if os.path.exists("error_final.png"):
                 st.image("error_final.png")
