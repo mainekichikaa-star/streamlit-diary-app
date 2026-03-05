@@ -40,69 +40,87 @@ async def run_automation(data):
         page = await context.new_page()
 
         try:
-            # 1. ログイン & 登録画面へ (省略版)
-            st.info("🌐 ログイン & 登録中...")
+            # 1. ログイン & 登録画面へ
+            st.info("🌐 ログイン中...")
             await page.goto("https://ranking-deli.jp/admin/login")
             await page.fill("#form_email", "38652")
             await page.fill("#form_password", "loveoppai1")
             await page.click("#form_submit")
             await page.goto("https://ranking-deli.jp/admin/girls/create/")
 
-            # 2. プロフィール入力 & 登録
+            # 2. プロフィール入力 (テスト用)
             await page.fill("#form_name", data['name'])
-            # ... 他の項目も入力 ...
             await page.locator('input[name="p_genre[1]"]').check()
             await page.locator('input[name="genre[1]"]').check()
+            
+            st.info("💾 基本情報を登録中...")
             async with page.expect_navigation(timeout=60000):
                 await page.click("#form_update-btn", force=True)
 
             # 3. 画像アップロード
-            st.info("📸 画像アップロード開始...")
+            st.info("📸 画像をアップロード中...")
+            await page.get_by_text("データを登録しました。").wait_for(state="visible")
             await page.click('a[data-target="con1"]')
             await page.locator('input[type="file"]').first.set_input_files(tmp_image)
             await page.locator('button.upbtn').first.click()
             
-            # --- 4. ドラッグ操作による範囲選択 ---
-            st.info("↕️ 画像の範囲を調整中...")
-            await asyncio.sleep(3) # モーダル表示待ち
+            # 4. ドラッグ操作 (Jcrop対応)
+            st.info("↕️ 画像の範囲をドラッグで選択中...")
+            # 修正：トラッカーが表示されるまで待機
+            tracker = page.locator(".jcrop-tracker.target").first
+            await tracker.wait_for(state="visible", timeout=10000)
             
-            # プレビュー画像またはクロッパーの要素を特定
-            # スクリーンショットの点線枠の左上角（ハンドル）を狙います
-            # セレクタは一般的なクロッパーライブラリを想定（必要に応じて調整）
-            handle = page.locator(".cropper-point.point-nw").first # 左上角
-            if await handle.is_visible():
-                box = await handle.bounding_box()
-                # ドラッグ操作: 左上から右下へ
-                await page.mouse.move(box["x"] + box["width"] / 2, box["y"] + box["height"] / 2)
+            box = await tracker.bounding_box()
+            if box:
+                # 左上角にマウスを移動してダウン
+                await page.mouse.move(box["x"], box["y"])
                 await page.mouse.down()
-                await page.mouse.move(box["x"] + 400, box["y"] + 600, steps=10) # 適当な広さまでドラッグ
+                # 右下へ向かって大きくドラッグ（画像全体を覆うように）
+                await page.mouse.move(box["x"] + box["width"], box["y"] + box["height"], steps=20)
                 await page.mouse.up()
             
-            # --- 5. 「修正する」ボタンで確定 ---
-            st.info("✅ 修正内容を確定中...")
+            # 5. 「修正する」ボタンで確定
+            st.info("✅ 修正ボタンをクリック...")
             fix_btn = page.locator('input[value="修正する"].btn')
             await fix_btn.wait_for(state="visible")
             await fix_btn.click()
             await asyncio.sleep(2)
 
-            # 6. 連続登録のためのボタンクリック
+            # 6. 連続登録へ移行
             st.info("🔄 次の登録へ...")
             next_signup_btn = page.locator("#signup3")
             await next_signup_btn.wait_for(state="visible")
             await next_signup_btn.click()
             
-            st.success("🎉 すべての工程が完了しました！")
-            return {"status": "success", "message": "完了"}
+            st.success("🎉 完了しました！")
+            return {"status": "success", "message": "正常終了"}
 
         except Exception as e:
             await page.screenshot(path="error_log.png")
-            return {"status": "error", "message": f"実行エラー: {str(e)}"}
+            return {"status": "error", "message": f"エラー: {str(e)}"}
         finally:
             await browser.close()
             if os.path.exists(tmp_image): os.remove(tmp_image)
 
-# Streamlit UI 部分は前回と同様
-st.title("👸 女の子一括登録（画像修正・ループ対応版）")
-if st.button("🚀 実行"):
-    # test_dataの設定...
-    res = asyncio.run(run_automation(test_data))
+# --- Streamlit UI ---
+st.title("👸 女の子一括登録（ドラッグ＆確定版）")
+
+# 修正：実行ボタンの外側で変数を定義して NameError を防ぐ
+test_data = {
+    "name": "るか",
+    "cup": "C",
+    "age": 22,
+    "height": 160,
+    "ai_catchphrase": "ドラッグ選択テスト",
+    "ai_description": "Jcropトラッカーを操作して画像を修正・確定します。",
+    "image_url": "https://drive.google.com/file/d/1uF4r8coNfFkhTiB4aH2ztUWjNw33HrtW/view?usp=drive_link"
+}
+
+if st.button("🚀 登録 ＆ ドラッグ修正を実行"):
+    with st.status("自動処理を実行中...") as status:
+        res = asyncio.run(run_automation(test_data))
+        if res["status"] == "success":
+            status.update(label="すべて完了！", state="complete")
+        else:
+            status.update(label="エラー発生", state="error")
+            st.error(res["message"])
