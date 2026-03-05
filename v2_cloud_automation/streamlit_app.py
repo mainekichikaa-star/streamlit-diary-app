@@ -52,18 +52,12 @@ async def run_automation(data):
             st.info("✍️ 基本情報を入力中...")
             await page.fill("#form_name", data['name'])
 
-            # --- タグ選択（ID指定で確実にチェック） ---
+            # --- タグ選択（ID指定で確実に行う） ---
             st.info("🏷️ 優先タグとジャンルを選択中...")
-
-            # 1. 優先タグ (No.1) 
-            # もし disabled でチェックできない場合は force=True を使い、
-            # それでもダメならJSで強制的にチェックを入れます
-            p_no1 = page.locator("#p_genre")
-            try:
-                await p_no1.evaluate("el => el.disabled = false") # 無効化を解除
-                await p_no1.check(force=True)
-            except:
-                pass # 優先タグが設定できない項目ならスキップ
+            
+            # 1. 優先タグ (no1)
+            # 送ってもらったHTMLによると name="p_genre[1]" なのでこれを狙います
+            await page.locator('input[name="p_genre[1]"]').check()
 
             # 2. ジャンル (送ってもらったリストのIDで狙い撃ち)
             # 必要なジャンルIDをリスト化
