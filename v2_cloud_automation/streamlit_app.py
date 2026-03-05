@@ -36,32 +36,34 @@ async def run_automation(data):
 
             # 2. 一覧ページへ移動
             st.info("📑 女の子一覧ページへ移動中...")
+            # メニューから辿る（念のため）
             await page.evaluate("() => { const e = [...document.querySelectorAll('a, span')].find(x => x.innerText.includes('女性管理')); if(e) e.click(); }")
             await asyncio.sleep(2)
             await page.evaluate("() => { const e = [...document.querySelectorAll('a')].find(x => x.innerText.includes('女の子一覧')); if(e) e.click(); }")
             await page.wait_for_load_state("networkidle")
-            await asyncio.sleep(5)
+            await asyncio.sleep(3)
 
-            # 3. 赤いボタンのリンク先を直接抽出して移動
-            st.info("🔴 新規登録ボタンを解析してジャンプします...")
-            target_url = await page.evaluate("""() => {
-                const link = document.querySelector('a[href*="regist"]');
-                return link ? link.href : null;
-            }""")
-
-            if target_url:
-                await page.goto(target_url)
-                st.info("✅ 登録画面へ遷移しました")
-            else:
-                st.warning("⚠️ リンクが見つかりません。座標クリック...")
-                await page.mouse.click(180, 520) 
+            # 3. 【修正の核心】提供されたHTMLに基づいてボタンを直撃
+            st.info("🔴 女の子の新規登録ボタンをクリックします...")
+            # id="addGirl" の中にある aタグ を狙い撃ち
+            add_button = page.locator("#addGirl a")
             
-            await asyncio.sleep(7)
+            if await add_button.count() > 0:
+                await add_button.click()
+                st.info("✅ ボタンをクリックしました")
+            else:
+                # もしIDで見つからない場合は、画像パスから探す
+                st.warning("⚠️ IDで見つからないため、画像URLで探索します...")
+                await page.click('a[href*="/girls/create/"]', force=True)
+            
+            # 遷移をしっかり待つ
+            await asyncio.sleep(8)
 
             # 4. プロフィール入力
             st.info("✍️ プロフィールを入力中...")
+            # ここが動けば勝ちです
             name_field = page.locator('input[name="name"]').first
-            await name_field.wait_for(state="visible", timeout=20000)
+            await name_field.wait_for(state="visible", timeout=25000)
             
             await name_field.fill(data['name'])
             await page.select_option('select[name="cup"]', data['cup'])
@@ -70,12 +72,11 @@ async def run_automation(data):
             await page.fill('textarea[name="comment"]', data['ai_description'])
             await page.fill('input[name="catch"]', data['ai_catchphrase'])
             
-            st.success("🎉 プロフィール入力成功！")
+            st.success("🎉 プロフィール入力に成功しました！")
 
-            # 5. タグ選択（波括弧エラーを修正）
+            # 5. タグ選択
             st.info("🏷️ タグを設定中...")
             for tag_id in data.get('tag_ids', []):
-                # Pythonのf-stringでJSの{}を使う場合は {{ }} と書く必要があります
                 await page.evaluate(f"() => {{ const e = document.querySelector('#genre{tag_id}'); if(e) e.click(); }}")
                 await asyncio.sleep(0.3)
 
@@ -88,39 +89,25 @@ async def run_automation(data):
                 await page.set_input_files('input[type="file"]', "upload.jpg")
                 await asyncio.sleep(10)
 
-            return {"status": "success", "message": "全工程を完了しました"}
+            return {"status": "success", "message": "すべての操作が完了しました！"}
 
         except Exception as e:
-            await page.screenshot(path="debug_error.png")
-            return {"status": "error", "message": f"エラー箇所: {str(e)}"}
+            await page.screenshot(path="last_debug.png")
+            return {"status": "error", "message": f"停止位置エラー: {str(e)}"}
         finally:
             await browser.close()
 
 # --- Streamlit 表示 ---
-st.set_page_config(page_title="駅ちか投稿ロボ", layout="centered")
-st.title("🤖 投稿自動化シミュレーター")
-
-st.write("ID: 38652 / PASS: 設定済み")
-
-if st.button("シミュレーションを開始する"):
+st.title("🤖 投稿ロボ・ソース解析完了版")
+if st.button("シミュレーション開始"):
     test_data = {
-        "name": "テスト花子",
-        "cup": "C",
-        "age": 22,
-        "height": 160,
-        "ai_description": "AI紹介文テストです。",
-        "ai_catchphrase": "期待の新人！",
-        "tag_ids": ["7", "10", "41"],
+        "name": "テスト花子", "cup": "C", "age": 22, "height": 160,
+        "ai_description": "解析成功後のテストです。", "ai_catchphrase": "ついに成功か！？",
+        "tag_ids": ["7", "10"],
         "image_url": "https://dummyimage.com/600x800/000/fff.jpg"
     }
-    
-    with st.status("ロボット稼働中...", expanded=True) as status:
+    with st.status("実行中...") as status:
         result = asyncio.run(run_automation(test_data))
-        if result["status"] == "success":
-            status.update(label="成功！", state="complete")
-            st.success(result["message"])
-        else:
-            status.update(label="エラー発生", state="error")
-            st.error(result["message"])
-            if os.path.exists("debug_error.png"):
-                st.image("debug_error.png")
+        st.write(result)
+        if os.path.exists("last_debug.png"):
+            st.image("last_debug.png")
