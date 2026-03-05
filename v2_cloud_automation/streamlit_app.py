@@ -66,25 +66,25 @@ async def run_automation(data):
             
             # 4. ドラッグ操作 (Jcrop対応)
             st.info("↕️ 画像の範囲をドラッグで選択中...")
-            # 修正：トラッカーが表示されるまで待機
             tracker = page.locator(".jcrop-tracker.target").first
             await tracker.wait_for(state="visible", timeout=10000)
             
             box = await tracker.bounding_box()
             if box:
-                # 左上角にマウスを移動してダウン
                 await page.mouse.move(box["x"], box["y"])
                 await page.mouse.down()
-                # 右下へ向かって大きくドラッグ（画像全体を覆うように）
                 await page.mouse.move(box["x"] + box["width"], box["y"] + box["height"], steps=20)
                 await page.mouse.up()
             
-            # 5. 「修正する」ボタンで確定
+            # 5. 「修正する」ボタンで確定 (★修正箇所)
             st.info("✅ 修正ボタンをクリック...")
-            fix_btn = page.locator('input[value="修正する"].btn')
+            # 文字列指定を避け、role または class で指定
+            fix_btn = page.get_by_role("button", name="修正する")
+            # もし上記でダメなら fix_btn = page.locator('input.btn').last など
             await fix_btn.wait_for(state="visible")
             await fix_btn.click()
-            await asyncio.sleep(2)
+            
+            await asyncio.sleep(3) # 画面反映待ち
 
             # 6. 連続登録へ移行
             st.info("🔄 次の登録へ...")
@@ -92,7 +92,7 @@ async def run_automation(data):
             await next_signup_btn.wait_for(state="visible")
             await next_signup_btn.click()
             
-            st.success("🎉 完了しました！")
+            st.success("🎉 全行程完了しました！")
             return {"status": "success", "message": "正常終了"}
 
         except Exception as e:
@@ -103,20 +103,19 @@ async def run_automation(data):
             if os.path.exists(tmp_image): os.remove(tmp_image)
 
 # --- Streamlit UI ---
-st.title("👸 女の子一括登録（ドラッグ＆確定版）")
+st.title("👸 女の子一括登録（エラー完全回避版）")
 
-# 修正：実行ボタンの外側で変数を定義して NameError を防ぐ
 test_data = {
     "name": "るか",
     "cup": "C",
     "age": 22,
     "height": 160,
-    "ai_catchphrase": "ドラッグ選択テスト",
-    "ai_description": "Jcropトラッカーを操作して画像を修正・確定します。",
+    "ai_catchphrase": "全選択ドラッグテスト",
+    "ai_description": "属性エラーを回避して修正ボタンをクリックします。",
     "image_url": "https://drive.google.com/file/d/1uF4r8coNfFkhTiB4aH2ztUWjNw33HrtW/view?usp=drive_link"
 }
 
-if st.button("🚀 登録 ＆ ドラッグ修正を実行"):
+if st.button("🚀 実行する"):
     with st.status("自動処理を実行中...") as status:
         res = asyncio.run(run_automation(test_data))
         if res["status"] == "success":
@@ -124,3 +123,5 @@ if st.button("🚀 登録 ＆ ドラッグ修正を実行"):
         else:
             status.update(label="エラー発生", state="error")
             st.error(res["message"])
+            if os.path.exists("error_log.png"):
+                st.image("error_log.png")
