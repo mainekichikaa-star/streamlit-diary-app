@@ -56,13 +56,13 @@ async def run_automation(data):
             st.info("🏷️ 優先タグとジャンルを選択中...")
             
             # 優先タグ (No.1) - labelのテキストで特定して隣のinputをチェック
-            await page.locator('label:has-text("No.1")').locator('xpath=preceding-sibling::input[1]').check()
+            await page.locator('label:has-text("no.1")').locator('xpath=preceding-sibling::input[1]').check()
 
             # ジャンル (指定されたものをすべてチェック)
             genres = [
                 "スレンダー", "美乳", "美尻", "美肌", "美脚", "色白", 
                 "テクニシャン", "敏感", "サービス抜群", "愛嬌抜群", 
-                "ｲﾁｬｲCHA好き", "濃厚サービス", "3Ｐ可", "ごっくん"
+                "ｲﾁｬｲﾁｬ好き", "濃厚サービス", "3P可", "ごっくん"
             ]
             for genre_name in genres:
                 # テキストに一致するラベルの直前にあるチェックボックスを選択
