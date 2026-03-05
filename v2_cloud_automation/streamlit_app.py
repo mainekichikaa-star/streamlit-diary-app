@@ -81,24 +81,24 @@ async def run_automation(data):
             # アップロードボタンをクリック
             await page.locator('button.upbtn').first.click()
             
-            # --- ここから追加：モーダルを閉じる工程 ---
+            # --- 修正ポイント：モーダルを閉じる工程 ---
             st.info("⏳ 処理の完了を待機中...")
-            await asyncio.sleep(3) # プレビュー生成待ち
+            await asyncio.sleep(3) 
             
-            # 「閉じる」ボタンをクリック（画像内の×ボタンなど）
-            st.info("✖️ モーダルを閉じます...")
-            close_btn = page.locator('span.modal-close')
+            # 8個ある「modal-close」のうち、最初に見つかったものを操作
+            close_btn = page.locator('span.modal-close').first
             if await close_btn.is_visible():
+                st.info("✖️ モーダルを閉じます...")
                 await close_btn.click()
                 await asyncio.sleep(1)
 
             # --- 連続登録のためのボタンクリック ---
             st.info("🔄 次の登録準備へ...")
-            # 「女の子の新規登録」ボタンをクリック
             next_signup_btn = page.locator("#signup3")
-            if await next_signup_btn.is_visible():
-                await next_signup_btn.click()
-                await page.wait_for_load_state("networkidle")
+            # 表示されるまで待機してからクリック
+            await next_signup_btn.wait_for(state="visible", timeout=10000)
+            await next_signup_btn.click()
+            await page.wait_for_load_state("networkidle")
             
             st.success("✅ 全行程完了！次の登録画面へ遷移しました。")
             await page.screenshot(path="final_ready.png")
@@ -112,14 +112,14 @@ async def run_automation(data):
             if os.path.exists(tmp_image): os.remove(tmp_image)
 
 # --- Streamlit UI ---
-st.title("👸 女の子一括登録（ループ対応版）")
+st.title("👸 女の子一括登録（エラー対策版）")
 target_url = "https://drive.google.com/file/d/1uF4r8coNfFkhTiB4aH2ztUWjNw33HrtW/view?usp=drive_link"
 
-if st.button("🚀 登録 ＆ 次回画面へ遷移"):
+if st.button("🚀 登録実行（エラー修正済み）"):
     test_data = {
         "name": "るか", "cup": "C", "age": 22, "height": 160,
-        "ai_catchphrase": "ループ登録テスト",
-        "ai_description": "登録完了後に自動で次の新規登録画面へ戻ります。",
+        "ai_catchphrase": "エラー修正テスト",
+        "ai_description": "strict mode violationを回避して次の登録画面へ戻ります。",
         "image_url": target_url
     }
     with st.status("自動処理中...") as status:
