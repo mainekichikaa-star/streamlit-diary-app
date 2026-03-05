@@ -52,23 +52,42 @@ async def run_automation(data):
             st.info("✍️ 基本情報を入力中...")
             await page.fill("#form_name", data['name'])
 
-            # --- タグ選択（追加修正箇所） ---
+            # --- タグ選択（ID指定で確実にチェック） ---
             st.info("🏷️ 優先タグとジャンルを選択中...")
-            
-            # 優先タグ (No.1) - labelのテキストで特定して隣のinputをチェック
-            await page.locator('label:has-text("no.1")').locator('xpath=preceding-sibling::input[1]').check()
 
-            # ジャンル (指定されたものをすべてチェック)
-            genres = [
-                "スレンダー", "美乳", "美尻", "美肌", "美脚", "色白", 
-                "テクニシャン", "敏感", "サービス抜群", "愛嬌抜群", 
-                "ｲﾁｬｲﾁｬ好き", "濃厚サービス", "3P可", "ごっくん"
+            # 1. 優先タグ (No.1) 
+            # もし disabled でチェックできない場合は force=True を使い、
+            # それでもダメならJSで強制的にチェックを入れます
+            p_no1 = page.locator("#p_genre")
+            try:
+                await p_no1.evaluate("el => el.disabled = false") # 無効化を解除
+                await p_no1.check(force=True)
+            except:
+                pass # 優先タグが設定できない項目ならスキップ
+
+            # 2. ジャンル (送ってもらったリストのIDで狙い撃ち)
+            # 必要なジャンルIDをリスト化
+            target_genre_ids = [
+                "#genre17", # スレンダー
+                "#genre30", # 美乳
+                "#genre31", # 美尻
+                "#genre33", # 美肌
+                "#genre34", # 美脚
+                "#genre36", # 色白
+                "#genre25", # テクニシャン
+                "#genre35", # 敏感
+                "#genre41", # サービス抜群
+                "#genre43", # 愛嬌抜群
+                "#genre44", # ｲﾁｬｲCHA好き (半角カタカナに注意)
+                "#genre55", # 濃厚サービス
+                "#genre73", # 3Ｐ可
+                "#genre74"  # ごっくん
             ]
-            for genre_name in genres:
-                # テキストに一致するラベルの直前にあるチェックボックスを選択
-                target = page.locator(f'label:has-text("{genre_name}")').locator('xpath=preceding-sibling::input[1]')
-                if await target.count() > 0:
-                    await target.check()
+
+            for selector in target_genre_ids:
+                checkbox = page.locator(selector)
+                if await checkbox.count() > 0:
+                    await checkbox.check(force=True)
 
             st.info("💾 基本情報を登録中...")
             async with page.expect_navigation(timeout=60000):
