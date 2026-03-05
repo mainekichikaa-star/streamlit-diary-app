@@ -34,7 +34,7 @@ def download_google_drive_image(url, save_path):
                 f.write(response.content)
             return True
         else:
-            st.error(f"ダウンロード失敗 (Status: {response.status_code})")
+            st.error(f"ダウンロード失敗 (Status: {response.status_code}) - 共有設定が「制限付き」になっていないか確認してください。")
             return False
     except Exception as e:
         st.error(f"画像取得エラー: {e}")
@@ -87,6 +87,7 @@ async def run_automation(data):
 
             # 7. 画像アップロード工程
             st.info("🔍 登録成功を確認。画像をアップロードします...")
+            # 成功メッセージが表示されるのを待つ
             await page.get_by_text("データを登録しました。").wait_for(state="visible", timeout=15000)
             
             # 写真設定モーダルを開く
@@ -97,9 +98,10 @@ async def run_automation(data):
             file_input = page.locator('input[type="file"]').first
             await file_input.set_input_files(tmp_image)
             
-            # 【追加】アップロードボタンをクリック
+            # 8. アップロードボタンをクリック (修正箇所)
             st.info("🚀 アップロードボタンをクリック...")
-            upload_btn = page.locator('button.upbtn:has-text("アップロード")')
+            # エラー回避のため、文字指定ではなくクラス名で直接指定し、一番最初に見つかったものをクリック
+            upload_btn = page.locator('button.upbtn').first
             await upload_btn.click()
             
             # 反映を待つ
@@ -114,16 +116,18 @@ async def run_automation(data):
             return {"status": "error", "message": f"実行エラー: {str(e)}"}
         finally:
             await browser.close()
+            # 一時ファイルの削除
             if os.path.exists(tmp_image):
                 os.remove(tmp_image)
 
 # --- Streamlit UI ---
 st.title("👸 女の子一括登録（画像完全自動版）")
+st.markdown("---")
 
-# ユーザー指定の画像URL
+# 共有用URLを入力（テスト用）
 target_url = "https://drive.google.com/file/d/1uF4r8coNfFkhTiB4aH2ztUWjNw33HrtW/view?usp=drive_link"
 
-if st.button("🚀 この画像URLを使って登録実行"):
+if st.button("🚀 登録 ＆ 画像アップロードを実行"):
     test_data = {
         "name": "るか",
         "cup": "C",
@@ -138,7 +142,9 @@ if st.button("🚀 この画像URLを使って登録実行"):
         res = asyncio.run(run_automation(test_data))
         if res["status"] == "success":
             status.update(label="すべて成功！", state="complete")
-            st.image("final_result.png")
+            st.image("final_result.png", caption="最終結果スクリーンショット")
         else:
-            status.update(label="エラー", state="error")
+            status.update(label="エラー発生", state="error")
             st.error(res["message"])
+            if os.path.exists("error_log.png"):
+                st.image("error_log.png")
