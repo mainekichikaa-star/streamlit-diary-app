@@ -42,7 +42,6 @@ def download_by_filename(path_str, save_path):
 
 # --- 自動化メイン処理 ---
 async def run_automation(cast_data, sub_image_paths):
-    # ボタンが押された後に Playwright インストールを実行
     try:
         if not os.path.exists("/home/appuser/.cache/ms-playwright"):
             subprocess.run(["python", "-m", "playwright", "install", "chromium"], check=True)
@@ -73,16 +72,13 @@ async def run_automation(cast_data, sub_image_paths):
             await page.fill("#form_waist", str(cast_data.get('ウエスト')))
             await page.fill("#form_hip", str(cast_data.get('ヒップ')))
 
-            # カップ選択
             cup_input = str(cast_data.get('カップ数', '')).strip().upper() 
             if cup_input:
                 try:
                     target_label = f"{cup_input}カップ"
                     await page.locator("#form_cup").select_option(label=target_label)
-                except:
-                    pass
+                except: pass
             
-            # タグ選択
             await page.locator('input[name="p_genre[1]"]').check()
             target_genre_ids = ["#genre17", "#genre30", "#genre31", "#genre33", "#genre34", "#genre36", 
                                 "#genre25", "#genre35", "#genre41", "#genre43", "#genre44", "#genre55", 
@@ -95,18 +91,14 @@ async def run_automation(cast_data, sub_image_paths):
             st.info("💾 保存完了を待機中...")
             await page.get_by_text("データを登録しました。").wait_for(state="visible", timeout=30000)
 
-            # 4. メイン画像アップロード
+            # 4. メイン画像(画像1)アップロード
             st.info("📸 メイン画像をアップロードします")
             await page.click('a[data-target="con1"]')
-            await page.locator('input[type="file"]').first.set_input_files(main_img_tmp)
+            await page.locator('#con1 input[type="file"]').set_input_files(main_img_tmp)
             await asyncio.sleep(2) 
+            await page.locator('#con1 button.upbtn').click(force=True)
             
-            up_btn = page.locator('button.upbtn').first
-            await up_btn.wait_for(state="visible", timeout=20000)
-            await up_btn.click(force=True)
-            
-            # Jcrop ドラッグ
-            tracker = page.locator(".jcrop-tracker.target").first
+            tracker = page.locator("#con1 .jcrop-tracker.target").first
             await tracker.wait_for(state="visible", timeout=15000)
             box = await tracker.bounding_box()
             if box:
@@ -115,21 +107,38 @@ async def run_automation(cast_data, sub_image_paths):
                 await page.mouse.move(box["x"] + box["width"], box["y"] + box["height"], steps=15)
                 await page.mouse.up()
             
-            await page.get_by_role("button", name="修正する").click()
+            await page.locator('#con1 input[value="修正する"]').click()
             await asyncio.sleep(1)
 
-            # 5. サブ画像
+            # 5. サブ画像(画像2〜8)
             if sub_image_paths:
                 for i, sub_url in enumerate(sub_image_paths):
-                    if i >= 7: break
-                    sub_tmp = f"temp_sub_{i}.jpg"
+                    idx = i + 2 # 画像2から開始
+                    if idx > 8: break
+                    
+                    sub_tmp = f"temp_sub_{idx}.jpg"
                     if download_by_filename(sub_url, sub_tmp):
-                        await page.click(f'a[data-target="con{i+2}"]')
-                        await page.locator('input[type="file"]').first.set_input_files(sub_tmp)
-                        await asyncio.sleep(1.5)
-                        sub_up_btn = page.locator('button.upbtn').first
-                        await sub_up_btn.wait_for(state="visible", timeout=15000)
-                        await sub_up_btn.click(force=True)
+                        st.info(f"🖼 サブ画像{idx}をアップロード中...")
+                        target_id = f"con{idx}"
+                        
+                        await page.click(f'a[data-target="{target_id}"]')
+                        await page.locator(f'#{target_id} input[type="file"]').set_input_files(sub_tmp)
+                        await asyncio.sleep(2)
+                        
+                        # アップロードボタン
+                        await page.locator(f'#{target_id} button.upbtn').click(force=True)
+                        await asyncio.sleep(2)
+                        
+                        # 【重要】各サブ画像ごとの「修正する」ボタンをクリックして確定
+                        # HTML構造に基づき、そのモーダル内のsubmitボタンを狙い撃ちします
+                        try:
+                            fix_btn = page.locator(f'#{target_id} input[value="修正する"]')
+                            await fix_btn.wait_for(state="visible", timeout=10000)
+                            await fix_btn.click(force=True)
+                            await asyncio.sleep(1)
+                        except:
+                            pass
+                        
                         if os.path.exists(sub_tmp): os.remove(sub_tmp)
 
             await page.locator("#signup3").click()
@@ -146,7 +155,6 @@ st.title("👸 キャスト一括登録システム")
 
 if st.button("🚀 実行開始"):
     try:
-        # スプレッドシート読み込みをボタン内に移動（フリーズ防止）
         creds = Credentials.from_service_account_info(st.secrets["gcp_service_account"], scopes=SCOPE)
         gs_client = gspread.authorize(creds)
         
@@ -173,7 +181,6 @@ if st.button("🚀 実行開始"):
                         st.error(res["message"])
         
         if count == 0:
-            st.info("登録対象のキャスト（ID/PASSがあり、未登録の方）が見つかりませんでした。")
-
+            st.info("登録対象が見つかりませんでした。")
     except Exception as e:
         st.error(f"起動エラー: {e}")
