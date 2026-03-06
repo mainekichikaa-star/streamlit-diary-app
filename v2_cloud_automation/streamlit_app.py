@@ -150,7 +150,7 @@ async def run_automation(cast_data, sub_image_paths):
         finally:
             await browser.close()
 
-# --- UI ---
+# --- UI / メイン処理部分 ---
 st.title("👸 キャスト一括登録システム")
 
 if st.button("🚀 実行開始"):
@@ -158,37 +158,49 @@ if st.button("🚀 実行開始"):
         creds = Credentials.from_service_account_info(st.secrets["gcp_service_account"], scopes=SCOPE)
         gs_client = gspread.authorize(creds)
         
-        sheet_info = gs_client.open_by_key(SPREADSHEET_ID).worksheet("キャスト情報")
-        sheet_images = gs_client.open_by_key(SPREADSHEET_ID).worksheet("キャスト画像")
+        # スプレッドシートの読み込み
+        spreadsheet = gs_client.open_by_key(SPREADSHEET_ID)
+        sheet_info = spreadsheet.worksheet("キャスト情報")
+        sheet_images = spreadsheet.worksheet("キャスト画像") # 「キャスト画像」シート
         
         data_info = sheet_info.get_all_records()
         data_images = sheet_images.get_all_records()
 
         count = 0
         for i, row in enumerate(data_info):
-            # ID/PASSがあり、「登録済」が空の行を対象とする
-            if str(row.get('ID')).strip() and str(row.get('PASSWORD')).strip() and not str(row.get('登録済')).strip():
+            # 1. ID・PASSがあり、かつ「登録済」が空の行を対象とする
+            id_val = str(row.get('ID', '')).strip()
+            pass_val = str(row.get('PASSWORD', '')).strip()
+            status_val = str(row.get('登録済', '')).strip()
+
+            if id_val and pass_val and not status_val:
                 count += 1
-                st.subheader(f"👤 {row.get('名前')}")
+                cast_name = row.get('名前', '不明')
+                st.subheader(f"👤 {cast_name}")
                 
-                # キャスト情報の「ID」と一致する画像を「キャスト画像」シートから全て取得
-                target_id = str(row.get('ID')).strip()
-                sub_urls = [
-                    img['写真'] for img in data_images 
-                    if str(img.get('CastID')).strip() == target_id
-                ]
+                # 2. 「キャスト画像」シートから CastID が一致するものをすべて取得
+                # row.get('ID') と sheet_images の 'CastID' を紐付け
+                sub_urls = []
+                for img_row in data_images:
+                    if str(img_row.get('CastID', '')).strip() == id_val:
+                        img_path = str(img_row.get('写真', '')).strip()
+                        if img_path:
+                            sub_urls.append(img_path)
                 
-                with st.status(f"{row.get('名前')} さんの登録を実行中...") as status:
+                with st.status(f"{cast_name} さんの自動登録を実行中...") as status:
+                    # 3. 自動化処理の実行 (row=メイン情報, sub_urls=紐付いた画像リスト)
                     res = asyncio.run(run_automation(row, sub_urls))
+                    
                     if res["status"] == "success":
-                        sheet_info.update_cell(i + 2, 16, "登録済") # P列(16列目)に「登録済」を記入
-                        status.update(label="✅ 完了", state="complete")
+                        # 16列目（P列）の「登録済」に印を付ける
+                        sheet_info.update_cell(i + 2, 16, "登録済")
+                        status.update(label=f"✅ {cast_name} 完了", state="complete")
                     else:
-                        status.update(label="❌ エラー", state="error")
+                        status.update(label=f"❌ {cast_name} エラー", state="error")
                         st.error(res["message"])
         
         if count == 0:
-            st.info("対象のキャストが見つかりませんでした。")
+            st.info("登録対象（ID/PASSあり、かつ未登録）のキャストが見つかりませんでした。")
 
     except Exception as e:
         st.error(f"起動エラー: {e}")
