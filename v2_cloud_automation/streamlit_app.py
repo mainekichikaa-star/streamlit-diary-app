@@ -1,6 +1,7 @@
 import streamlit as st
 import asyncio
 import os
+import re
 import gspread
 import io
 from google.oauth2.service_account import Credentials
@@ -11,7 +12,7 @@ from playwright.async_api import async_playwright
 # --- 1. Playwright 初期化 (packages.txt前提) ---
 @st.cache_resource
 def init_playwright():
-    # Cloud環境ではOS依存関係(deps)はpackages.txtで入るため、ブラウザ本体のみ入れる
+    # Cloud環境ではOS依存関係はpackages.txtで入るため、ブラウザ本体のみ入れる
     os.system("playwright install chromium")
 
 init_playwright()
@@ -21,6 +22,7 @@ SCOPE = ['https://www.googleapis.com/auth/spreadsheets', 'https://www.googleapis
 creds = Credentials.from_service_account_info(st.secrets["gcp_service_account"], scopes=SCOPE)
 gs_client = gspread.authorize(creds)
 drive_service = build('drive', 'v3', credentials=creds)
+
 SPREADSHEET_ID = "1Fta23cis4AY9j2_lytfh0OOAJq-EFinLjqp_dLIAgtM"
 
 # --- 3. ドライブからのダウンロード関数 ---
@@ -48,7 +50,6 @@ async def run_automation(cast_data, sub_image_paths):
         return {"status": "error", "message": "メイン画像がドライブで見つかりません"}
 
     async with async_playwright() as p:
-        # headless=True（画面非表示）でないとCloud上では動きません
         browser = await p.chromium.launch(headless=True, args=['--no-sandbox', '--disable-setuid-sandbox'])
         context = await browser.new_context(viewport={'width': 1280, 'height': 2000})
         page = await context.new_page()
@@ -61,7 +62,10 @@ async def run_automation(cast_data, sub_image_paths):
             await page.click("#form_submit")
             await page.goto("https://ranking-deli.jp/admin/girls/create/")
 
-            # A. プロフィール入力 (HTML構造に準拠)
+            # プロフィール入力画面の読み込み待ち
+            await page.wait_for_selector("#form_name", state="visible", timeout=30000)
+
+            # A. プロフィール入力
             st.write(f"✍️ {cast_data['名前']} のプロフィールを入力中...")
             await page.fill("#form_name", str(cast_data['名前']))
             await page.fill("#form_age", str(cast_data['若・妻']))
@@ -70,21 +74,17 @@ async def run_automation(cast_data, sub_image_paths):
             await page.fill("#form_waist", str(cast_data['ウエスト']))
             await page.fill("#form_hip", str(cast_data['ヒップ']))
             
-            # --- カップ数選択の修正版 ---
-            st.info(f"👙 カップ数を選択中: {cast_data['カップ数']}")
-            cup_input = str(cast_data['カップ数']).strip() # 余計な空白を消す
-            
-            try:
-                # 方法1: ラベル（Cカップ など）で選択を試みる
-                # 正規表現を使って、入力された文字（Cなど）が含まれる項目を柔軟に探す
-                await page.select_option("#form_cup", label=re.compile(f"^{cup_input}", re.I))
-            except:
-                try:
-                    # 方法2: 値(value)で直接指定してみる（C=3, D=4など規則性がある場合）
-                    # シートが数字（1, 2, 3...）で入っている場合はこちらが効きます
-                    await page.select_option("#form_cup", value=cup_input)
-                except Exception as e:
-                    st.warning(f"カップ数の選択に失敗しました（手動修正が必要かもしれません）: {e}")
+            # --- カップ数選択 (JavaScript実行方式で確実に) ---
+            cup_val = str(cast_data['カップ数']).upper().strip()
+            await page.locator("#form_cup").evaluate(f"""(sel, val) => {{
+                for (let opt of sel.options) {{
+                    if (opt.text.includes(val)) {{
+                        sel.value = opt.value;
+                        sel.dispatchEvent(new Event('change'));
+                        return;
+                    }}
+                }}
+            }}""", cup_val)
 
             # タグ選択
             await page.locator('input[name="p_genre[1]"]').check()
@@ -93,20 +93,30 @@ async def run_automation(cast_data, sub_image_paths):
                 if await page.locator(gid).count() > 0:
                     await page.locator(gid).check(force=True)
 
-            # 更新
-            async with page.expect_navigation():
-                await page.click("#form_update-btn")
+            # 更新ボタンをクリックし、完了メッセージを待つ
+            st.info("💾 基本情報を保存中...")
+            await page.click("#form_update-btn")
+            await page.wait_for_selector("text=データを登録しました", timeout=45000)
 
-            # B. 画像アップロード・ループ (1〜8枚目)
+            # B. 画像アップロード関数
             async def process_image(target_id, file_path, idx):
                 st.write(f"📸 画像 {idx} 枚目を処理中...")
-                await page.click(f'a[data-target="{target_id}"]')
+                selector = f'a[data-target="{target_id}"]'
+                
+                # 要素までスクロール
+                await page.locator(selector).scroll_into_view_if_needed()
+                await page.wait_for_selector(selector, state="visible", timeout=20000)
+                await page.click(selector)
+                
+                # ファイル選択
+                await page.wait_for_selector('input[type="file"]', state="visible")
                 await page.locator('input[type="file"]').set_input_files(file_path)
                 await page.click('button.upbtn')
                 
                 # Jcrop操作
-                tracker = page.locator(".jcrop-tracker.target").first
-                await tracker.wait_for(state="visible", timeout=10000)
+                tracker_sel = ".jcrop-tracker.target"
+                await page.wait_for_selector(tracker_sel, state="visible", timeout=20000)
+                tracker = page.locator(tracker_sel).first
                 box = await tracker.bounding_box()
                 if box:
                     await page.mouse.move(box["x"], box["y"])
@@ -115,7 +125,7 @@ async def run_automation(cast_data, sub_image_paths):
                     await page.mouse.up()
                 
                 await page.click('button:has-text("修正する")')
-                await asyncio.sleep(2)
+                await asyncio.sleep(3) # 反映待ち
 
             # メイン画像 (画像:1)
             await process_image("con1", main_img_tmp, 1)
@@ -130,10 +140,13 @@ async def run_automation(cast_data, sub_image_paths):
                     if os.path.exists(sub_tmp): os.remove(sub_tmp)
 
             # 最終完了ボタン
+            await page.wait_for_selector("#signup3", state="visible")
             await page.click("#signup3")
             return {"status": "success"}
 
         except Exception as e:
+            # デバッグ用にエラー時の画面を保存
+            await page.screenshot(path="error_debug.png")
             return {"status": "error", "message": str(e)}
         finally:
             await browser.close()
@@ -143,20 +156,26 @@ async def run_automation(cast_data, sub_image_paths):
 st.title("👸 キャスト自動登録一括システム")
 
 if st.button("🚀 登録開始"):
-    sheet_info = gs_client.open_by_key(SPREADSHEET_ID).worksheet("キャスト情報")
-    sheet_images = gs_client.open_by_key(SPREADSHEET_ID).worksheet("キャスト画像")
-    
-    data_info = sheet_info.get_all_records()
-    data_images = sheet_images.get_all_records()
+    try:
+        sheet_info = gs_client.open_by_key(SPREADSHEET_ID).worksheet("キャスト情報")
+        sheet_images = gs_client.open_by_key(SPREADSHEET_ID).worksheet("キャスト画像")
+        
+        data_info = sheet_info.get_all_records()
+        data_images = sheet_images.get_all_records()
 
-    for i, row in enumerate(data_info):
-        if row.get('ID') and row.get('PASSWORD') and not row.get('登録済'):
-            sub_urls = [img['写真'] for img in data_images if str(img['CastID']) == str(row['ＩＤ'])]
-            
-            with st.spinner(f"{row['名前']} を登録しています..."):
-                res = asyncio.run(run_automation(row, sub_urls))
-                if res["status"] == "success":
-                    sheet_info.update_cell(i + 2, 16, "登録済")
-                    st.success(f"✅ {row['名前']} 完了")
-                else:
-                    st.error(f"❌ {row['名前']} 失敗: {res['message']}")
+        for i, row in enumerate(data_info):
+            # ＩＤが全角であることに注意
+            if row.get('ID') and row.get('PASSWORD') and not row.get('登録済'):
+                sub_urls = [img['写真'] for img in data_images if str(img['CastID']) == str(row['ＩＤ'])]
+                
+                with st.spinner(f"{row['名前']} を登録しています..."):
+                    res = asyncio.run(run_automation(row, sub_urls))
+                    if res["status"] == "success":
+                        sheet_info.update_cell(i + 2, 16, "登録済")
+                        st.success(f"✅ {row['名前']} 完了")
+                    else:
+                        st.error(f"❌ {row['名前']} 失敗: {res['message']}")
+                        if os.path.exists("error_debug.png"):
+                            st.image("error_debug.png", caption="エラー時の画面スナップ")
+    except Exception as e:
+        st.error(f"初期化エラー: {e}")
