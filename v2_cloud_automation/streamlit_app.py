@@ -39,9 +39,9 @@ def download_by_filename(path_str, save_path):
     except: return False
 
 async def handle_image_process(page, target_id, file_path):
-    """重なりエラーを回避するJavaScriptクリック方式を採用"""
+    """Jcropの待機エラーを解消するために必要な待機処理のみを追加"""
     try:
-        # 1. モーダルを開く (JSで直接実行して重なりを無視)
+        # 1. モーダルを開く
         btn_open = page.locator(f'a[data-target="{target_id}"]')
         await btn_open.evaluate("node => node.click()")
         await asyncio.sleep(2)
@@ -49,20 +49,22 @@ async def handle_image_process(page, target_id, file_path):
         # 2. ファイルセット
         await page.locator(f'#{target_id} input[type="file"]').first.set_input_files(file_path)
         
-        # 3. アップロード実行 (JSで直接実行)
+        # 3. アップロード実行
         await page.locator(f'#{target_id} button.upbtn').first.evaluate("node => node.click()")
         
-        # 4. ページリロード待機
+        # --- 変更箇所: アップロード後の画面安定を待つ ---
         await asyncio.sleep(6)
         await page.wait_for_load_state("networkidle")
         
-        # 5. 編集のため再度モーダルを開く (JSで直接実行)
+        # --- 変更箇所: 編集のために再度モーダルを開く ---
         await page.locator(f'a[data-target="{target_id}"]').evaluate("node => node.click()")
         await asyncio.sleep(2)
         
         # 6. ドラッグ操作 (Jcrop)
         tracker = page.locator(f"#{target_id} .jcrop-tracker.target").first
-        await tracker.wait_for(state="visible", timeout=15000)
+        # 変更箇所: 見えるまでしっかり待つ
+        await tracker.wait_for(state="visible", timeout=20000)
+        
         box = await tracker.bounding_box()
         if box:
             await page.mouse.move(box["x"], box["y"])
@@ -71,7 +73,7 @@ async def handle_image_process(page, target_id, file_path):
             await page.mouse.up()
             await asyncio.sleep(1)
 
-        # 7. 修正するボタン操作 (JSで直接実行して重なりを回避)
+        # 7. 修正するボタン操作
         fix_btn = page.locator(f"#{target_id} input[value='修正する']").first
         await fix_btn.wait_for(state="attached")
         await fix_btn.evaluate("node => node.click()")
