@@ -54,14 +54,14 @@ async def run_automation(cast_data, sub_image_paths):
         page = await context.new_page()
 
         try:
-            # 1. ログイン & ページ移動
+            # 1. ログイン
             await page.goto("https://ranking-deli.jp/admin/login")
             await page.fill("#form_email", str(cast_data.get('ID')).strip())
             await page.fill("#form_password", str(cast_data.get('PASSWORD')).strip())
             await page.click("#form_submit")
             await page.goto("https://ranking-deli.jp/admin/girls/create/")
 
-            # 2. プロフィール入力 (既存通り)
+            # 2. プロフィール入力
             await page.fill("#form_name", str(cast_data.get('名前')))
             await page.fill("#form_tall", str(cast_data.get('身長')))
             await page.fill("#form_bust", str(cast_data.get('バスト')))
@@ -91,20 +91,21 @@ async def run_automation(cast_data, sub_image_paths):
             await asyncio.sleep(2)
             await page.locator('#con1 button.upbtn').click(force=True)
 
-            # --- Jcrop ドラッグ操作 (提示HTML対応版) ---
+            # --- Jcrop ドラッグ操作 ---
+            # 提示された HTML クラス .jcrop-tracker.target を使用
             tracker = page.locator(".jcrop-tracker.target").first
             await tracker.wait_for(state="visible", timeout=15000)
             box = await tracker.bounding_box()
             if box:
-                # 始点: 左上(+10) / 終点: 右下(-10) 遊びを入れて確実に範囲を作る
+                # 遊びを持たせて確実にドラッグ範囲を作成
                 await page.mouse.move(box["x"] + 10, box["y"] + 10)
                 await page.mouse.down()
                 await page.mouse.move(box["x"] + box["width"] - 10, box["y"] + box["height"] - 10, steps=20)
                 await page.mouse.up()
-                await asyncio.sleep(1.5)
+                await asyncio.sleep(2)
 
-            # 「修正する」ボタンをクリック (JavaScriptで強制実行)
-            # Z-index 290のトラッカーが被っているため JS で直接叩く
+            # 「修正する」ボタンの強制クリック
+            # z-index: 290 のトラッカーが被っているため、JSで要素を直接叩く
             fix_btn = page.locator("input[value='修正する']").first
             await fix_btn.evaluate("el => el.click()")
             await asyncio.sleep(1)
@@ -116,13 +117,13 @@ async def run_automation(cast_data, sub_image_paths):
                     idx = i + 2
                     sub_tmp = f"temp_sub_{i}.jpg"
                     if download_by_filename(sub_url, sub_tmp):
-                        st.info(f"🖼 サブ画像 {i+1} を処理中...")
+                        st.info(f"🖼 サブ画像 {i+1} をアップロード...")
                         await page.click(f'a[data-target="con{idx}"]')
                         await page.locator(f'#con{idx} input[type="file"]').set_input_files(sub_tmp)
-                        await asyncio.sleep(1.5)
+                        await asyncio.sleep(2)
                         await page.locator(f'#con{idx} button.upbtn').click(force=True)
                         
-                        # サブ画像も修正確定が必要ならJSで叩く
+                        # サブ画像側でも「修正する」が必要な場合の強制クリック
                         try:
                             sub_fix = page.locator(f"#con{idx} input[value='修正する']").first
                             await sub_fix.evaluate("el => el.click()")
@@ -133,6 +134,7 @@ async def run_automation(cast_data, sub_image_paths):
             # 最終登録
             st.info("💾 最終登録ボタンをクリック...")
             await asyncio.sleep(1)
+            # signup3 も同様に JS で強制クリック
             await page.locator("#signup3").evaluate("el => el.click()")
             
             await page.wait_for_load_state("networkidle")
@@ -144,7 +146,7 @@ async def run_automation(cast_data, sub_image_paths):
             await browser.close()
             if os.path.exists(main_img_tmp): os.remove(main_img_tmp)
 
-# --- UI 部分 ---
+# --- UI ---
 st.title("👸 キャスト一括登録システム")
 if st.button("🚀 実行開始"):
     try:
@@ -157,9 +159,11 @@ if st.button("🚀 実行開始"):
         data_images = sheet_images.get_all_records()
 
         for i, row in enumerate(data_info):
+            # 元コードのロジック: ID/PASSあり & 登録済が空
             if str(row.get('ID')).strip() and str(row.get('PASSWORD')).strip() and not str(row.get('登録済')).strip():
                 st.subheader(f"👤 {row.get('名前')}")
-                target_id = str(row.get('ＩＤ')).strip() # 全角IDをそのまま使用
+                # 全角ＩＤの紐付けロジックを維持
+                target_id = str(row.get('ＩＤ')).strip()
                 sub_urls = [img['写真'] for img in data_images if str(img.get('CastID')).strip() == target_id]
                 
                 with st.status(f"{row.get('名前')} さんの自動登録を実行中...") as status:
