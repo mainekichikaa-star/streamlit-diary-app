@@ -30,7 +30,8 @@ def download_by_filename(path_str, save_path):
         return False
     try:
         drive_service = get_drive_service()
-        filename = str(path_str).split('/')[-1]
+        # ファイル名のみを抽出
+        filename = str(path_str).split('/')[-1].split('\\')[-1]
         query = f"name = '{filename}' and trashed = false"
         results = drive_service.files().list(q=query, fields="files(id, name)").execute()
         items = results.get('files', [])
@@ -107,7 +108,7 @@ async def run_automation(cast_data, shop_id, shop_pass, sub_image_paths):
                     await page.locator(selector).check(force=True)
 
             await page.click("#form_update-btn", force=True)
-            st.info("💾 基本情報を保存中...")
+            st.info("💾 基本情報保存中...")
             await page.get_by_text("データを登録しました。").wait_for(state="visible", timeout=30000)
 
             # 4. メイン画像アップロード
@@ -131,27 +132,22 @@ async def run_automation(cast_data, shop_id, shop_pass, sub_image_paths):
                 await page.mouse.up()
 
             await page.get_by_role("button", name="修正する").click()
-            await asyncio.sleep(2)
+            await asyncio.sleep(1)
 
-            # 5. サブ画像アップロード (キャスト画像シートから取得したURLを使用)
+            # 5. サブ画像 (キャスト画像シートから取得したリストをループ)
             if sub_image_paths:
-                st.info(f"🖼 サブ画像 {len(sub_image_paths)}枚をアップロード中...")
                 for i, sub_url in enumerate(sub_image_paths):
                     if i >= 7: # 最大7枚まで
                         break
                     sub_tmp = f"temp_sub_{i}.jpg"
                     if download_by_filename(sub_url, sub_tmp):
-                        # タブ切り替え: con2, con3...
+                        st.info(f"🖼 サブ画像 {i+1} 枚目をアップロード中...")
                         await page.click(f'a[data-target="con{i+2}"]')
-                        await asyncio.sleep(0.5)
                         await page.locator('input[type="file"]').first.set_input_files(sub_tmp)
                         await asyncio.sleep(1.5)
-                        
                         sub_up_btn = page.locator('button.upbtn').first
                         await sub_up_btn.wait_for(state="visible", timeout=15000)
                         await sub_up_btn.click(force=True)
-                        await asyncio.sleep(1)
-                        
                         if os.path.exists(sub_tmp):
                             os.remove(sub_tmp)
 
@@ -192,16 +188,17 @@ if st.button("🚀 実行開始"):
             cast_name = row.get('名前')
             shop_name = str(row.get('登録店舗')).strip()
             is_registered = str(row.get('登録済')).strip()
-            cast_id = str(row.get('ID')).strip() # A列 ID
             
             target_shop = shop_dict.get(shop_name)
 
             if target_shop and target_shop.get('店舗ID') and target_shop.get('店舗PASSWORD') and not is_registered:
                 count += 1
-                st.subheader(f"👤 {cast_name} (ID: {cast_id})")
+                st.subheader(f"👤 {cast_name} (店舗: {shop_name})")
                 
-                # キャスト画像シート(B列: CastID)から該当キャストの写真をすべて抽出
-                sub_urls = [img['写真'] for img in data_images if str(img.get('CastID')).strip() == cast_id]
+                # A列の「ID」をキーにして「キャスト画像」シートのB列「CastID」と照合
+                target_id = str(row.get('ID')).strip()
+                # 写真列のデータ（パスやファイル名）をリスト化
+                sub_urls = [img['写真'] for img in data_images if str(img.get('CastID')).strip() == target_id]
 
                 with st.status(f"{cast_name} さんの登録を実行中...") as status:
                     res = asyncio.run(run_automation(
@@ -212,14 +209,14 @@ if st.button("🚀 実行開始"):
                     ))
                     
                     if res["status"] == "success":
-                        sheet_info.update_cell(i + 2, 14, "登録済") # N列
+                        sheet_info.update_cell(i + 2, 14, "登録済")
                         status.update(label="✅ 完了", state="complete")
                     else:
                         status.update(label="❌ エラー", state="error")
                         st.error(res["message"])
-            
+
         if count == 0:
-            st.info("登録対象のキャストが見つかりませんでした。")
+            st.info("対象のキャストが見つかりませんでした。")
 
     except Exception as e:
         st.error(f"起動エラー: {e}")
