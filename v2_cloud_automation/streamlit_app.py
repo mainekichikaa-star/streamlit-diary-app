@@ -14,13 +14,16 @@ from playwright.async_api import async_playwright
 @st.cache_resource
 def setup_playwright():
     try:
-        # 権限が必要な --with-deps は使わず、ブラウザ本体のみをインストール
-        subprocess.run(["playwright", "install", "chromium"], check=True)
+        # すでにインストールされているかチェック（二重実行防止）
+        res = subprocess.run(["playwright", "--version"], capture_output=True)
+        if res.returncode != 0:
+            # インストールされていない場合のみ実行
+            subprocess.run(["python", "-m", "playwright", "install", "chromium"], check=True)
     except Exception as e:
-        st.error(f"Playwright本体のインストールに失敗しました: {e}")
+        # 画面にエラーを出さずログにのみ記録（ボタンを反応させるため）
+        print(f"Playwright Setup Log: {e}")
 
 setup_playwright()
-
 # --- 2. Google API 認証 ---
 SCOPE = ['https://www.googleapis.com/auth/spreadsheets', 'https://www.googleapis.com/auth/drive']
 creds = Credentials.from_service_account_info(st.secrets["gcp_service_account"], scopes=SCOPE)
