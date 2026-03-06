@@ -10,17 +10,18 @@ from googleapiclient.discovery import build
 from googleapiclient.http import MediaIoBaseDownload
 from playwright.async_api import async_playwright
 
-# --- 1. インストール設定 (ここを差し替え) ---
+# --- 1. インストール設定 (ここを完全に書き換え) ---
 @st.cache_resource
-def install_playwright():
-    # すでにインストール済みかチェックし、なければインストール
-    if not os.path.exists("/home/appuser/.cache/ms-playwright"):
-        try:
-            subprocess.run(["playwright", "install", "chromium"], check=True)
-        except:
-            pass
+def setup_playwright():
+    # ブラウザのインストール先を固定
+    os.environ["PLAYWRIGHT_BROWSERS_PATH"] = "0"
+    try:
+        # すでにインストールされているか確認
+        subprocess.run(["playwright", "install", "chromium"], check=True)
+    except Exception as e:
+        st.error(f"Playwright Setup Error: {e}")
 
-install_playwright()
+setup_playwright()
 
 # --- 2. Google API 認証 ---
 SCOPE = ['https://www.googleapis.com/auth/spreadsheets', 'https://www.googleapis.com/auth/drive']
