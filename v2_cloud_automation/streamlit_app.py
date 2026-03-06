@@ -70,9 +70,21 @@ async def run_automation(cast_data, sub_image_paths):
             await page.fill("#form_waist", str(cast_data['ウエスト']))
             await page.fill("#form_hip", str(cast_data['ヒップ']))
             
-            # カップ数選択 (例: "C" -> "Cカップ"を選択)
-            cup_label = f"{cast_data['カップ数']}カップ"
-            await page.select_option("#form_cup", label=cup_label)
+            # --- カップ数選択の修正版 ---
+            st.info(f"👙 カップ数を選択中: {cast_data['カップ数']}")
+            cup_input = str(cast_data['カップ数']).strip() # 余計な空白を消す
+            
+            try:
+                # 方法1: ラベル（Cカップ など）で選択を試みる
+                # 正規表現を使って、入力された文字（Cなど）が含まれる項目を柔軟に探す
+                await page.select_option("#form_cup", label=re.compile(f"^{cup_input}", re.I))
+            except:
+                try:
+                    # 方法2: 値(value)で直接指定してみる（C=3, D=4など規則性がある場合）
+                    # シートが数字（1, 2, 3...）で入っている場合はこちらが効きます
+                    await page.select_option("#form_cup", value=cup_input)
+                except Exception as e:
+                    st.warning(f"カップ数の選択に失敗しました（手動修正が必要かもしれません）: {e}")
 
             # タグ選択
             await page.locator('input[name="p_genre[1]"]').check()
