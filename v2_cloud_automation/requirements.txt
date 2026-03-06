@@ -1,5 +1,6 @@
 gspread
 google-auth
 google-api-python-client
-playwright==1.41.0
+playwright>=1.49.0
+greenlet>=3.1.1
 requests
