@@ -59,28 +59,21 @@ async def run_automation(cast_data, sub_image_paths):
         page = await context.new_page()
 
         try:
-            # 1. ログイン
+            # 1. ログイン & 新規作成画面へ
             await page.goto("https://ranking-deli.jp/admin/login")
             await page.fill("#form_email", str(cast_data.get('ID')).strip())
             await page.fill("#form_password", str(cast_data.get('PASSWORD')).strip())
             await page.click("#form_submit")
-            await asyncio.sleep(1)
-            
             await page.goto("https://ranking-deli.jp/admin/girls/create/")
 
-            # 2. プロフィール入力
+            # 2. プロフィール入力 & タグ選択 (既存ロジック維持)
             await page.fill("#form_name", str(cast_data.get('名前')))
             await page.fill("#form_tall", str(cast_data.get('身長')))
             await page.fill("#form_bust", str(cast_data.get('バスト')))
             await page.fill("#form_waist", str(cast_data.get('ウエスト')))
             await page.fill("#form_hip", str(cast_data.get('ヒップ')))
             
-            cup = str(cast_data.get('カップ数')).strip()
-            if cup:
-                try: await page.locator("#form_cup").select_option(label=re.compile(f"^{cup}", re.IGNORECASE))
-                except: pass
-
-            # --- タグ選択 (ここが重要) ---
+            # --- タグ選択 ---
             await page.locator('input[name="p_genre[1]"]').check()
             target_genre_ids = ["#genre17", "#genre30", "#genre31", "#genre33", "#genre34", "#genre36", 
                                 "#genre25", "#genre35", "#genre41", "#genre43", "#genre44", "#genre55", 
@@ -89,26 +82,30 @@ async def run_automation(cast_data, sub_image_paths):
                 if await page.locator(selector).count() > 0:
                     await page.locator(selector).check(force=True)
 
-            # 保存ボタンクリック
+            # 保存
             await page.click("#form_update-btn", force=True)
             
-            # --- ここで「保存完了」後のリロードを待つ ---
-            st.info("💾 基本情報を保存中...リロードを待機します")
+            # 3. リロード待機
+            st.info("💾 保存完了を待機中...")
             await page.get_by_text("データを登録しました。").wait_for(state="visible", timeout=30000)
 
-            # 3. 画像登録 (保存後に初めて出現する con1 を探す)
-            st.info("📸 画像アップロード枠を表示します")
-            con1_tab = page.locator('a[data-target="con1"]')
-            await con1_tab.wait_for(state="visible", timeout=20000)
-            await con1_tab.click()
+            # 4. メイン画像アップロード
+            st.info("📸 メイン画像をアップロードします")
+            await page.click('a[data-target="con1"]')
             
-            # メイン画像アップロード
-            await page.locator('input[type="file"]').first.set_input_files(main_img_tmp)
+            # ファイル選択
+            file_input = page.locator('input[type="file"]').first
+            await file_input.set_input_files(main_img_tmp)
+            
+            # 【重要】ファイル選択後、ボタンが出るまで少し待つ
+            await asyncio.sleep(2) 
+            
             up_btn = page.locator('button.upbtn').first
-            await up_btn.wait_for(state="visible", timeout=10000)
+            # 待機時間を20秒に延長
+            await up_btn.wait_for(state="visible", timeout=20000)
             await up_btn.click(force=True)
             
-            # ドラッグ操作 (Jcrop)
+            # Jcrop ドラッグ
             tracker = page.locator(".jcrop-tracker.target").first
             await tracker.wait_for(state="visible", timeout=15000)
             box = await tracker.bounding_box()
@@ -121,22 +118,25 @@ async def run_automation(cast_data, sub_image_paths):
             await page.get_by_role("button", name="修正する").click()
             await asyncio.sleep(1)
 
-            # 4. サブ画像
+            # 5. サブ画像
             if sub_image_paths:
                 for i, sub_url in enumerate(sub_image_paths):
                     if i >= 7: break
                     sub_tmp = f"temp_sub_{i}.jpg"
                     if download_by_filename(sub_url, sub_tmp):
-                        target_con = f"con{i+2}"
-                        await page.click(f'a[data-target="{target_con}"]')
+                        await page.click(f'a[data-target="con{i+2}"]')
                         await page.locator('input[type="file"]').first.set_input_files(sub_tmp)
+                        
+                        # サブ画像も同様に待機
+                        await asyncio.sleep(1.5)
                         sub_up_btn = page.locator('button.upbtn').first
-                        await sub_up_btn.wait_for(state="visible")
+                        await sub_up_btn.wait_for(state="visible", timeout=15000)
                         await sub_up_btn.click(force=True)
+                        
                         await asyncio.sleep(1)
                         if os.path.exists(sub_tmp): os.remove(sub_tmp)
 
-            # 5. 完了
+            # 6. 完了
             await page.locator("#signup3").click()
             return {"status": "success"}
 
