@@ -39,7 +39,7 @@ def download_by_filename(path_str, save_path):
     except: return False
 
 async def handle_image_process(page, target_id, file_path):
-    """アップロードボタンを物理クリックに修正"""
+    """アップロードボタンが押されない問題をJavaScript強制実行で解決"""
     try:
         # 1. モーダルを開く
         await page.locator(f'a[data-target="{target_id}"]').evaluate("node => node.click()")
@@ -47,26 +47,29 @@ async def handle_image_process(page, target_id, file_path):
         
         # 2. ファイルセット
         await page.locator(f'#{target_id} input[type="file"]').first.set_input_files(file_path)
-        await asyncio.sleep(1) 
+        await asyncio.sleep(2) # ファイルがセットされるのを少し待つ
         
-        # --- 変更箇所：アップロードボタンを強制物理クリック ---
-        # セレクタをID直下に限定し、force=Trueで物理的に押す
-        await page.locator(f'#{target_id} button.upbtn').first.click(force=True)
+        # 3. アップロード実行 (物理クリックではなくJSで強制的にイベントを発火)
+        # 画像で止まっていた「アップロード」ボタンを直接実行します
+        up_btn = page.locator(f'#{target_id} button.upbtn').first
+        await up_btn.evaluate("node => node.click()")
         
-        # 4. サーバー処理とリロードを待機
-        await asyncio.sleep(8) 
+        # 4. サーバー処理とリロードを長めに待機
+        await asyncio.sleep(10) 
         await page.wait_for_load_state("networkidle")
         
         # 5. 再展開ループ（hidden対策）
         tracker = page.locator(f"#{target_id} .jcrop-tracker.target").first
         for i in range(3):
             await page.locator(f'a[data-target="{target_id}"]').evaluate("node => node.click()")
-            await asyncio.sleep(3)
+            await asyncio.sleep(4) # 切り抜きプレビューの生成を待つ
             if await tracker.is_visible():
                 break
             if i == 2:
-                await page.screenshot(path=f"error_{target_id}.png", full_page=True)
-                raise Exception(f"画像編集エリア(Jcrop)が非表示のままです。")
+                shot_path = f"error_debug_{target_id}.png"
+                await page.screenshot(path=shot_path)
+                st.image(shot_path, caption=f"❌ {target_id} プレビューが表示されません")
+                raise Exception(f"画像編集エリア(Jcrop)が非表示のままです。アップロードに失敗した可能性があります。")
         
         # 6. ドラッグ操作 (Jcrop)
         await tracker.wait_for(state="visible", timeout=20000)
@@ -93,6 +96,8 @@ async def handle_image_process(page, target_id, file_path):
 
 async def run_automation(cast_data, sub_image_paths):
     try:
+        # 日本語フォントがない環境での文字化けはOS側の制約ですが、
+        # 処理自体はフォントがなくても進みます。
         if not os.path.exists("/home/appuser/.cache/ms-playwright"):
             subprocess.run(["python", "-m", "playwright", "install", "chromium"], check=True)
     except: pass
