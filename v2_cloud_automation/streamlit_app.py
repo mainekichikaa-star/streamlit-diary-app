@@ -39,11 +39,10 @@ def download_by_filename(path_str, save_path):
     except: return False
 
 async def handle_image_process(page, target_id, file_path):
-    """Jcropの待機エラーを解消するために必要な待機処理のみを追加"""
+    """Jcropの待機エラー（hidden）を解消するために、再展開と表示確認を強化"""
     try:
         # 1. モーダルを開く
-        btn_open = page.locator(f'a[data-target="{target_id}"]')
-        await btn_open.evaluate("node => node.click()")
+        await page.locator(f'a[data-target="{target_id}"]').evaluate("node => node.click()")
         await asyncio.sleep(2)
         
         # 2. ファイルセット
@@ -52,21 +51,26 @@ async def handle_image_process(page, target_id, file_path):
         # 3. アップロード実行
         await page.locator(f'#{target_id} button.upbtn').first.evaluate("node => node.click()")
         
-        # --- 変更箇所: アップロード後の画面安定を待つ ---
-        await asyncio.sleep(6)
+        # --- 修正ポイント：サーバー処理とリロードを長めに待機 ---
+        await asyncio.sleep(8) 
         await page.wait_for_load_state("networkidle")
         
-        # --- 変更箇所: 編集のために再度モーダルを開く ---
-        await page.locator(f'a[data-target="{target_id}"]').evaluate("node => node.click()")
-        await asyncio.sleep(2)
+        # --- 修正ポイント：hidden対策として、画像が表示されるまで再度クリックを試みる ---
+        for _ in range(3): # 最大3回再試行
+            await page.locator(f'a[data-target="{target_id}"]').evaluate("node => node.click()")
+            await asyncio.sleep(3)
+            # trackerがvisibleになったか確認
+            tracker = page.locator(f"#{target_id} .jcrop-tracker.target").first
+            if await tracker.is_visible():
+                break
         
         # 6. ドラッグ操作 (Jcrop)
-        tracker = page.locator(f"#{target_id} .jcrop-tracker.target").first
-        # 変更箇所: 見えるまでしっかり待つ
         await tracker.wait_for(state="visible", timeout=20000)
         
         box = await tracker.bounding_box()
         if box:
+            # 念のため要素までスクロール
+            await tracker.scroll_into_view_if_needed()
             await page.mouse.move(box["x"], box["y"])
             await page.mouse.down()
             await page.mouse.move(box["x"] + box["width"], box["y"] + box["height"], steps=20)
@@ -81,7 +85,6 @@ async def handle_image_process(page, target_id, file_path):
             
     except Exception as e:
         st.warning(f"{target_id} の画像工程でエラーが発生しました: {e}")
-
 async def run_automation(cast_data, sub_image_paths):
     try:
         if not os.path.exists("/home/appuser/.cache/ms-playwright"):
