@@ -30,7 +30,7 @@ def download_by_filename(path_str, save_path):
         if not items: return False
         file_id = items[0]['id']
         request = drive_service.files().get_media(fileId=file_id)
-        fh = io.BytesIO()
+        fh = ioBytesIO()
         downloader = MediaIoBaseDownload(fh, request)
         done = False
         while not done:
@@ -53,6 +53,7 @@ async def run_automation(cast_data, sub_image_paths):
         return {"status": "error", "message": "メイン画像取得失敗"}
 
     async with async_playwright() as p:
+        # ヘッドレスをFalseにして、動作を目視確認できるように設定（開発用）
         browser = await p.chromium.launch(headless=True, args=['--lang=ja-JP'])
         context = await browser.new_context(viewport={'width': 1280, 'height': 2000}, locale="ja-JP")
         page = await context.new_page()
@@ -96,8 +97,16 @@ async def run_automation(cast_data, sub_image_paths):
             await page.click('a[data-target="con1"]')
             await page.locator('#con1 input[type="file"]').set_input_files(main_img_tmp)
             await asyncio.sleep(2) 
-            await page.locator('#con1 button.upbtn').click(force=True)
             
+            # 【重要】アップロードボタンクリック後、リロードを待機
+            up_btn = page.locator('#con1 button.upbtn').first
+            async with page.expect_navigation(timeout=30000):
+                await up_btn.click(force=True)
+            
+            # リロード後にモーダルを再度開く
+            await page.click('a[data-target="con1"]')
+            
+            # Jcrop ドラッグ
             tracker = page.locator("#con1 .jcrop-tracker.target").first
             await tracker.wait_for(state="visible", timeout=15000)
             box = await tracker.bounding_box()
@@ -125,13 +134,28 @@ async def run_automation(cast_data, sub_image_paths):
                         await page.locator(f'#{target_id} input[type="file"]').set_input_files(sub_tmp)
                         await asyncio.sleep(2)
                         
-                        # アップロードボタン
-                        await page.locator(f'#{target_id} button.upbtn').click(force=True)
-                        await asyncio.sleep(2)
+                        # アップロードボタンをクリックしてリロードを待機
+                        sub_up_btn = page.locator(f'#{target_id} button.upbtn').first
+                        async with page.expect_navigation(timeout=30000):
+                            await sub_up_btn.click(force=True)
                         
-                        # 【重要】各サブ画像ごとの「修正する」ボタンをクリックして確定
-                        # HTML構造に基づき、そのモーダル内のsubmitボタンを狙い撃ちします
+                        # リロード後にモーダルを再度開く
+                        await page.click(f'a[data-target="{target_id}"]')
+                        
+                        # 【修正点】サブ画像もドラッグ操作を追加（HTML構造に基づく）
                         try:
+                            # 2. サブ画像のドラッグ操作
+                            tracker_sub = page.locator(f'#{target_id} .jcrop-tracker.target').first
+                            await tracker_sub.wait_for(state="visible", timeout=10000)
+                            box_sub = await tracker_sub.bounding_box()
+                            if box_sub:
+                                await page.mouse.move(box_sub["x"], box_sub["y"])
+                                await page.mouse.down()
+                                # メインより少し小さめにドラッグ
+                                await page.mouse.move(box_sub["x"] + (box_sub["width"]*0.8), box_sub["y"] + (box_sub["height"]*0.8), steps=10)
+                                await page.mouse.up()
+                            
+                            # 3. 「修正する」ボタンをクリックして確定
                             fix_btn = page.locator(f'#{target_id} input[value="修正する"]')
                             await fix_btn.wait_for(state="visible", timeout=10000)
                             await fix_btn.click(force=True)
