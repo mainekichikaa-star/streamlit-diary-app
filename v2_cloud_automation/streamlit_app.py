@@ -15,9 +15,13 @@ from playwright.async_api import async_playwright
 @st.cache_resource
 def install_playwright():
     try:
+        # 日本語フォント (fonts-noto-cjk) を一緒にインストール
+        subprocess.run(["apt-get", "update"], check=True)
+        subprocess.run(["apt-get", "install", "-y", "fonts-noto-cjk"], check=True)
         subprocess.run(["playwright", "install", "chromium"], check=True)
+        subprocess.run(["playwright", "install-deps"], check=True)
     except Exception as e:
-        st.error(f"Playwrightのインストールに失敗しました: {e}")
+        st.error(f"フォント・Playwrightのインストールに失敗: {e}")
 
 install_playwright()
 
