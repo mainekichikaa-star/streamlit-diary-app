@@ -66,12 +66,21 @@ async def run_automation(cast_data, sub_image_paths):
             await page.click("#form_submit")
             await page.goto("https://ranking-deli.jp/admin/girls/create/")
 
-            # 2. プロフィール入力 & タグ選択 (既存ロジック維持)
+            # 2. プロフィール入力
             await page.fill("#form_name", str(cast_data.get('名前')))
             await page.fill("#form_tall", str(cast_data.get('身長')))
             await page.fill("#form_bust", str(cast_data.get('バスト')))
             await page.fill("#form_waist", str(cast_data.get('ウエスト')))
             await page.fill("#form_hip", str(cast_data.get('ヒップ')))
+
+            # --- カップ選択 (修正版) ---
+            cup_input = str(cast_data.get('カップ数', '')).strip().upper() 
+            if cup_input:
+                try:
+                    target_label = f"{cup_input}カップ"
+                    await page.locator("#form_cup").select_option(label=target_label)
+                except Exception as e:
+                    st.warning(f"カップ数の選択に失敗しました ({cup_input})")
             
             # --- タグ選択 ---
             await page.locator('input[name="p_genre[1]"]').check()
@@ -146,7 +155,7 @@ async def run_automation(cast_data, sub_image_paths):
             await browser.close()
             if os.path.exists(main_img_tmp): os.remove(main_img_tmp)
 
-# --- UI部分は既存のものを維持 ---
+# --- UI ---
 st.title("👸 キャスト一括登録システム (工程順守版)")
 if st.button("🚀 実行開始"):
     sheet_info = gs_client.open_by_key(SPREADSHEET_ID).worksheet("キャスト情報")
