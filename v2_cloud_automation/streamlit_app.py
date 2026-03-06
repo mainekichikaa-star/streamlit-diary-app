@@ -39,7 +39,7 @@ def download_by_filename(path_str, save_path):
     except: return False
 
 async def handle_image_process(page, target_id, file_path):
-    """Jcropの待機エラー（hidden）を解消するために、再展開と表示確認を強化"""
+    """Jcropの待機エラー（hidden）解消とエラー時スクショ機能"""
     try:
         # 1. モーダルを開く
         await page.locator(f'a[data-target="{target_id}"]').evaluate("node => node.click()")
@@ -51,25 +51,25 @@ async def handle_image_process(page, target_id, file_path):
         # 3. アップロード実行
         await page.locator(f'#{target_id} button.upbtn').first.evaluate("node => node.click()")
         
-        # --- 修正ポイント：サーバー処理とリロードを長めに待機 ---
+        # 4. サーバー処理とリロードを待機
         await asyncio.sleep(8) 
         await page.wait_for_load_state("networkidle")
         
-        # --- 修正ポイント：hidden対策として、画像が表示されるまで再度クリックを試みる ---
-        for _ in range(3): # 最大3回再試行
+        # 5. 再展開ループ（hidden対策）
+        tracker = page.locator(f"#{target_id} .jcrop-tracker.target").first
+        for i in range(3):
             await page.locator(f'a[data-target="{target_id}"]').evaluate("node => node.click()")
             await asyncio.sleep(3)
-            # trackerがvisibleになったか確認
-            tracker = page.locator(f"#{target_id} .jcrop-tracker.target").first
             if await tracker.is_visible():
                 break
+            if i == 2: # 最後まで見えなかったらスクショを撮って例外を投げる
+                await page.screenshot(path=f"error_{target_id}.png", full_page=True)
+                raise Exception(f"画像編集エリア(Jcrop)が非表示のままです。")
         
         # 6. ドラッグ操作 (Jcrop)
         await tracker.wait_for(state="visible", timeout=20000)
-        
         box = await tracker.bounding_box()
         if box:
-            # 念のため要素までスクロール
             await tracker.scroll_into_view_if_needed()
             await page.mouse.move(box["x"], box["y"])
             await page.mouse.down()
@@ -84,7 +84,12 @@ async def handle_image_process(page, target_id, file_path):
         await asyncio.sleep(3)
             
     except Exception as e:
-        st.warning(f"{target_id} の画像工程でエラーが発生しました: {e}")
+        # エラー発生時にスクショを保存してStreamlitに表示
+        shot_path = f"error_debug_{target_id}.png"
+        await page.screenshot(path=shot_path)
+        st.image(shot_path, caption=f"❌ {target_id} エラー時の画面")
+        raise e # 上位のrun_automationにエラーを伝える
+
 async def run_automation(cast_data, sub_image_paths):
     try:
         if not os.path.exists("/home/appuser/.cache/ms-playwright"):
@@ -97,6 +102,7 @@ async def run_automation(cast_data, sub_image_paths):
         page = await context.new_page()
 
         try:
+            # ログイン
             await page.goto("https://ranking-deli.jp/admin/login")
             await page.fill("#form_email", str(cast_data.get('ID')).strip())
             await page.fill("#form_password", str(cast_data.get('PASSWORD')).strip())
@@ -104,6 +110,7 @@ async def run_automation(cast_data, sub_image_paths):
             await asyncio.sleep(2)
             await page.goto("https://ranking-deli.jp/admin/girls/create/")
 
+            # プロフィール
             for sel, key in [("#form_name",'名前'),("#form_tall",'身長'),("#form_bust",'バスト'),("#form_waist",'ウエスト'),("#form_hip",'ヒップ')]:
                 await page.fill(sel, str(cast_data.get(key)))
 
@@ -119,6 +126,7 @@ async def run_automation(cast_data, sub_image_paths):
             await page.locator("#form_update-btn").evaluate("node => node.click()")
             await page.get_by_text("データを登録しました。").wait_for(state="visible", timeout=25000)
 
+            # 画像処理 (1〜8)
             all_imgs = [cast_data.get('メイン画像')] + sub_image_paths
             for i, img_path in enumerate(all_imgs):
                 num = i + 1
@@ -165,6 +173,7 @@ if st.button("🚀 実行開始"):
                         sheet_info.update_cell(cell.row, 16, "登録済")
                         status.update(label="✅ 完了", state="complete")
                     else:
+                        status.update(label="❌ エラー", state="error")
                         st.error(res["message"])
     except Exception as e:
         st.error(f"起動エラー: {e}")
