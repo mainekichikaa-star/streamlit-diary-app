@@ -72,6 +72,15 @@ async def run_automation(cast_data, sub_image_paths):
             await page.fill("#form_bust", str(cast_data.get('バスト')))
             await page.fill("#form_waist", str(cast_data.get('ウエスト')))
             await page.fill("#form_hip", str(cast_data.get('ヒップ')))
+
+            # --- カップ選択 (差し替え箇所) ---
+            cup_input = str(cast_data.get('カップ数', '')).strip().upper() # シートが「c」でも「C」でも対応
+            if cup_input:
+                try:
+                    # 「C」という入力なら「Cカップ」というラベルの前方一致で選択
+                    await page.locator("#form_cup").select_option(label=re.compile(f"^{cup_input}カップ"))
+                except Exception as e:
+                    st.warning(f"カップ数の選択に失敗しました ({cup_input}): {e}")
             
             # --- タグ選択 ---
             await page.locator('input[name="p_genre[1]"]').check()
