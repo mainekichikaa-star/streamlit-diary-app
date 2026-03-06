@@ -10,13 +10,15 @@ from googleapiclient.discovery import build
 from googleapiclient.http import MediaIoBaseDownload
 from playwright.async_api import async_playwright
 
-# --- 1. インストール設定 ---
+# --- 1. インストール設定 (ここを差し替え) ---
 @st.cache_resource
 def install_playwright():
-    try:
-        subprocess.run(["playwright", "install", "chromium"], check=True)
-    except Exception as e:
-        st.error(f"Playwrightのインストールに失敗しました: {e}")
+    # すでにインストール済みかチェックし、なければインストール
+    if not os.path.exists("/home/appuser/.cache/ms-playwright"):
+        try:
+            subprocess.run(["playwright", "install", "chromium"], check=True)
+        except:
+            pass
 
 install_playwright()
 
