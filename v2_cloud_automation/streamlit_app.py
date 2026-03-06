@@ -1,7 +1,6 @@
 import streamlit as st
 import asyncio
 import os
-import subprocess
 import gspread
 import io
 from google.oauth2.service_account import Credentials
@@ -9,17 +8,13 @@ from googleapiclient.discovery import build
 from googleapiclient.http import MediaIoBaseDownload
 from playwright.async_api import async_playwright
 
-# --- 1. Playwright インストール (確実に実行) ---
+# --- 1. Playwright 初期化 (packages.txt前提) ---
 @st.cache_resource
-def install_playwright():
-    try:
-        # ブラウザ本体と依存関係を両方インストール
-        subprocess.run(["playwright", "install", "chromium"], check=True)
-        subprocess.run(["playwright", "install-deps"], check=True)
-    except Exception as e:
-        st.error(f"Playwrightの初期化に失敗しました: {e}")
+def init_playwright():
+    # Cloud環境ではOS依存関係(deps)はpackages.txtで入るため、ブラウザ本体のみ入れる
+    os.system("playwright install chromium")
 
-install_playwright()
+init_playwright()
 
 # --- 2. API 認証設定 ---
 SCOPE = ['https://www.googleapis.com/auth/spreadsheets', 'https://www.googleapis.com/auth/drive']
