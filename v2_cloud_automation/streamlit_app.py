@@ -39,7 +39,7 @@ def download_by_filename(path_str, save_path):
     except: return False
 
 async def handle_image_process(page, target_id, file_path):
-    """アップロードボタンを物理クリックに修正し、hiddenエラーを回避"""
+    """アップロードボタンを物理クリックに修正"""
     try:
         # 1. モーダルを開く
         await page.locator(f'a[data-target="{target_id}"]').evaluate("node => node.click()")
@@ -47,10 +47,10 @@ async def handle_image_process(page, target_id, file_path):
         
         # 2. ファイルセット
         await page.locator(f'#{target_id} input[type="file"]').first.set_input_files(file_path)
-        await asyncio.sleep(1) # セット後の安定待ち
+        await asyncio.sleep(1) 
         
-        # --- 修正点：アップロードボタンを物理的にクリックする ---
-        # evaluateではなく、通常のclick(force=True)で確実にボタンを叩く
+        # --- 変更箇所：アップロードボタンを強制物理クリック ---
+        # セレクタをID直下に限定し、force=Trueで物理的に押す
         await page.locator(f'#{target_id} button.upbtn').first.click(force=True)
         
         # 4. サーバー処理とリロードを待機
@@ -103,7 +103,6 @@ async def run_automation(cast_data, sub_image_paths):
         page = await context.new_page()
 
         try:
-            # ログイン
             await page.goto("https://ranking-deli.jp/admin/login")
             await page.fill("#form_email", str(cast_data.get('ID')).strip())
             await page.fill("#form_password", str(cast_data.get('PASSWORD')).strip())
@@ -111,7 +110,6 @@ async def run_automation(cast_data, sub_image_paths):
             await asyncio.sleep(2)
             await page.goto("https://ranking-deli.jp/admin/girls/create/")
 
-            # プロフィール
             for sel, key in [("#form_name",'名前'),("#form_tall",'身長'),("#form_bust",'バスト'),("#form_waist",'ウエスト'),("#form_hip",'ヒップ')]:
                 await page.fill(sel, str(cast_data.get(key)))
 
@@ -127,7 +125,6 @@ async def run_automation(cast_data, sub_image_paths):
             await page.locator("#form_update-btn").evaluate("node => node.click()")
             await page.get_by_text("データを登録しました。").wait_for(state="visible", timeout=25000)
 
-            # 画像処理 (1〜8)
             all_imgs = [cast_data.get('メイン画像')] + sub_image_paths
             for i, img_path in enumerate(all_imgs):
                 num = i + 1
