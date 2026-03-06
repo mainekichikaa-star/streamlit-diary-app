@@ -55,7 +55,6 @@ def download_by_filename(path_str, save_path):
 
 # --- 自動化メイン処理 ---
 async def run_automation(cast_data, shop_id, shop_pass, sub_image_paths):
-    # ボタンが押された後に Playwright インストールを実行
     try:
         if not os.path.exists("/home/appuser/.cache/ms-playwright"):
             subprocess.run(["python", "-m", "playwright", "install", "chromium"], check=True)
@@ -72,15 +71,16 @@ async def run_automation(cast_data, shop_id, shop_pass, sub_image_paths):
         page = await context.new_page()
 
         try:
-            # 1. ログイン (店舗IDと店舗PASSWORDを使用)
+            # 1. ログイン
             await page.goto("https://ranking-deli.jp/admin/login")
             await page.fill("#form_email", str(shop_id).strip())
             await page.fill("#form_password", str(shop_pass).strip())
             await page.click("#form_submit")
             await page.goto("https://ranking-deli.jp/admin/girls/create/")
 
-            # 2. プロフィール入力
+            # 2. プロフィール入力 (年齢を追加)
             await page.fill("#form_name", str(cast_data.get('名前')))
+            await page.fill("#form_age", str(cast_data.get('年齢'))) # 年齢入力
             await page.fill("#form_tall", str(cast_data.get('身長')))
             await page.fill("#form_bust", str(cast_data.get('バスト')))
             await page.fill("#form_waist", str(cast_data.get('ウエスト')))
@@ -107,7 +107,7 @@ async def run_automation(cast_data, shop_id, shop_pass, sub_image_paths):
                     await page.locator(selector).check(force=True)
 
             await page.click("#form_update-btn", force=True)
-            st.info("💾 保存完了を待機中...")
+            st.info("💾 基本情報を保存中...")
             await page.get_by_text("データを登録しました。").wait_for(state="visible", timeout=30000)
 
             # 4. メイン画像アップロード
@@ -131,21 +131,27 @@ async def run_automation(cast_data, shop_id, shop_pass, sub_image_paths):
                 await page.mouse.up()
 
             await page.get_by_role("button", name="修正する").click()
-            await asyncio.sleep(1)
+            await asyncio.sleep(2)
 
-            # 5. サブ画像
+            # 5. サブ画像アップロード (キャスト画像シートから取得したURLを使用)
             if sub_image_paths:
+                st.info(f"🖼 サブ画像 {len(sub_image_paths)}枚をアップロード中...")
                 for i, sub_url in enumerate(sub_image_paths):
-                    if i >= 7:
+                    if i >= 7: # 最大7枚まで
                         break
                     sub_tmp = f"temp_sub_{i}.jpg"
                     if download_by_filename(sub_url, sub_tmp):
+                        # タブ切り替え: con2, con3...
                         await page.click(f'a[data-target="con{i+2}"]')
+                        await asyncio.sleep(0.5)
                         await page.locator('input[type="file"]').first.set_input_files(sub_tmp)
                         await asyncio.sleep(1.5)
+                        
                         sub_up_btn = page.locator('button.upbtn').first
                         await sub_up_btn.wait_for(state="visible", timeout=15000)
                         await sub_up_btn.click(force=True)
+                        await asyncio.sleep(1)
+                        
                         if os.path.exists(sub_tmp):
                             os.remove(sub_tmp)
 
@@ -170,17 +176,15 @@ if st.button("🚀 実行開始"):
         )
         gs_client = gspread.authorize(creds)
 
-        # 各シートの読み込み
         spreadsheet = gs_client.open_by_key(SPREADSHEET_ID)
         sheet_info = spreadsheet.worksheet("キャスト情報")
         sheet_images = spreadsheet.worksheet("キャスト画像")
-        sheet_shops = spreadsheet.worksheet("シート3") # 登録店舗シート
+        sheet_shops = spreadsheet.worksheet("シート3")
 
         data_info = sheet_info.get_all_records()
         data_images = sheet_images.get_all_records()
         data_shops = sheet_shops.get_all_records()
 
-        # 店舗情報を検索しやすいように辞書化
         shop_dict = {str(s.get('登録店舗')).strip(): s for s in data_shops}
 
         count = 0
@@ -188,20 +192,18 @@ if st.button("🚀 実行開始"):
             cast_name = row.get('名前')
             shop_name = str(row.get('登録店舗')).strip()
             is_registered = str(row.get('登録済')).strip()
+            cast_id = str(row.get('ID')).strip() # A列 ID
             
-            # 店舗情報があるか確認
             target_shop = shop_dict.get(shop_name)
 
-            # 店舗ID/PASSがあり、かつ「登録済」が空の場合に実行
             if target_shop and target_shop.get('店舗ID') and target_shop.get('店舗PASSWORD') and not is_registered:
                 count += 1
-                st.subheader(f"👤 {cast_name} (店舗: {shop_name})")
+                st.subheader(f"👤 {cast_name} (ID: {cast_id})")
                 
-                # キャスト情報A列(ID)とキャスト画像B列(CastID)で紐付け
-                target_id = str(row.get('ID')).strip()
-                sub_urls = [img['写真'] for img in data_images if str(img.get('CastID')).strip() == target_id]
+                # キャスト画像シート(B列: CastID)から該当キャストの写真をすべて抽出
+                sub_urls = [img['写真'] for img in data_images if str(img.get('CastID')).strip() == cast_id]
 
-                with st.status(f"{cast_name} さんの自動登録を実行中...") as status:
+                with st.status(f"{cast_name} さんの登録を実行中...") as status:
                     res = asyncio.run(run_automation(
                         row, 
                         target_shop.get('店舗ID'), 
@@ -210,17 +212,14 @@ if st.button("🚀 実行開始"):
                     ))
                     
                     if res["status"] == "success":
-                        sheet_info.update_cell(i + 2, 14, "登録済") # 14はN列(登録済)
+                        sheet_info.update_cell(i + 2, 14, "登録済") # N列
                         status.update(label="✅ 完了", state="complete")
                     else:
                         status.update(label="❌ エラー", state="error")
                         st.error(res["message"])
             
-            elif not target_shop and shop_name and not is_registered:
-                st.warning(f"⚠️ {cast_name} さん：店舗「{shop_name}」のID情報がシート3に見つかりません。")
-
         if count == 0:
-            st.info("登録対象のキャスト（未登録かつ店舗情報がある方）が見つかりませんでした。")
+            st.info("登録対象のキャストが見つかりませんでした。")
 
     except Exception as e:
         st.error(f"起動エラー: {e}")
