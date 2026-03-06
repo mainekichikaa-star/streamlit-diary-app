@@ -4,7 +4,6 @@ import os
 import subprocess
 import gspread
 import io
-import re
 from google.oauth2.service_account import Credentials
 from googleapiclient.discovery import build
 from googleapiclient.http import MediaIoBaseDownload
@@ -14,7 +13,6 @@ from playwright.async_api import async_playwright
 SPREADSHEET_ID = "1Fta23cis4AY9j2_lytfh0OOAJq-EFinLjqp_dLIAgtM"
 SCOPE = ['https://www.googleapis.com/auth/spreadsheets', 'https://www.googleapis.com/auth/drive']
 
-# --- ヘルパー関数 ---
 def get_drive_service():
     creds = Credentials.from_service_account_info(st.secrets["gcp_service_account"], scopes=SCOPE)
     return build('drive', 'v3', credentials=creds)
@@ -41,47 +39,55 @@ def download_by_filename(path_str, save_path):
     except: return False
 
 async def handle_image_process(page, target_id, file_path):
-    """画像アップロード、リロード待機、ドラッグ、修正確定までの一連の処理"""
-    # 1. モーダルを開く（JSで強制クリック）
-    await page.locator(f'a[data-target="{target_id}"]').evaluate("node => node.click()")
-    await asyncio.sleep(1)
-    
-    # 2. ファイルセット
-    await page.locator(f'#{target_id} input[type="file"]').set_input_files(file_path)
-    await asyncio.sleep(2)
-    
-    # 3. アップロードボタン実行（JSで強制クリック）
-    await page.locator(f'#{target_id} button.upbtn').evaluate("node => node.click()")
-    
-    # 4. 画面リフレッシュを待機
-    await asyncio.sleep(5)
-    await page.wait_for_load_state("networkidle")
-    
-    # 5. 再度モーダルを開く
-    await page.locator(f'a[data-target="{target_id}"]').evaluate("node => node.click()")
-    await asyncio.sleep(2)
-    
-    # 6. Jcrop ドラッグ操作（存在するすべてのターゲットに対して実行）
-    trackers = page.locator(f"#{target_id} .jcrop-tracker.target")
-    t_count = await trackers.count()
-    for i in range(t_count):
-        tracker = trackers.nth(i)
-        box = await tracker.bounding_box()
-        if box:
-            await page.mouse.move(box["x"], box["y"])
-            await page.mouse.down()
-            await page.mouse.move(box["x"] + box["width"], box["y"] + box["height"], steps=10)
-            await page.mouse.up()
-            await asyncio.sleep(0.5)
-            
-    # 7. 修正ボタン実行（モーダル内のすべての『修正する』ボタンをJSで強制クリック）
-    fix_btns = page.locator(f"#{target_id} input[value='修正する']")
-    b_count = await fix_btns.count()
-    for i in range(b_count):
-        await fix_btns.nth(i).evaluate("node => node.click()")
+    """画像アップロードからご提示いただいたJcropドラッグ、修正確定まで"""
+    try:
+        # 1. アップロードボタン/モーダルを開く
+        await page.locator(f'a[data-target="{target_id}"]').click(force=True)
         await asyncio.sleep(1)
+        
+        # 2. ファイルセット
+        await page.locator(f'#{target_id} input[type="file"]').set_input_files(file_path)
+        await asyncio.sleep(1.5)
+        
+        # 3. アップロード実行
+        await page.locator(f'#{target_id} button.upbtn').click(force=True)
+        
+        # 4. ページリロード待機
+        await asyncio.sleep(5)
+        await page.wait_for_load_state("networkidle")
+        
+        # 5. 編集のため再度モーダルを開く
+        await page.locator(f'a[data-target="{target_id}"]').click(force=True)
+        await asyncio.sleep(2)
+        
+        # 6. 【ご提示のドラッグ操作】モーダル内の全Jcropターゲットを処理
+        trackers = page.locator(f"#{target_id} .jcrop-tracker.target")
+        t_count = await trackers.count()
+        
+        for i in range(t_count):
+            tracker = trackers.nth(i)
+            await tracker.wait_for(state="visible", timeout=10000)
+            box = await tracker.bounding_box()
+            if box:
+                await page.mouse.move(box["x"], box["y"])
+                await page.mouse.down()
+                await page.mouse.move(box["x"] + box["width"], box["y"] + box["height"], steps=20)
+                await page.mouse.up()
+                await asyncio.sleep(0.5)
 
-# --- 自動化メイン処理 ---
+        # 7. 【ご提示の修正ボタン操作】
+        # モーダル内にある「修正する」ボタンをすべて順番に押す
+        fix_btns = page.locator(f"#{target_id} input[value='修正する']")
+        b_count = await fix_btns.count()
+        for i in range(b_count):
+            btn = fix_btns.nth(i)
+            await btn.wait_for(state="visible")
+            await btn.click()
+            await asyncio.sleep(2)
+            
+    except Exception as e:
+        st.warning(f"{target_id} の画像工程でエラーが発生しました: {e}")
+
 async def run_automation(cast_data, sub_image_paths):
     try:
         if not os.path.exists("/home/appuser/.cache/ms-playwright"):
@@ -89,59 +95,49 @@ async def run_automation(cast_data, sub_image_paths):
     except: pass
 
     async with async_playwright() as p:
-        browser = await p.chromium.launch(headless=True, args=['--lang=ja-JP'])
-        context = await browser.new_context(viewport={'width': 1280, 'height': 2000}, locale="ja-JP")
+        browser = await p.chromium.launch(headless=True)
+        context = await browser.new_context(viewport={'width': 1280, 'height': 2000})
         page = await context.new_page()
 
         try:
-            # 1. ログイン
+            # ログイン〜プロフィール入力
             await page.goto("https://ranking-deli.jp/admin/login")
             await page.fill("#form_email", str(cast_data.get('ID')).strip())
             await page.fill("#form_password", str(cast_data.get('PASSWORD')).strip())
             await page.click("#form_submit")
             await page.goto("https://ranking-deli.jp/admin/girls/create/")
 
-            # 2. プロフィール入力
-            await page.fill("#form_name", str(cast_data.get('名前')))
-            await page.fill("#form_tall", str(cast_data.get('身長')))
-            await page.fill("#form_bust", str(cast_data.get('バスト')))
-            await page.fill("#form_waist", str(cast_data.get('ウエスト')))
-            await page.fill("#form_hip", str(cast_data.get('ヒップ')))
+            # プロフィール入力
+            for sel, key in [("#form_name",'名前'),("#form_tall",'身長'),("#form_bust",'バスト'),("#form_waist",'ウエスト'),("#form_hip",'ヒップ')]:
+                await page.fill(sel, str(cast_data.get(key)))
 
-            cup_input = str(cast_data.get('カップ数', '')).strip().upper() 
-            if cup_input:
-                try:
-                    await page.locator("#form_cup").select_option(label=f"{cup_input}カップ")
+            cup = str(cast_data.get('カップ数', '')).strip().upper() 
+            if cup:
+                try: await page.locator("#form_cup").select_option(label=f"{cup}カップ")
                 except: pass
             
-            # タグ選択
             await page.locator('input[name="p_genre[1]"]').check()
-            target_genre_ids = ["#genre17", "#genre30", "#genre31", "#genre33", "#genre34", "#genre36", "#genre25", "#genre35", "#genre41", "#genre43", "#genre44", "#genre55", "#genre73", "#genre74"]
-            for selector in target_genre_ids:
-                if await page.locator(selector).count() > 0:
-                    await page.locator(selector).check(force=True)
+            for g_id in ["#genre17", "#genre30", "#genre31", "#genre33", "#genre34", "#genre36", "#genre25", "#genre35", "#genre41", "#genre43", "#genre44", "#genre55", "#genre73", "#genre74"]:
+                if await page.locator(g_id).count() > 0: await page.locator(g_id).check(force=True)
 
             await page.click("#form_update-btn", force=True)
-            await page.get_by_text("データを登録しました。").wait_for(state="visible", timeout=30000)
+            await asyncio.sleep(3)
 
-            # 3. 画像処理（メイン ＋ サブ）
+            # 画像処理 (1〜8)
             all_imgs = [cast_data.get('メイン画像')] + sub_image_paths
             for i, img_path in enumerate(all_imgs):
-                img_num = i + 1
-                if img_num > 8: break
-                
-                tmp_name = f"temp_img_{img_num}.jpg"
-                if download_by_filename(img_path, tmp_name):
-                    st.info(f"📸 画像{img_num}を処理中...")
-                    await handle_image_process(page, f"con{img_num}", tmp_name)
-                    if os.path.exists(tmp_name): os.remove(tmp_name)
+                num = i + 1
+                if num > 8 or not img_path: continue
+                tmp = f"temp_{num}.jpg"
+                if download_by_filename(img_path, tmp):
+                    st.info(f"📸 画像{num} を収集中...")
+                    await handle_image_process(page, f"con{num}", tmp)
+                    if os.path.exists(tmp): os.remove(tmp)
 
-            # 4. 最終保存
-            await page.locator("#signup3").evaluate("node => node.click()")
+            await page.locator("#signup3").click(force=True)
             return {"status": "success"}
-
         except Exception as e:
-            return {"status": "error", "message": f"工程エラー: {str(e)}"}
+            return {"status": "error", "message": str(e)}
         finally:
             await browser.close()
 
@@ -154,22 +150,29 @@ if st.button("🚀 実行開始"):
         gs_client = gspread.authorize(creds)
         sheet_info = gs_client.open_by_key(SPREADSHEET_ID).worksheet("キャスト情報")
         sheet_images = gs_client.open_by_key(SPREADSHEET_ID).worksheet("キャスト画像")
+        
         data_info = sheet_info.get_all_records()
         data_images = sheet_images.get_all_records()
 
-        for i, row in enumerate(data_info):
-            if str(row.get('ID')).strip() and str(row.get('PASSWORD')).strip() and not str(row.get('登録済')).strip():
+        # 登録対象のフィルタリング
+        targets = [row for row in data_info if str(row.get('ID')).strip() and str(row.get('PASSWORD')).strip() and not str(row.get('登録済')).strip()]
+
+        if not targets:
+            st.warning("⚠️ スプレッドシートに登録待ちのデータが見つかりませんでした。")
+        else:
+            for row in targets:
                 st.subheader(f"👤 {row.get('名前')}")
                 target_id = str(row.get('ＩＤ')).strip()
                 sub_urls = [img['写真'] for img in data_images if str(img.get('CastID')).strip() == target_id]
                 
-                with st.status(f"{row.get('名前')} さんの登録を実行中...") as status:
+                with st.status(f"{row.get('名前')} 登録中...") as status:
                     res = asyncio.run(run_automation(row, sub_urls))
                     if res["status"] == "success":
-                        sheet_info.update_cell(i + 2, 16, "登録済")
+                        # 「登録済」に更新（名前で検索して行を特定）
+                        cell = sheet_info.find(row.get('名前'))
+                        sheet_info.update_cell(cell.row, 16, "登録済")
                         status.update(label="✅ 完了", state="complete")
                     else:
-                        status.update(label="❌ エラー", state="error")
                         st.error(res["message"])
     except Exception as e:
         st.error(f"起動エラー: {e}")
