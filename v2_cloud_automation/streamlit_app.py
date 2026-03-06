@@ -66,18 +66,17 @@ async def run_automation(cast_data, sub_image_paths):
             await page.click("#form_submit")
             await page.goto("https://ranking-deli.jp/admin/girls/create/")
 
-            # 2. プロフィール入力 & タグ選択 (既存ロジック維持)
+            # 2. プロフィール入力
             await page.fill("#form_name", str(cast_data.get('名前')))
             await page.fill("#form_tall", str(cast_data.get('身長')))
             await page.fill("#form_bust", str(cast_data.get('バスト')))
             await page.fill("#form_waist", str(cast_data.get('ウエスト')))
             await page.fill("#form_hip", str(cast_data.get('ヒップ')))
 
-            # --- カップ選択 (ここを差し替え) ---
+            # --- カップ選択 (修正版) ---
             cup_input = str(cast_data.get('カップ数', '')).strip().upper() 
             if cup_input:
                 try:
-                    # アルファベットに「カップ」を付け足して正確なラベルで選択
                     target_label = f"{cup_input}カップ"
                     await page.locator("#form_cup").select_option(label=target_label)
                 except Exception as e:
@@ -111,7 +110,6 @@ async def run_automation(cast_data, sub_image_paths):
             await asyncio.sleep(2) 
             
             up_btn = page.locator('button.upbtn').first
-            # 待機時間を20秒に延長
             await up_btn.wait_for(state="visible", timeout=20000)
             await up_btn.click(force=True)
             
@@ -137,7 +135,6 @@ async def run_automation(cast_data, sub_image_paths):
                         await page.click(f'a[data-target="con{i+2}"]')
                         await page.locator('input[type="file"]').first.set_input_files(sub_tmp)
                         
-                        # サブ画像も同様に待機
                         await asyncio.sleep(1.5)
                         sub_up_btn = page.locator('button.upbtn').first
                         await sub_up_btn.wait_for(state="visible", timeout=15000)
@@ -156,7 +153,7 @@ async def run_automation(cast_data, sub_image_paths):
             await browser.close()
             if os.path.exists(main_img_tmp): os.remove(main_img_tmp)
 
-# --- UI部分は既存のものを維持 ---
+# --- UI ---
 st.title("👸 キャスト一括登録システム (工程順守版)")
 if st.button("🚀 実行開始"):
     sheet_info = gs_client.open_by_key(SPREADSHEET_ID).worksheet("キャスト情報")
@@ -165,10 +162,12 @@ if st.button("🚀 実行開始"):
     data_images = sheet_images.get_all_records()
 
     for i, row in enumerate(data_info):
+        # 登録条件
         if str(row.get('ID')).strip() and str(row.get('PASSWORD')).strip() and not str(row.get('登録済')).strip():
             st.subheader(f"👤 {row.get('名前')}")
             target_id = str(row.get('ＩＤ')).strip()
             sub_urls = [img['写真'] for img in data_images if str(img.get('CastID')).strip() == target_id]
+            
             with st.status(f"{row.get('名前')} さんの自動登録を実行中...") as status:
                 res = asyncio.run(run_automation(row, sub_urls))
                 if res["status"] == "success":
