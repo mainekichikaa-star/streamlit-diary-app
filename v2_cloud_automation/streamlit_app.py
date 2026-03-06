@@ -23,7 +23,6 @@ def download_by_filename(path_str, save_path):
     if not path_str or str(path_str).strip() == "": return False
     try:
         drive_service = get_drive_service()
-        # パス文字列からファイル名のみを抽出（「キャスト情報_Images/〜」対策）
         filename = str(path_str).split('/')[-1]
         query = f"name = '{filename}' and trashed = false"
         results = drive_service.files().list(q=query, fields="files(id, name)").execute()
@@ -92,29 +91,30 @@ async def run_automation(cast_data, sub_image_paths):
             await page.wait_for_selector("text=データを登録しました。", timeout=30000)
 
             # 4. メイン画像アップロード (con1)
-            st.info("📸 メイン画像をアップロード中...")
+            st.info("📸 メイン画像を処理中...")
             await page.locator('a[data-target="con1"]').click(force=True)
             await page.locator('#con1 input[type="file"]').set_input_files(main_img_tmp)
             await asyncio.sleep(2)
             
-            # アップロードボタンをJSで強制クリック
-            up_btn = page.locator('#con1 button.upbtn')
-            await up_btn.evaluate("el => el.click()")
+            # アップロード実行（JS強制）
+            await page.locator('#con1 button.upbtn').evaluate("el => el.click()")
             
-            # Jcrop（切り抜き）待機
+            # --- Jcrop ドラッグ操作 ---
             tracker = page.locator(".jcrop-tracker").first
             await tracker.wait_for(state="visible", timeout=15000)
             box = await tracker.bounding_box()
             if box:
-                await page.mouse.move(box["x"] + 10, box["y"] + 10)
+                # 確実に枠内を掴むため +5px, -5px の遊びを持たせる
+                await page.mouse.move(box["x"] + 5, box["y"] + 5)
                 await page.mouse.down()
-                await page.mouse.move(box["x"] + box["width"] - 10, box["y"] + box["height"] - 10, steps=10)
+                await page.mouse.move(box["x"] + box["width"] - 5, box["y"] + box["height"] - 5, steps=20)
                 await page.mouse.up()
+                await asyncio.sleep(1.5)
             
-            # 「修正する」ボタンをJSで強制クリック
-            await asyncio.sleep(1)
+            # 「修正する」ボタン（JS強制）
             fix_btn = page.locator("#con1 input[value='修正する']").first
             await fix_btn.evaluate("el => el.click()")
+            await asyncio.sleep(1)
 
             # 5. サブ画像 (con2〜)
             if sub_image_paths:
@@ -123,27 +123,28 @@ async def run_automation(cast_data, sub_image_paths):
                     idx = i + 2 
                     sub_tmp = f"temp_sub_{i}.jpg"
                     if download_by_filename(sub_url, sub_tmp):
-                        st.info(f"🖼 サブ画像 {i+1} をアップロード中...")
+                        st.info(f"🖼 サブ画像 {i+1} を処理中...")
                         await page.locator(f'a[data-target="con{idx}"]').click(force=True)
                         await page.locator(f'#con{idx} input[type="file"]').set_input_files(sub_tmp)
                         await asyncio.sleep(1.5)
                         
-                        sub_up_btn = page.locator(f'#con{idx} button.upbtn')
-                        await sub_up_btn.evaluate("el => el.click()")
+                        # アップロード
+                        await page.locator(f'#con{idx} button.upbtn').evaluate("el => el.click()")
+                        await asyncio.sleep(1.5)
                         
-                        await asyncio.sleep(1)
+                        # サブ画像側も「修正する」が必要な場合の対策
                         try:
-                            sub_fix_btn = page.locator(f"#con{idx} input[value='修正する']").first
-                            await sub_fix_btn.evaluate("el => el.click()")
+                            sub_fix = page.locator(f"#con{idx} input[value='修正する']").first
+                            if await sub_fix.is_visible():
+                                await sub_fix.evaluate("el => el.click()")
                         except: pass
                         
                         if os.path.exists(sub_tmp): os.remove(sub_tmp)
 
             # 最終登録
-            st.info("💾 最終登録ボタンをクリック...")
+            st.info("💾 登録を確定しています...")
             await asyncio.sleep(2)
-            final_submit = page.locator("#signup3")
-            await final_submit.evaluate("el => el.click()")
+            await page.locator("#signup3").evaluate("el => el.click()")
             
             await page.wait_for_load_state("networkidle")
             return {"status": "success"}
@@ -170,7 +171,6 @@ if st.button("🚀 実行開始"):
 
         count = 0
         for i, row in enumerate(data_info):
-            # ID/PASSがあり、かつ「登録済」が空のものを対象
             id_val = str(row.get('ID', '')).strip()
             pass_val = str(row.get('PASSWORD', '')).strip()
             status_val = str(row.get('登録済', '')).strip()
@@ -179,7 +179,6 @@ if st.button("🚀 実行開始"):
                 count += 1
                 st.subheader(f"👤 {row.get('名前')}")
                 
-                # キャスト画像シートから CastID が一致する「写真」を取得
                 sub_urls = []
                 for img in data_images:
                     if str(img.get('CastID', '')).strip() == id_val:
@@ -196,7 +195,7 @@ if st.button("🚀 実行開始"):
                         st.error(res["message"])
         
         if count == 0:
-            st.info("登録対象のキャストが見つかりませんでした。")
+            st.info("登録対象のキャスト（ID/PASSがあり、未登録の方）が見つかりませんでした。")
 
     except Exception as e:
         st.error(f"起動エラー: {e}")
