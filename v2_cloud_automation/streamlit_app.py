@@ -1,3 +1,53 @@
+import streamlit as st
+import asyncio
+import os
+import subprocess
+import gspread
+import io
+import re
+from google.oauth2.service_account import Credentials
+from googleapiclient.discovery import build
+from googleapiclient.http import MediaIoBaseDownload
+from playwright.async_api import async_playwright
+
+# --- 1. インストール設定 ---
+@st.cache_resource
+def install_playwright():
+    try:
+        subprocess.run(["playwright", "install", "chromium"], check=True)
+    except Exception as e:
+        st.error(f"Playwrightのインストールに失敗しました: {e}")
+
+install_playwright()
+
+# --- 2. Google API 認証 ---
+SCOPE = ['https://www.googleapis.com/auth/spreadsheets', 'https://www.googleapis.com/auth/drive']
+creds = Credentials.from_service_account_info(st.secrets["gcp_service_account"], scopes=SCOPE)
+gs_client = gspread.authorize(creds)
+drive_service = build('drive', 'v3', credentials=creds)
+SPREADSHEET_ID = "1Fta23cis4AY9j2_lytfh0OOAJq-EFinLjqp_dLIAgtM"
+
+def download_by_filename(path_str, save_path):
+    if not path_str or str(path_str).strip() == "": return False
+    try:
+        filename = str(path_str).split('/')[-1]
+        query = f"name = '{filename}' and trashed = false"
+        results = drive_service.files().list(q=query, fields="files(id, name)").execute()
+        items = results.get('files', [])
+        if not items: return False
+        file_id = items[0]['id']
+        request = drive_service.files().get_media(fileId=file_id)
+        fh = io.BytesIO()
+        downloader = MediaIoBaseDownload(fh, request)
+        done = False
+        while not done:
+            _, done = downloader.next_chunk()
+        with open(save_path, "wb") as f:
+            f.write(fh.getvalue())
+        return True
+    except: return False
+
+# --- 4. 自動化メイン処理 ---
 async def run_automation(cast_data, sub_image_paths):
     main_img_tmp = "temp_main.jpg"
     if not download_by_filename(cast_data.get('メイン画像'), main_img_tmp):
@@ -95,3 +145,25 @@ async def run_automation(cast_data, sub_image_paths):
         finally:
             await browser.close()
             if os.path.exists(main_img_tmp): os.remove(main_img_tmp)
+
+# --- UI部分は既存のものを維持 ---
+st.title("👸 キャスト一括登録システム (工程順守版)")
+if st.button("🚀 実行開始"):
+    sheet_info = gs_client.open_by_key(SPREADSHEET_ID).worksheet("キャスト情報")
+    sheet_images = gs_client.open_by_key(SPREADSHEET_ID).worksheet("キャスト画像")
+    data_info = sheet_info.get_all_records()
+    data_images = sheet_images.get_all_records()
+
+    for i, row in enumerate(data_info):
+        if str(row.get('ID')).strip() and str(row.get('PASSWORD')).strip() and not str(row.get('登録済')).strip():
+            st.subheader(f"👤 {row.get('名前')}")
+            target_id = str(row.get('ＩＤ')).strip()
+            sub_urls = [img['写真'] for img in data_images if str(img.get('CastID')).strip() == target_id]
+            with st.status(f"{row.get('名前')} さんの自動登録を実行中...") as status:
+                res = asyncio.run(run_automation(row, sub_urls))
+                if res["status"] == "success":
+                    sheet_info.update_cell(i + 2, 16, "登録済")
+                    status.update(label="✅ 完了", state="complete")
+                else:
+                    status.update(label="❌ エラー", state="error")
+                    st.error(res["message"])
