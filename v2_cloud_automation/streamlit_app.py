@@ -39,7 +39,7 @@ def download_by_filename(path_str, save_path):
     except: return False
 
 async def handle_image_process(page, target_id, file_path):
-    """Jcropの待機エラー（hidden）解消とエラー時スクショ機能"""
+    """アップロードボタンを物理クリックに修正し、hiddenエラーを回避"""
     try:
         # 1. モーダルを開く
         await page.locator(f'a[data-target="{target_id}"]').evaluate("node => node.click()")
@@ -47,9 +47,11 @@ async def handle_image_process(page, target_id, file_path):
         
         # 2. ファイルセット
         await page.locator(f'#{target_id} input[type="file"]').first.set_input_files(file_path)
+        await asyncio.sleep(1) # セット後の安定待ち
         
-        # 3. アップロード実行
-        await page.locator(f'#{target_id} button.upbtn').first.evaluate("node => node.click()")
+        # --- 修正点：アップロードボタンを物理的にクリックする ---
+        # evaluateではなく、通常のclick(force=True)で確実にボタンを叩く
+        await page.locator(f'#{target_id} button.upbtn').first.click(force=True)
         
         # 4. サーバー処理とリロードを待機
         await asyncio.sleep(8) 
@@ -62,7 +64,7 @@ async def handle_image_process(page, target_id, file_path):
             await asyncio.sleep(3)
             if await tracker.is_visible():
                 break
-            if i == 2: # 最後まで見えなかったらスクショを撮って例外を投げる
+            if i == 2:
                 await page.screenshot(path=f"error_{target_id}.png", full_page=True)
                 raise Exception(f"画像編集エリア(Jcrop)が非表示のままです。")
         
@@ -84,11 +86,10 @@ async def handle_image_process(page, target_id, file_path):
         await asyncio.sleep(3)
             
     except Exception as e:
-        # エラー発生時にスクショを保存してStreamlitに表示
         shot_path = f"error_debug_{target_id}.png"
         await page.screenshot(path=shot_path)
         st.image(shot_path, caption=f"❌ {target_id} エラー時の画面")
-        raise e # 上位のrun_automationにエラーを伝える
+        raise e
 
 async def run_automation(cast_data, sub_image_paths):
     try:
