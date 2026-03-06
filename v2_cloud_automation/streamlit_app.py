@@ -29,7 +29,6 @@ def download_by_filename(path_str, save_path):
         return False
     try:
         drive_service = get_drive_service()
-        # パスからファイル名のみを抽出（全角・半角スラッシュ対応）
         filename = str(path_str).replace('\\', '/').split('/')[-1].strip()
         query = f"name = '{filename}' and trashed = false"
         results = drive_service.files().list(q=query, fields="files(id, name)").execute()
@@ -54,7 +53,18 @@ def download_by_filename(path_str, save_path):
         return False
 
 # --- 自動化メイン処理 ---
-async def run_automation(cast_data, shop_id, shop_pass, sub_image_paths):
+async def run_automation(cast_row_list, shop_id, shop_pass, sub_image_paths):
+    # 列番号で指定するためのインデックス定数 (0から開始)
+    # A=0(ID), B=1(エリア), C=2(名前), D=3(身長), E=4(バスト), F=5(カップ), G=6(ウエスト), H=7(ヒップ), I=8(年齢), L=11(メイン画像)
+    idx_name = 2
+    idx_tall = 3
+    idx_bust = 4
+    idx_cup = 5
+    idx_waist = 6
+    idx_hip = 7
+    idx_age = 8
+    idx_main_img = 11
+
     try:
         if not os.path.exists("/home/appuser/.cache/ms-playwright"):
             subprocess.run(["python", "-m", "playwright", "install", "chromium"], check=True)
@@ -62,7 +72,7 @@ async def run_automation(cast_data, shop_id, shop_pass, sub_image_paths):
         pass
 
     main_img_tmp = "temp_main.jpg"
-    main_img_ok = download_by_filename(cast_data.get('メイン画像'), main_img_tmp)
+    main_img_ok = download_by_filename(cast_row_list[idx_main_img], main_img_tmp)
 
     async with async_playwright() as p:
         browser = await p.chromium.launch(headless=True, args=['--lang=ja-JP'])
@@ -78,20 +88,19 @@ async def run_automation(cast_data, shop_id, shop_pass, sub_image_paths):
             await page.goto("https://ranking-deli.jp/admin/girls/create/")
 
             # 2. プロフィール入力
-            await page.fill("#form_name", str(cast_data.get('名前')))
-            await page.fill("#form_age", str(cast_data.get('年齢')))
-            await page.fill("#form_tall", str(cast_data.get('身長')))
-            await page.fill("#form_bust", str(cast_data.get('バスト')))
-            await page.fill("#form_waist", str(cast_data.get('ウエスト')))
-            await page.fill("#form_hip", str(cast_data.get('ヒップ')))
+            await page.fill("#form_name", str(cast_row_list[idx_name]))
+            await page.fill("#form_age", str(cast_row_list[idx_age]))
+            await page.fill("#form_tall", str(cast_row_list[idx_tall]))
+            await page.fill("#form_bust", str(cast_row_list[idx_bust]))
+            await page.fill("#form_waist", str(cast_row_list[idx_waist]))
+            await page.fill("#form_hip", str(cast_row_list[idx_hip]))
 
-            cup_input = str(cast_data.get('カップ数', '')).strip().upper()
+            cup_input = str(cast_row_list[idx_cup]).strip().upper()
             if cup_input:
                 try:
                     await page.locator("#form_cup").select_option(label=f"{cup_input}カップ")
                 except: pass
 
-            # タグ選択
             await page.locator('input[name="p_genre[1]"]').check()
             target_genre_ids = ["#genre17", "#genre30", "#genre31", "#genre33", "#genre34", "#genre36", "#genre25", "#genre35", "#genre41", "#genre43", "#genre44", "#genre55", "#genre73", "#genre74"]
             for selector in target_genre_ids:
@@ -119,13 +128,12 @@ async def run_automation(cast_data, shop_id, shop_pass, sub_image_paths):
                 await page.get_by_role("button", name="修正する").click()
                 await asyncio.sleep(1)
 
-            # 5. サブ画像 (ここが修正ポイント)
+            # 5. サブ画像
             if sub_image_paths:
                 for i, sub_url in enumerate(sub_image_paths):
                     if i >= 7: break
                     sub_tmp = f"temp_sub_{i}.jpg"
                     if download_by_filename(sub_url, sub_tmp):
-                        # タブ（con2, con3...）を切り替えてアップロード
                         await page.click(f'a[data-target="con{i+2}"]')
                         await asyncio.sleep(0.5)
                         await page.locator('input[type="file"]').first.set_input_files(sub_tmp)
@@ -153,31 +161,32 @@ if st.button("🚀 実行開始"):
         gs_client = gspread.authorize(creds)
         spreadsheet = gs_client.open_by_key(SPREADSHEET_ID)
         
-        data_info = spreadsheet.worksheet("キャスト情報").get_all_records()
-        data_images = spreadsheet.worksheet("キャスト画像").get_all_records()
-        data_shops = spreadsheet.worksheet("シート3").get_all_records()
+        # get_all_values() を使い、列の並び順でデータを扱うように変更
+        data_info = spreadsheet.worksheet("キャスト情報").get_all_values()
+        header_info = data_info[0]
+        rows_info = data_info[1:]
 
+        data_images = spreadsheet.worksheet("キャスト画像").get_all_values()
+        rows_images = data_images[1:]
+
+        data_shops = spreadsheet.worksheet("シート3").get_all_records()
         shop_dict = {str(s.get('登録店舗')).strip(): s for s in data_shops}
 
         count = 0
-        for i, row in enumerate(data_info):
-            cast_name = row.get('名前')
-            shop_name = str(row.get('登録店舗')).strip()
-            is_registered = str(row.get('登録済')).strip()
+        for i, row in enumerate(rows_info):
+            # 列番号での指定: A=0(ID), C=2(名前), M=12(登録店舗), N=13(登録済)
+            target_id = str(row[0]).strip()
+            cast_name = row[2]
+            shop_name = str(row[12]).strip()
+            is_registered = str(row[13]).strip()
+            
             target_shop = shop_dict.get(shop_name)
 
-            if target_shop and not is_registered:
+            if target_id and target_shop and not is_registered:
                 count += 1
-                # A列「ID」とキャスト画像「CastID」を紐付け（型の不一致を防ぐためstrに変換）
-                target_id = str(row.get('ID')).strip()
                 
-                # 画像リスト作成（列名の空白や表記揺れを考慮）
-                sub_urls = []
-                for img in data_images:
-                    img_cast_id = str(img.get('CastID') or img.get('Cast ID') or "").strip()
-                    if img_cast_id == target_id:
-                        url = img.get('写真') or img.get('画像')
-                        if url: sub_urls.append(url)
+                # キャスト画像シートから該当IDの画像を抽出 (B列=1(CastID), C列=2(写真))
+                sub_urls = [img_row[2] for img_row in rows_images if str(img_row[1]).strip() == target_id]
 
                 st.write(f"🔎 {cast_name} さん: サブ画像 {len(sub_urls)} 枚発見 (ID: {target_id})")
 
