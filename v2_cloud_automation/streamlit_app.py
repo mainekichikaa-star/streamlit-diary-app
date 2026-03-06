@@ -98,8 +98,11 @@ async def run_automation(cast_data, sub_image_paths):
             await asyncio.sleep(2) 
             
             # アップロードとリロード待機
-            async with page.expect_navigation(timeout=30000):
-                await page.locator('#con1 button.upbtn').click(force=True)
+            await page.locator('#con1 button.upbtn').click(force=True)
+            # ページが切り替わる（または読み込みが始まる）まで少し待ち、
+            # 再び「a[data-target="con1"]」が操作可能になるまで待機する
+            await asyncio.sleep(5) 
+            await page.wait_for_load_state("networkidle")
             
             # 再展開して編集
             await page.click('a[data-target="con1"]')
@@ -131,8 +134,9 @@ async def run_automation(cast_data, sub_image_paths):
                         await page.locator(f'#{target_id} input[type="file"]').set_input_files(sub_tmp)
                         await asyncio.sleep(2)
                         
-                        async with page.expect_navigation(timeout=30000):
-                            await page.locator(f'#{target_id} button.upbtn').click(force=True)
+                        await page.locator(f'#{target_id} button.upbtn').click(force=True)
+                        await asyncio.sleep(5)
+                        await page.wait_for_load_state("networkidle")
                         
                         # 2. 再展開して編集・修正
                         await page.click(f'a[data-target="{target_id}"]')
