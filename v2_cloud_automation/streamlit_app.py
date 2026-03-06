@@ -39,51 +39,39 @@ def download_by_filename(path_str, save_path):
     except: return False
 
 async def handle_image_process(page, target_id, file_path):
-    """画像アップロードからご提示いただいたJcropドラッグ、修正確定まで"""
+    """ご提示いただいたメイン画像の成功パターンを全画像に適用"""
     try:
-        # 1. アップロードボタン/モーダルを開く
-        await page.locator(f'a[data-target="{target_id}"]').click(force=True)
-        await asyncio.sleep(1)
+        # モーダルを開く
+        await page.click(f'a[data-target="{target_id}"]')
         
-        # 2. ファイルセット
-        await page.locator(f'#{target_id} input[type="file"]').set_input_files(file_path)
-        await asyncio.sleep(1.5)
+        # アップロード操作 (firstを使用して確実にそのモーダルの要素を掴む)
+        await page.locator(f'#{target_id} input[type="file"]').first.set_input_files(file_path)
+        await page.locator(f'#{target_id} button.upbtn').first.click()
         
-        # 3. アップロード実行
-        await page.locator(f'#{target_id} button.upbtn').click(force=True)
-        
-        # 4. ページリロード待機
+        # ページリロード待機
         await asyncio.sleep(5)
         await page.wait_for_load_state("networkidle")
         
-        # 5. 編集のため再度モーダルを開く
-        await page.locator(f'a[data-target="{target_id}"]').click(force=True)
-        await asyncio.sleep(2)
+        # 編集のため再度モーダルを開く
+        await page.click(f'a[data-target="{target_id}"]')
         
-        # 6. 【ご提示のドラッグ操作】モーダル内の全Jcropターゲットを処理
-        trackers = page.locator(f"#{target_id} .jcrop-tracker.target")
-        t_count = await trackers.count()
-        
-        for i in range(t_count):
-            tracker = trackers.nth(i)
-            await tracker.wait_for(state="visible", timeout=10000)
-            box = await tracker.bounding_box()
-            if box:
-                await page.mouse.move(box["x"], box["y"])
-                await page.mouse.down()
-                await page.mouse.move(box["x"] + box["width"], box["y"] + box["height"], steps=20)
-                await page.mouse.up()
-                await asyncio.sleep(0.5)
+        # ドラッグ操作 (Jcrop) - ご提示のロジック
+        # モーダル内のターゲットを特定してドラッグ
+        tracker = page.locator(f"#{target_id} .jcrop-tracker.target").first
+        await tracker.wait_for(state="visible", timeout=10000)
+        box = await tracker.bounding_box()
+        if box:
+            await page.mouse.move(box["x"], box["y"])
+            await page.mouse.down()
+            await page.mouse.move(box["x"] + box["width"], box["y"] + box["height"], steps=20)
+            await page.mouse.up()
+            await asyncio.sleep(1)
 
-        # 7. 【ご提示の修正ボタン操作】
-        # モーダル内にある「修正する」ボタンをすべて順番に押す
-        fix_btns = page.locator(f"#{target_id} input[value='修正する']")
-        b_count = await fix_btns.count()
-        for i in range(b_count):
-            btn = fix_btns.nth(i)
-            await btn.wait_for(state="visible")
-            await btn.click()
-            await asyncio.sleep(2)
+        # 修正するボタン操作 - ご提示のロジック
+        fix_btn = page.locator(f"#{target_id} input[value='修正する']").first
+        await fix_btn.wait_for(state="visible")
+        await fix_btn.click()
+        await asyncio.sleep(2)
             
     except Exception as e:
         st.warning(f"{target_id} の画像工程でエラーが発生しました: {e}")
@@ -100,7 +88,7 @@ async def run_automation(cast_data, sub_image_paths):
         page = await context.new_page()
 
         try:
-            # ログイン〜プロフィール入力
+            # ログイン
             await page.goto("https://ranking-deli.jp/admin/login")
             await page.fill("#form_email", str(cast_data.get('ID')).strip())
             await page.fill("#form_password", str(cast_data.get('PASSWORD')).strip())
@@ -121,7 +109,8 @@ async def run_automation(cast_data, sub_image_paths):
                 if await page.locator(g_id).count() > 0: await page.locator(g_id).check(force=True)
 
             await page.click("#form_update-btn", force=True)
-            await asyncio.sleep(3)
+            # 登録完了の文言が出るまで待機
+            await page.get_by_text("データを登録しました。").wait_for(state="visible", timeout=20000)
 
             # 画像処理 (1〜8)
             all_imgs = [cast_data.get('メイン画像')] + sub_image_paths
@@ -130,10 +119,11 @@ async def run_automation(cast_data, sub_image_paths):
                 if num > 8 or not img_path: continue
                 tmp = f"temp_{num}.jpg"
                 if download_by_filename(img_path, tmp):
-                    st.info(f"📸 画像{num} を収集中...")
+                    st.info(f"📸 画像{num} を処理中...")
                     await handle_image_process(page, f"con{num}", tmp)
                     if os.path.exists(tmp): os.remove(tmp)
 
+            # 最終保存
             await page.locator("#signup3").click(force=True)
             return {"status": "success"}
         except Exception as e:
@@ -158,7 +148,8 @@ if st.button("🚀 実行開始"):
         targets = [row for row in data_info if str(row.get('ID')).strip() and str(row.get('PASSWORD')).strip() and not str(row.get('登録済')).strip()]
 
         if not targets:
-            st.warning("⚠️ スプレッドシートに登録待ちのデータが見つかりませんでした。")
+            # 登録するデータがない場合の表示
+            st.warning("⚠️ スプレッドシートに登録待ちのデータ（未登録のID/PASS）は見つかりませんでした。")
         else:
             for row in targets:
                 st.subheader(f"👤 {row.get('名前')}")
@@ -168,7 +159,7 @@ if st.button("🚀 実行開始"):
                 with st.status(f"{row.get('名前')} 登録中...") as status:
                     res = asyncio.run(run_automation(row, sub_urls))
                     if res["status"] == "success":
-                        # 「登録済」に更新（名前で検索して行を特定）
+                        # 行特定して更新
                         cell = sheet_info.find(row.get('名前'))
                         sheet_info.update_cell(cell.row, 16, "登録済")
                         status.update(label="✅ 完了", state="complete")
