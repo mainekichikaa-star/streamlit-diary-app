@@ -10,26 +10,22 @@ from googleapiclient.discovery import build
 from googleapiclient.http import MediaIoBaseDownload
 from playwright.async_api import async_playwright
 
-# --- 1. 環境設定：Playwright & 日本語フォント ---
+# --- 1. Playwright インストール (フォントはpackages.txtに任せる) ---
 @st.cache_resource
-def install_environment():
+def install_playwright():
     try:
-        # 文字化け対策（fonts-noto-cjk）
-        subprocess.run(["apt-get", "update"], check=True)
-        subprocess.run(["apt-get", "install", "-y", "fonts-noto-cjk"], check=True)
-        # Playwright本体
         subprocess.run(["playwright", "install", "chromium"], check=True)
-        subprocess.run(["playwright", "install-deps"], check=True)
     except Exception as e:
-        st.error(f"初期設定エラー（再起動で治る場合があります）: {e}")
+        st.error(f"Playwrightのインストールに失敗しました: {e}")
 
-install_environment()
+install_playwright()
 
-# --- 2. Google API 認証 ---
+# --- 2. Google API 認証設定 ---
 SCOPE = ['https://www.googleapis.com/auth/spreadsheets', 'https://www.googleapis.com/auth/drive']
 creds = Credentials.from_service_account_info(st.secrets["gcp_service_account"], scopes=SCOPE)
 gs_client = gspread.authorize(creds)
 drive_service = build('drive', 'v3', credentials=creds)
+
 SPREADSHEET_ID = "1Fta23cis4AY9j2_lytfh0OOAJq-EFinLjqp_dLIAgtM"
 
 # --- 3. 画像ダウンロード関数 ---
@@ -40,7 +36,6 @@ def download_drive_img(url_or_id, save_path):
         if match:
             file_id = match.group(1)
         else:
-            # ID形式でない場合はファイル名検索
             query = f"name = '{url_or_id}' and trashed = false"
             res = drive_service.files().list(q=query, fields="files(id)").execute()
             items = res.get('files', [])
@@ -59,26 +54,26 @@ def download_drive_img(url_or_id, save_path):
     except:
         return False
 
-# --- 4. 自動化メイン処理 ---
+# --- 4. 自動化メイン処理 (列番号指定) ---
 async def run_automation(row_data, sub_image_urls):
-    # 【列番号設定】スプレッドシートの左からの順番に合わせて調整してください
-    # 0=A, 1=B, 2=C...
-    COL_LOGIN_ID = 0  # A列: ID
-    COL_PW       = 1  # B列: PASSWORD
-    COL_NAME     = 2  # C列: 名前
-    COL_AGE      = 3  # D列: 若・妻/年齢
+    # スプレッドシートの列の並びに合わせて数字を調整してください
+    # 0=A, 1=B, 2=C, 3=D, 4=E, 5=F, 6=G, 7=H, 8=I ...
+    COL_LOGIN_ID = 0  # A列
+    COL_PW       = 1  # B列
+    COL_NAME     = 2  # C列
+    COL_AGE      = 3  # D列: 年齢
     COL_TALL     = 4  # E列: 身長
     COL_B        = 5  # F列: バスト
     COL_W        = 6  # G列: ウエスト
     COL_H        = 7  # H列: ヒップ
     COL_CUP      = 8  # I列: カップ
-    COL_MAIN_IMG = 14 # O列: メイン画像URL（例）
+    COL_MAIN_IMG = 14 # O列: メイン画像
 
-    name = row_data[COL_NAME]
+    name = str(row_data[COL_NAME])
     main_img_tmp = "temp_main.jpg"
 
     if not download_drive_img(row_data[COL_MAIN_IMG], main_img_tmp):
-        return {"status": "error", "message": f"メイン画像の取得失敗: {row_data[COL_MAIN_IMG]}"}
+        return {"status": "error", "message": "メイン画像の取得失敗"}
 
     async with async_playwright() as p:
         browser = await p.chromium.launch(headless=True, args=['--lang=ja-JP'])
@@ -94,41 +89,37 @@ async def run_automation(row_data, sub_image_urls):
             await page.click("#form_submit")
             await page.goto("https://ranking-deli.jp/admin/girls/create/")
 
-            # 2. プロフィール入力 (row_dataから直接入力)
+            # 2. プロフィール入力 (空欄を避けるためstr()で強制変換)
             st.info("✍️ 基本情報を入力中...")
-            await page.fill("#form_name", str(row_data[COL_NAME]))
+            await page.fill("#form_name", name)
             await page.fill("#form_age", str(row_data[COL_AGE]))
             await page.fill("#form_tall", str(row_data[COL_TALL]))
             await page.fill("#form_bust", str(row_data[COL_B]))
             await page.fill("#form_waist", str(row_data[COL_W]))
             await page.fill("#form_hip", str(row_data[COL_H]))
             
-            # カップ数
+            # カップ選択
             cup = str(row_data[COL_CUP]).strip()
             try:
                 await page.locator("#form_cup").select_option(label=re.compile(f"^{cup}", re.IGNORECASE))
             except: pass
 
-            # 3. 保存ボタン
+            # 3. 保存
             st.info("💾 保存中...")
             await page.click("#form_update-btn", force=True)
             
-            # 保存が通ればcon1が出る。出なければエラー。
-            try:
-                await page.wait_for_selector('a[data-target="con1"]', state="visible", timeout=15000)
-            except:
-                await page.screenshot(path="save_error.png")
-                return {"status": "error", "message": "保存失敗。入力項目が空か、サイト側のバリデーションエラーです。"}
+            # con1（画像登録ボタン）が出るのを待つ
+            await page.wait_for_selector('a[data-target="con1"]', state="visible", timeout=20000)
 
             # --- 画像処理関数 ---
             async def upload_process(target_id, file_path, label):
-                st.info(f"📸 {label}アップロード...")
+                st.info(f"📸 {label}アップロード中...")
                 btn = f'a[data-target="{target_id}"]'
-                await page.wait_for_selector(btn, state="visible")
                 await page.click(btn)
                 await page.locator('input[type="file"]').first.set_input_files(file_path)
                 await page.locator('button.upbtn').first.click()
                 
+                # ドラッグ操作
                 tracker = page.locator(".jcrop-tracker.target").first
                 await tracker.wait_for(state="visible", timeout=10000)
                 box = await tracker.bounding_box()
@@ -143,12 +134,12 @@ async def run_automation(row_data, sub_image_urls):
             # メイン画像
             await upload_process("con1", main_img_tmp, "メイン")
 
-            # サブ画像
+            # サブ画像ループ
             for i, sub_url in enumerate(sub_image_urls):
                 if i >= 7: break
                 sub_tmp = f"temp_sub_{i}.jpg"
                 if download_drive_img(sub_url, sub_tmp):
-                    await upload_process(f"con{i+2}", sub_tmp, f"サブ{i+1}")
+                    await upload_process(f"con{i+2}", sub_tmp, f"画像{i+2}")
                     if os.path.exists(sub_tmp): os.remove(sub_tmp)
 
             # 完了
@@ -162,28 +153,28 @@ async def run_automation(row_data, sub_image_urls):
             await browser.close()
             if os.path.exists(main_img_tmp): os.remove(main_img_tmp)
 
-# --- 5. Streamlit UI ---
-st.title("🤴 キャスト一括登録システム (列番号指定版)")
+# --- 5. UI ---
+st.title("👸 キャスト一括登録システム")
 
 if st.button("🚀 登録開始"):
     sheet_info = gs_client.open_by_key(SPREADSHEET_ID).worksheet("キャスト情報")
     sheet_images = gs_client.open_by_key(SPREADSHEET_ID).worksheet("キャスト画像")
     
-    all_data = sheet_info.get_all_values() # リスト形式で取得
+    # get_all_values() で「名前指定」ではなく「列の順番」で扱う
+    all_data = sheet_info.get_all_values()
     img_data = sheet_images.get_all_records()
     
-    headers = all_data[0]
-    rows = all_data[1:]
+    rows = all_data[1:] # ヘッダー除外
 
     for i, row in enumerate(rows):
-        # A列(row[0])、B列(row[1])、P列(row[15])をチェック
+        # A列(row[0]), B列(row[1]), P列(row[15])
         if len(row) > 15 and row[0] and row[1] and row[15] != "登録済":
             st.subheader(f"👤 処理中: {row[2]}")
-            # 画像検索 (row[10]などをIDとして利用する場合)
+            # row[10]（K列）などをIDとして画像紐付け
             cast_id = str(row[10]) if len(row) > 10 else ""
             sub_urls = [img['写真'] for img in img_data if str(img['CastID']) == cast_id]
             
-            with st.status("自動実行中...") as status:
+            with st.status("実行中...") as status:
                 res = asyncio.run(run_automation(row, sub_urls))
                 if res["status"] == "success":
                     sheet_info.update_cell(i + 2, 16, "登録済")
@@ -191,4 +182,4 @@ if st.button("🚀 登録開始"):
                 else:
                     status.update(label="❌ エラー", state="error")
                     st.error(res["message"])
-                    if os.path.exists("save_error.png"): st.image("save_error.png")
+                    if os.path.exists("error_log.png"): st.image("error_log.png")
