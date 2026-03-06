@@ -28,15 +28,17 @@ drive_service = build('drive', 'v3', credentials=creds)
 
 SPREADSHEET_ID = "1Fta23cis4AY9j2_lytfh0OOAJq-EFinLjqp_dLIAgtM"
 
-# --- 3. Googleドライブからダウンロード ---
+# --- 3. ドライブからファイル名で検索・ダウンロード ---
 def download_by_filename(path_str, save_path):
     if not path_str or str(path_str).strip() == "": return False
     try:
+        # パス形式(XXX/filename.jpg)からファイル名のみ抽出
         filename = str(path_str).split('/')[-1]
         query = f"name = '{filename}' and trashed = false"
         results = drive_service.files().list(q=query, fields="files(id, name)").execute()
         items = results.get('files', [])
         if not items: return False
+        
         file_id = items[0]['id']
         request = drive_service.files().get_media(fileId=file_id)
         fh = io.BytesIO()
@@ -50,19 +52,26 @@ def download_by_filename(path_str, save_path):
     except:
         return False
 
-# --- 4. 自動化メイン処理 (成功ベース・修正版) ---
-async def run_automation(row_data, sub_image_paths):
-    # 【列の定義を修正】A=0, B=1, C=2, D=3, E=4, F=5, G=6, H=7, I=8, O=14
-    COL_ID, COL_PW, COL_NAME = 0, 1, 2
-    COL_AGE, COL_TALL = 3, 4
-    COL_B, COL_W, COL_H, COL_CUP = 5, 6, 7, 8
-    COL_MAIN_IMG = 14
+# --- 4. 自動化メイン処理 (指定の列構成に準拠) ---
+async def run_automation(row_data, sub_image_urls):
+    # 列定義 (添字は0から開始)
+    # 1:ID(0), 3:名前(2), 4:身長(3), 5:バスト(4), 6:カップ数(5), 7:ウエスト(6), 8:ヒップ(7)
+    # 12:メイン画像(11), 14:ログインID(13), 15:PASSWORD(14), 16:登録済(15)
+    COL_NAME = 2
+    COL_TALL = 3
+    COL_BUST = 4
+    COL_CUP  = 5
+    COL_W    = 6
+    COL_H    = 7
+    COL_MAIN_IMG = 11
+    COL_LOGIN_ID = 13
+    COL_LOGIN_PW = 14
 
     main_img_tmp = "temp_main.jpg"
-    name = str(row_data[COL_NAME]).strip()
+    name = str(row_data[COL_NAME])
 
     if not download_by_filename(row_data[COL_MAIN_IMG], main_img_tmp):
-        return {"status": "error", "message": f"メイン画像取得失敗: {row_data[COL_MAIN_IMG]}"}
+        return {"status": "error", "message": f"メイン画像が見つかりません: {row_data[COL_MAIN_IMG]}"}
 
     async with async_playwright() as p:
         browser = await p.chromium.launch(headless=True, args=['--lang=ja-JP'])
@@ -73,72 +82,68 @@ async def run_automation(row_data, sub_image_paths):
             # 1. ログイン
             st.info(f"🌐 ログイン中: {name}")
             await page.goto("https://ranking-deli.jp/admin/login")
-            await page.fill("#form_email", str(row_data[COL_ID]).strip())
-            await page.fill("#form_password", str(row_data[COL_PW]).strip())
+            await page.fill("#form_email", str(row_data[COL_LOGIN_ID]).strip())
+            await page.fill("#form_password", str(row_data[COL_LOGIN_PW]).strip())
             await page.click("#form_submit")
-            
-            # ログイン成否チェック
             await asyncio.sleep(2)
             if "login" in page.url:
-                return {"status": "error", "message": "ログイン失敗。ID/PWを確認してください。"}
+                return {"status": "error", "message": "ログインに失敗しました。ID/PWを確認してください。"}
 
             await page.goto("https://ranking-deli.jp/admin/girls/create/")
 
-            # 2. プロフィール入力 (空欄回避のためstr()化)
-            st.info("✍️ プロフィール入力中...")
+            # 2. プロフィール入力 (3-8列目のデータ)
+            st.info("✍️ 基本情報を入力中...")
             await page.fill("#form_name", name)
-            await page.fill("#form_age", str(row_data[COL_AGE]).strip())
             await page.fill("#form_tall", str(row_data[COL_TALL]).strip())
-            await page.fill("#form_bust", str(row_data[COL_B]).strip())
+            await page.fill("#form_bust", str(row_data[COL_BUST]).strip())
             await page.fill("#form_waist", str(row_data[COL_W]).strip())
             await page.fill("#form_hip", str(row_data[COL_H]).strip())
             
+            # カップ選択
             cup = str(row_data[COL_CUP]).strip()
             try:
                 await page.locator("#form_cup").select_option(label=re.compile(f"^{cup}", re.IGNORECASE))
             except: pass
 
-            # タグ選択
-            await page.locator('input[name="p_genre[1]"]').check()
-            target_genre_ids = ["#genre17", "#genre30", "#genre31", "#genre33", "#genre34", "#genre36", 
-                                "#genre25", "#genre35", "#genre41", "#genre43", "#genre44", "#genre55", 
-                                "#genre73", "#genre74"]
-            for selector in target_genre_ids:
-                if await page.locator(selector).count() > 0:
-                    await page.locator(selector).check(force=True)
-
-            # 基本情報登録
+            # 3. 保存と画像登録
             await page.click("#form_update-btn", force=True)
-            
-            # 登録成功（画像ボタン出現）を待機
             await page.wait_for_selector('a[data-target="con1"]', state="visible", timeout=20000)
 
-            # 3. 画像アップロード
-            st.info("📸 画像をアップロード中...")
-            await page.click('a[data-target="con1"]')
-            await page.locator('input[type="file"]').first.set_input_files(main_img_tmp)
-            await page.locator('button.upbtn').first.click()
-            
-            # ドラッグ操作
-            tracker = page.locator(".jcrop-tracker.target").first
-            await tracker.wait_for(state="visible", timeout=15000)
-            box = await tracker.bounding_box()
-            if box:
-                await page.mouse.move(box["x"], box["y"])
-                await page.mouse.down()
-                await page.mouse.move(box["x"] + box["width"], box["y"] + box["height"], steps=20)
-                await page.mouse.up()
-            
-            await page.get_by_role("button", name="修正する").click()
-            await asyncio.sleep(2)
+            # --- アップロード共通処理 ---
+            async def upload_img(target_id, file_path, label):
+                st.info(f"📸 {label}をアップロード中...")
+                await page.click(f'a[data-target="{target_id}"]')
+                await page.locator('input[type="file"]').first.set_input_files(file_path)
+                await page.locator('button.upbtn').first.click()
+                
+                tracker = page.locator(".jcrop-tracker.target").first
+                await tracker.wait_for(state="visible", timeout=10000)
+                box = await tracker.bounding_box()
+                if box:
+                    await page.mouse.move(box["x"], box["y"])
+                    await page.mouse.down()
+                    await page.mouse.move(box["x"] + box["width"], box["y"] + box["height"], steps=15)
+                    await page.mouse.up()
+                await page.get_by_role("button", name="修正する").click()
+                await asyncio.sleep(2)
 
-            # 4. 完了
+            # メイン画像
+            await upload_img("con1", main_img_tmp, "メイン画像")
+
+            # サブ画像 (最大7枚)
+            for i, sub_url in enumerate(sub_image_urls):
+                if i >= 7: break
+                sub_tmp = f"temp_sub_{i}.jpg"
+                if download_by_filename(sub_url, sub_tmp):
+                    await upload_img(f"con{i+2}", sub_tmp, f"サブ画像{i+1}")
+                    if os.path.exists(sub_tmp): os.remove(sub_tmp)
+
+            # 完了
             await page.locator("#signup3").click()
             return {"status": "success"}
 
         except Exception as e:
-            await page.screenshot(path="error_log.png")
-            return {"status": "error", "message": f"自動化エラー: {str(e)}"}
+            return {"status": "error", "message": f"エラー: {str(e)}"}
         finally:
             await browser.close()
             if os.path.exists(main_img_tmp): os.remove(main_img_tmp)
@@ -146,37 +151,43 @@ async def run_automation(row_data, sub_image_paths):
 # --- 5. Streamlit UI ---
 st.title("👸 キャスト一括登録システム")
 
-if st.button("🚀 未登録キャストをスキャンして実行"):
+if st.button("🚀 未登録キャストを登録開始"):
     sheet_info = gs_client.open_by_key(SPREADSHEET_ID).worksheet("キャスト情報")
-    all_data = sheet_info.get_all_values()
-    data_rows = all_data[1:] # ヘッダー除外
+    sheet_images = gs_client.open_by_key(SPREADSHEET_ID).worksheet("キャスト画像")
     
-    processed_count = 0
-    for i, row in enumerate(data_rows):
-        # 厳格な判定: 
-        # A列(ID), B列(PW), O列(メイン画像) がすべて存在し、
-        # P列(登録済) が空欄(スペース除去後) であること
-        if len(row) > 15:
-            login_id = str(row[0]).strip()
-            password = str(row[1]).strip()
-            main_img = str(row[14]).strip()
-            status_val = str(row[15]).strip()
+    info_rows = sheet_info.get_all_values()
+    image_records = sheet_images.get_all_records()
+    
+    data_rows = info_rows[1:]
+    processed = 0
 
-            if login_id and password and main_img and not status_val:
+    for i, row in enumerate(data_rows):
+        # 判定：14列目(ID), 15列目(PW)があり、16列目(登録済)が空
+        # ※添字：13, 14, 15
+        if len(row) >= 15:
+            login_id = str(row[13]).strip()
+            login_pw = str(row[14]).strip()
+            # 16列目が存在しないか空の場合
+            is_registered = str(row[15]).strip() if len(row) > 15 else ""
+
+            if login_id and login_pw and not is_registered:
                 st.subheader(f"👤 対象: {row[2]}")
-                with st.status(f"{row[2]} さんの登録を実行中...") as status:
-                    res = asyncio.run(run_automation(row, []))
+                
+                # 紐付け：キャスト情報1列目(row[0]) と キャスト画像2列目(CastID)
+                cast_id_val = str(row[0]).strip()
+                sub_urls = [img['写真'] for img in image_records if str(img['CastID']).strip() == cast_id_val]
+                
+                with st.status("自動実行中...") as status:
+                    res = asyncio.run(run_automation(row, sub_urls))
                     if res["status"] == "success":
                         sheet_info.update_cell(i + 2, 16, "登録済")
                         status.update(label="✅ 完了", state="complete")
-                        processed_count += 1
+                        processed += 1
                     else:
                         status.update(label="❌ エラー", state="error")
                         st.error(res["message"])
-                        if os.path.exists("error_log.png"):
-                            st.image("error_log.png")
 
-    if processed_count == 0:
-        st.info("対象の未登録キャスト（ID/PW/画像あり）は見つかりませんでした。")
+    if processed == 0:
+        st.info("条件に一致する未登録キャストはいませんでした。")
     else:
-        st.success(f"合計 {processed_count} 名の登録が完了しました！")
+        st.success(f"計 {processed} 名の登録を完了しました。")
