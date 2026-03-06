@@ -11,19 +11,12 @@ from googleapiclient.http import MediaIoBaseDownload
 from playwright.async_api import async_playwright
 
 # --- 1. インストール設定 (ここを完全に書き換え) ---
-@st.cache_resource
+# アプリ起動時の自動インストールを完全に止めます
 def setup_playwright():
-    try:
-        # すでにインストールされているかチェック（二重実行防止）
-        res = subprocess.run(["playwright", "--version"], capture_output=True)
-        if res.returncode != 0:
-            # インストールされていない場合のみ実行
-            subprocess.run(["python", "-m", "playwright", "install", "chromium"], check=True)
-    except Exception as e:
-        # 画面にエラーを出さずログにのみ記録（ボタンを反応させるため）
-        print(f"Playwright Setup Log: {e}")
+    pass 
 
-setup_playwright()
+# setup_playwright()  # ← ここをコメントアウト（または削除）して起動を軽くします
+
 # --- 2. Google API 認証 ---
 SCOPE = ['https://www.googleapis.com/auth/spreadsheets', 'https://www.googleapis.com/auth/drive']
 creds = Credentials.from_service_account_info(st.secrets["gcp_service_account"], scopes=SCOPE)
@@ -53,6 +46,12 @@ def download_by_filename(path_str, save_path):
 
 # --- 4. 自動化メイン処理 ---
 async def run_automation(cast_data, sub_image_paths):
+    # 【ここを追加】ボタンが押された後にインストールを実行
+    try:
+        subprocess.run(["python", "-m", "playwright", "install", "chromium"], check=True)
+    except:
+        pass
+
     main_img_tmp = "temp_main.jpg"
     if not download_by_filename(cast_data.get('メイン画像'), main_img_tmp):
         return {"status": "error", "message": "メイン画像取得失敗"}
