@@ -23,8 +23,6 @@ def install_playwright():
     except Exception as e:
         st.error(f"フォント・Playwrightのインストールに失敗: {e}")
 
-install_playwright()
-
 # --- 2. Google API 認証設定 ---
 SCOPE = ['https://www.googleapis.com/auth/spreadsheets', 'https://www.googleapis.com/auth/drive']
 creds = Credentials.from_service_account_info(st.secrets["gcp_service_account"], scopes=SCOPE)
