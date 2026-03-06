@@ -5,12 +5,13 @@ import subprocess
 import gspread
 import io
 import re
+import requests
 from google.oauth2.service_account import Credentials
 from googleapiclient.discovery import build
 from googleapiclient.http import MediaIoBaseDownload
 from playwright.async_api import async_playwright
 
-# --- 1. Playwright インストール設定 (成功時と同じ) ---
+# --- 1. Playwright インストール設定 ---
 @st.cache_resource
 def install_playwright():
     try:
@@ -28,24 +29,28 @@ drive_service = build('drive', 'v3', credentials=creds)
 
 SPREADSHEET_ID = "1Fta23cis4AY9j2_lytfh0OOAJq-EFinLjqp_dLIAgtM"
 
-# --- 3. Googleドライブからファイル名で検索してダウンロード (成功時と同じ) ---
-def download_by_filename(path_str, save_path):
+# --- 3. 画像ダウンロード関数 (URLからIDを抽出) ---
+def download_google_drive_image(url, save_path):
     try:
-        filename = str(path_str).split('/')[-1]
-        query = f"name = '{filename}' and trashed = false"
-        results = drive_service.files().list(q=query, fields="files(id, name)").execute()
-        items = results.get('files', [])
+        # URLからファイルIDを抽出
+        match = re.search(r'd/([a-zA-Z0-9_-]+)', str(url))
+        if not match:
+            # ID形式でない場合は直接ダウンロードを試みる(成功コードの方式)
+            filename = str(url).split('/')[-1]
+            query = f"name = '{filename}' and trashed = false"
+            results = drive_service.files().list(q=query, fields="files(id, name)").execute()
+            items = results.get('files', [])
+            if not items: return False
+            file_id = items[0]['id']
+        else:
+            file_id = match.group(1)
 
-        if not items:
-            return False
-
-        file_id = items[0]['id']
         request = drive_service.files().get_media(fileId=file_id)
         fh = io.BytesIO()
         downloader = MediaIoBaseDownload(fh, request)
         done = False
         while not done:
-            status, done = downloader.next_chunk()
+            _, done = downloader.next_chunk()
         
         with open(save_path, "wb") as f:
             f.write(fh.getvalue())
@@ -56,13 +61,8 @@ def download_by_filename(path_str, save_path):
 # --- 4. 自動化メイン処理 ---
 async def run_automation(cast_data, sub_image_paths):
     main_img_tmp = "temp_main.jpg"
-    if not download_by_filename(cast_data['メイン画像'], main_img_tmp):
-        return {"status": "error", "message": f"メイン画像の取得失敗: {cast_data['メイン画像']}"}
-
-    async def run_automation(cast_data, sub_image_paths):
-    main_img_tmp = "temp_main.jpg"
     if not download_google_drive_image(cast_data['メイン画像'], main_img_tmp):
-        return {"status": "error", "message": "メイン画像の取得に失敗しました。"}
+        return {"status": "error", "message": f"メイン画像の取得失敗: {cast_data['メイン画像']}"}
 
     async with async_playwright() as p:
         browser = await p.chromium.launch(headless=True, args=['--lang=ja-JP'])
@@ -92,9 +92,10 @@ async def run_automation(cast_data, sub_image_paths):
             try:
                 await page.select_option("#form_cup", label=cup_text)
             except:
-                pass # 失敗しても続行
+                pass 
 
             # タグ選択
+            await page.locator('input[name="p_genre[1]"]').check()
             target_genre_ids = ["#genre17", "#genre30", "#genre31", "#genre33", "#genre34", "#genre36", 
                                 "#genre25", "#genre35", "#genre41", "#genre43", "#genre44", "#genre55", 
                                 "#genre73", "#genre74"]
@@ -103,7 +104,7 @@ async def run_automation(cast_data, sub_image_paths):
                 if await checkbox.count() > 0:
                     await checkbox.check(force=True)
 
-            # 基本情報登録（保存ボタンクリック）
+            # 基本情報登録
             st.info("💾 基本情報を保存中...")
             async with page.expect_navigation(timeout=60000):
                 await page.click("#form_update-btn", force=True)
@@ -111,7 +112,6 @@ async def run_automation(cast_data, sub_image_paths):
             # --- 画像処理共通関数 ---
             async def upload_process(target_id, file_path, label):
                 st.info(f"📸 {label}をアップロード中...")
-                # 完了メッセージを待たず、ボタン自体が出るまで待つ
                 btn_selector = f'a[data-target="{target_id}"]'
                 await page.wait_for_selector(btn_selector, state="visible", timeout=20000)
                 await page.click(btn_selector)
@@ -120,8 +120,9 @@ async def run_automation(cast_data, sub_image_paths):
                 await page.locator('button.upbtn').first.click()
                 
                 # Jcropドラッグ操作
-                tracker = page.locator(".jcrop-tracker.target").first
-                await tracker.wait_for(state="visible", timeout=15000)
+                tracker_sel = ".jcrop-tracker.target"
+                await page.wait_for_selector(tracker_sel, state="visible", timeout=15000)
+                tracker = page.locator(tracker_sel).first
                 box = await tracker.bounding_box()
                 if box:
                     await page.mouse.move(box["x"], box["y"])
@@ -133,12 +134,11 @@ async def run_automation(cast_data, sub_image_paths):
                 await asyncio.sleep(2)
 
             # 3. メイン画像の登録 (con1)
-            # ここで「データを登録しました」を待たずに、ボタンの出現で判断
             await upload_process("con1", main_img_tmp, "メイン画像")
 
-            # 4. サブ画像のループ登録 (con2, con3...)
+            # 4. サブ画像のループ登録 (con2〜8)
             for i, sub_url in enumerate(sub_image_paths):
-                if i >= 7: break # 合計8枚まで
+                if i >= 7: break 
                 target_num = i + 2
                 sub_tmp = f"temp_sub_{target_num}.jpg"
                 if download_google_drive_image(sub_url, sub_tmp):
@@ -159,7 +159,7 @@ async def run_automation(cast_data, sub_image_paths):
             await browser.close()
             if os.path.exists(main_img_tmp): os.remove(main_img_tmp)
 
-# --- 5. Streamlit UI ロジック (成功時と同じ) ---
+# --- 5. Streamlit UI ロジック ---
 st.title("👸 キャスト一括登録システム (完全統合版)")
 
 if st.button("🚀 未登録キャストをスキャンして実行"):
@@ -173,6 +173,7 @@ if st.button("🚀 未登録キャストをスキャンして実行"):
     for i, row in enumerate(data_info):
         if row.get('ID') and row.get('PASSWORD') and not row.get('登録済'):
             st.subheader(f"👤 登録対象: {row['名前']}")
+            # キャスト情報の「ＩＤ」とキャスト画像の「CastID」で紐付け
             sub_urls = [img['写真'] for img in data_images if str(img['CastID']) == str(row['ＩＤ'])]
             
             with st.status(f"{row['名前']} さんの自動登録を実行中...") as status:
@@ -185,6 +186,10 @@ if st.button("🚀 未登録キャストをスキャンして実行"):
                 else:
                     status.update(label=f"❌ {row['名前']} エラー", state="error")
                     st.error(res["message"])
+                    if os.path.exists("error_log.png"):
+                        st.image("error_log.png")
 
     if processed_count > 0:
         st.success(f"合計 {processed_count} 名の登録が完了しました！")
+    else:
+        st.info("対象の未登録キャストは見つかりませんでした。")
