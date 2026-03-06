@@ -4,6 +4,7 @@ import os
 import subprocess
 import gspread
 import io
+import re
 from google.oauth2.service_account import Credentials
 from googleapiclient.discovery import build
 from googleapiclient.http import MediaIoBaseDownload
@@ -13,6 +14,7 @@ from playwright.async_api import async_playwright
 SPREADSHEET_ID = "1Fta23cis4AY9j2_lytfh0OOAJq-EFinLjqp_dLIAgtM"
 SCOPE = ['https://www.googleapis.com/auth/spreadsheets', 'https://www.googleapis.com/auth/drive']
 
+# --- ヘルパー関数 ---
 def get_drive_service():
     creds = Credentials.from_service_account_info(st.secrets["gcp_service_account"], scopes=SCOPE)
     return build('drive', 'v3', credentials=creds)
@@ -39,54 +41,47 @@ def download_by_filename(path_str, save_path):
     except: return False
 
 async def handle_image_process(page, target_id, file_path):
-    """画像アップロードからJcropドラッグ、複数箇所の修正確定まで"""
-    try:
-        # 1. モーダルを開く（重なりを避けるためJSで強制実行）
-        btn_open = page.locator(f'a[data-target="{target_id}"]')
-        await btn_open.wait_for(state="attached")
-        await btn_open.evaluate("node => node.click()")
-        await asyncio.sleep(2) # アニメーション待機
-        
-        # 2. ファイルセット
-        file_input = page.locator(f'#{target_id} input[type="file"]')
-        await file_input.set_input_files(file_path)
-        await asyncio.sleep(2)
-        
-        # 3. アップロードボタン（JSで強制実行）
-        up_btn = page.locator(f'#{target_id} button.upbtn')
-        await up_btn.evaluate("node => node.click()")
-        
-        # 4. 画面リフレッシュ待機（通信が落ち着くまで）
-        await asyncio.sleep(6)
-        await page.wait_for_load_state("networkidle")
-        
-        # 5. 再度モーダルを開く（編集のため）
-        await btn_open.evaluate("node => node.click()")
-        await asyncio.sleep(3)
-        
-        # 6. Jcrop ドラッグ（左上から右下へ全ターゲット分）
-        trackers = page.locator(f"#{target_id} .jcrop-tracker.target")
-        t_count = await trackers.count()
-        for i in range(t_count):
-            tracker = trackers.nth(i)
-            box = await tracker.bounding_box()
-            if box:
-                await page.mouse.move(box["x"], box["y"])
-                await page.mouse.down()
-                await page.mouse.move(box["x"] + box["width"], box["y"] + box["height"], steps=15)
-                await page.mouse.up()
-                await asyncio.sleep(0.5)
-                
-        # 7. 「修正する」ボタン（モーダル内の全ての修正ボタンを順番に押す）
-        fix_btns = page.locator(f"#{target_id} input[value='修正する']")
-        b_count = await fix_btns.count()
-        for i in range(b_count):
-            await fix_btns.nth(i).evaluate("node => node.click()")
-            await asyncio.sleep(1.5)
+    """画像アップロード、リロード待機、ドラッグ、修正確定までの一連の処理"""
+    # 1. モーダルを開く（JSで強制クリック）
+    await page.locator(f'a[data-target="{target_id}"]').evaluate("node => node.click()")
+    await asyncio.sleep(1)
+    
+    # 2. ファイルセット
+    await page.locator(f'#{target_id} input[type="file"]').set_input_files(file_path)
+    await asyncio.sleep(2)
+    
+    # 3. アップロードボタン実行（JSで強制クリック）
+    await page.locator(f'#{target_id} button.upbtn').evaluate("node => node.click()")
+    
+    # 4. 画面リフレッシュを待機
+    await asyncio.sleep(5)
+    await page.wait_for_load_state("networkidle")
+    
+    # 5. 再度モーダルを開く
+    await page.locator(f'a[data-target="{target_id}"]').evaluate("node => node.click()")
+    await asyncio.sleep(2)
+    
+    # 6. Jcrop ドラッグ操作（存在するすべてのターゲットに対して実行）
+    trackers = page.locator(f"#{target_id} .jcrop-tracker.target")
+    t_count = await trackers.count()
+    for i in range(t_count):
+        tracker = trackers.nth(i)
+        box = await tracker.bounding_box()
+        if box:
+            await page.mouse.move(box["x"], box["y"])
+            await page.mouse.down()
+            await page.mouse.move(box["x"] + box["width"], box["y"] + box["height"], steps=10)
+            await page.mouse.up()
+            await asyncio.sleep(0.5)
             
-    except Exception as e:
-        st.warning(f"{target_id} の処理中にスキップが発生しました: {e}")
+    # 7. 修正ボタン実行（モーダル内のすべての『修正する』ボタンをJSで強制クリック）
+    fix_btns = page.locator(f"#{target_id} input[value='修正する']")
+    b_count = await fix_btns.count()
+    for i in range(b_count):
+        await fix_btns.nth(i).evaluate("node => node.click()")
+        await asyncio.sleep(1)
 
+# --- 自動化メイン処理 ---
 async def run_automation(cast_data, sub_image_paths):
     try:
         if not os.path.exists("/home/appuser/.cache/ms-playwright"):
@@ -104,20 +99,19 @@ async def run_automation(cast_data, sub_image_paths):
             await page.fill("#form_email", str(cast_data.get('ID')).strip())
             await page.fill("#form_password", str(cast_data.get('PASSWORD')).strip())
             await page.click("#form_submit")
-            await asyncio.sleep(2)
             await page.goto("https://ranking-deli.jp/admin/girls/create/")
 
             # 2. プロフィール入力
-            profile_fields = {
-                "#form_name": '名前', "#form_tall": '身長', "#form_bust": 'バスト',
-                "#form_waist": 'ウエスト', "#form_hip": 'ヒップ'
-            }
-            for selector, key in profile_fields.items():
-                await page.fill(selector, str(cast_data.get(key)))
+            await page.fill("#form_name", str(cast_data.get('名前')))
+            await page.fill("#form_tall", str(cast_data.get('身長')))
+            await page.fill("#form_bust", str(cast_data.get('バスト')))
+            await page.fill("#form_waist", str(cast_data.get('ウエスト')))
+            await page.fill("#form_hip", str(cast_data.get('ヒップ')))
 
-            cup = str(cast_data.get('カップ数', '')).strip().upper() 
-            if cup:
-                try: await page.locator("#form_cup").select_option(label=f"{cup}カップ")
+            cup_input = str(cast_data.get('カップ数', '')).strip().upper() 
+            if cup_input:
+                try:
+                    await page.locator("#form_cup").select_option(label=f"{cup_input}カップ")
                 except: pass
             
             # タグ選択
@@ -127,25 +121,23 @@ async def run_automation(cast_data, sub_image_paths):
                 if await page.locator(selector).count() > 0:
                     await page.locator(selector).check(force=True)
 
-            # 保存
-            await page.locator("#form_update-btn").evaluate("node => node.click()")
-            await asyncio.sleep(3)
+            await page.click("#form_update-btn", force=True)
+            await page.get_by_text("データを登録しました。").wait_for(state="visible", timeout=30000)
 
-            # 3. 画像1〜8の処理（ある分だけ実行）
+            # 3. 画像処理（メイン ＋ サブ）
             all_imgs = [cast_data.get('メイン画像')] + sub_image_paths
             for i, img_path in enumerate(all_imgs):
                 img_num = i + 1
-                if img_num > 8 or not img_path: continue
+                if img_num > 8: break
                 
                 tmp_name = f"temp_img_{img_num}.jpg"
                 if download_by_filename(img_path, tmp_name):
-                    st.info(f"📸 画像{img_num} をアップロード・編集しています...")
+                    st.info(f"📸 画像{img_num}を処理中...")
                     await handle_image_process(page, f"con{img_num}", tmp_name)
                     if os.path.exists(tmp_name): os.remove(tmp_name)
 
-            # 4. 最終確認保存
+            # 4. 最終保存
             await page.locator("#signup3").evaluate("node => node.click()")
-            await asyncio.sleep(2)
             return {"status": "success"}
 
         except Exception as e:
@@ -153,7 +145,7 @@ async def run_automation(cast_data, sub_image_paths):
         finally:
             await browser.close()
 
-# --- Streamlit UI ---
+# --- UI ---
 st.title("👸 キャスト一括登録システム")
 
 if st.button("🚀 実行開始"):
