@@ -59,13 +59,18 @@ async def run_automation(cast_data, sub_image_paths):
     if not download_by_filename(cast_data['メイン画像'], main_img_tmp):
         return {"status": "error", "message": f"メイン画像の取得失敗: {cast_data['メイン画像']}"}
 
+    async def run_automation(cast_data, sub_image_paths):
+    main_img_tmp = "temp_main.jpg"
+    if not download_google_drive_image(cast_data['メイン画像'], main_img_tmp):
+        return {"status": "error", "message": "メイン画像の取得に失敗しました。"}
+
     async with async_playwright() as p:
         browser = await p.chromium.launch(headless=True, args=['--lang=ja-JP'])
         context = await browser.new_context(viewport={'width': 1280, 'height': 2000}, locale="ja-JP")
         page = await context.new_page()
 
         try:
-            # 1. ログイン
+            # 1. ログイン & 登録画面へ
             st.info(f"🌐 ログイン中: {cast_data['名前']}")
             await page.goto("https://ranking-deli.jp/admin/login")
             await page.fill("#form_email", str(cast_data['ID'])) 
@@ -73,8 +78,8 @@ async def run_automation(cast_data, sub_image_paths):
             await page.click("#form_submit")
             await page.goto("https://ranking-deli.jp/admin/girls/create/")
 
-            # 2. プロフィール入力 (不足項目を追加)
-            st.info("✍️ プロフィール詳細を入力中...")
+            # 2. プロフィール入力
+            st.info("✍️ 基本情報を入力中...")
             await page.fill("#form_name", str(cast_data['名前']))
             await page.fill("#form_age", str(cast_data['若・妻']))
             await page.fill("#form_tall", str(cast_data['身長']))
@@ -87,10 +92,9 @@ async def run_automation(cast_data, sub_image_paths):
             try:
                 await page.select_option("#form_cup", label=cup_text)
             except:
-                pass # 失敗しても次に進む
-            
+                pass # 失敗しても続行
+
             # タグ選択
-            await page.locator('input[name="p_genre[1]"]').check()
             target_genre_ids = ["#genre17", "#genre30", "#genre31", "#genre33", "#genre34", "#genre36", 
                                 "#genre25", "#genre35", "#genre41", "#genre43", "#genre44", "#genre55", 
                                 "#genre73", "#genre74"]
@@ -99,14 +103,19 @@ async def run_automation(cast_data, sub_image_paths):
                 if await checkbox.count() > 0:
                     await checkbox.check(force=True)
 
-            # 基本情報登録
+            # 基本情報登録（保存ボタンクリック）
+            st.info("💾 基本情報を保存中...")
             async with page.expect_navigation(timeout=60000):
                 await page.click("#form_update-btn", force=True)
 
-            # --- 画像処理用共通関数 ---
-            async def upload_one_image(target_id, file_path, label):
+            # --- 画像処理共通関数 ---
+            async def upload_process(target_id, file_path, label):
                 st.info(f"📸 {label}をアップロード中...")
-                await page.click(f'a[data-target="{target_id}"]')
+                # 完了メッセージを待たず、ボタン自体が出るまで待つ
+                btn_selector = f'a[data-target="{target_id}"]'
+                await page.wait_for_selector(btn_selector, state="visible", timeout=20000)
+                await page.click(btn_selector)
+                
                 await page.locator('input[type="file"]').first.set_input_files(file_path)
                 await page.locator('button.upbtn').first.click()
                 
@@ -117,26 +126,26 @@ async def run_automation(cast_data, sub_image_paths):
                 if box:
                     await page.mouse.move(box["x"], box["y"])
                     await page.mouse.down()
-                    await page.mouse.move(box["x"] + box["width"], box["y"] + box["height"], steps=20)
+                    await page.mouse.move(box["x"] + box["width"], box["y"] + box["height"], steps=15)
                     await page.mouse.up()
                 
                 await page.get_by_role("button", name="修正する").click()
                 await asyncio.sleep(2)
 
-            # 3. メイン画像のアップロード (con1)
-            await page.get_by_text("データを登録しました。").wait_for(state="visible")
-            await upload_one_image("con1", main_img_tmp, "メイン画像")
+            # 3. メイン画像の登録 (con1)
+            # ここで「データを登録しました」を待たずに、ボタンの出現で判断
+            await upload_process("con1", main_img_tmp, "メイン画像")
 
-            # 4. サブ画像のアップロード (con2, con3...)
+            # 4. サブ画像のループ登録 (con2, con3...)
             for i, sub_url in enumerate(sub_image_paths):
                 if i >= 7: break # 合計8枚まで
                 target_num = i + 2
                 sub_tmp = f"temp_sub_{target_num}.jpg"
-                if download_by_filename(sub_url, sub_tmp):
-                    await upload_one_image(f"con{target_num}", sub_tmp, f"画像{target_num}")
+                if download_google_drive_image(sub_url, sub_tmp):
+                    await upload_process(f"con{target_num}", sub_tmp, f"画像{target_num}")
                     if os.path.exists(sub_tmp): os.remove(sub_tmp)
 
-            # 5. 連続登録へ移行 (完了)
+            # 5. 連続登録へ移行
             next_signup_btn = page.locator("#signup3")
             await next_signup_btn.wait_for(state="visible")
             await next_signup_btn.click()
@@ -144,7 +153,8 @@ async def run_automation(cast_data, sub_image_paths):
             return {"status": "success"}
 
         except Exception as e:
-            return {"status": "error", "message": str(e)}
+            await page.screenshot(path="error_log.png")
+            return {"status": "error", "message": f"エラー: {str(e)}"}
         finally:
             await browser.close()
             if os.path.exists(main_img_tmp): os.remove(main_img_tmp)
