@@ -54,7 +54,7 @@ def download_by_filename(path_str, save_path):
         return False
 
 # --- 自動化メイン処理 ---
-async def run_automation(cast_data, sub_image_paths):
+async def run_automation(cast_data, shop_id, shop_pass, sub_image_paths):
     # ボタンが押された後に Playwright インストールを実行
     try:
         if not os.path.exists("/home/appuser/.cache/ms-playwright"):
@@ -72,17 +72,16 @@ async def run_automation(cast_data, sub_image_paths):
         page = await context.new_page()
 
         try:
-            # 1. ログイン
+            # 1. ログイン (店舗IDと店舗PASSWORDを使用)
             await page.goto("https://ranking-deli.jp/admin/login")
-            await page.fill("#form_email", str(cast_data.get('ID')).strip())
-            await page.fill("#form_password", str(cast_data.get('PASSWORD')).strip())
+            await page.fill("#form_email", str(shop_id).strip())
+            await page.fill("#form_password", str(shop_pass).strip())
             await page.click("#form_submit")
             await page.goto("https://ranking-deli.jp/admin/girls/create/")
 
             # 2. プロフィール入力
             await page.fill("#form_name", str(cast_data.get('名前')))
             await page.fill("#form_tall", str(cast_data.get('身長')))
-            await page.fill("#form_age", str(cast_data.get('年齢')))
             await page.fill("#form_bust", str(cast_data.get('バスト')))
             await page.fill("#form_waist", str(cast_data.get('ウエスト')))
             await page.fill("#form_hip", str(cast_data.get('ヒップ')))
@@ -165,56 +164,63 @@ st.title("👸 キャスト一括登録システム")
 
 if st.button("🚀 実行開始"):
     try:
-        # スプレッドシート読み込み
         creds = Credentials.from_service_account_info(
             st.secrets["gcp_service_account"], 
             scopes=SCOPE
         )
         gs_client = gspread.authorize(creds)
 
-        sheet_info = gs_client.open_by_key(SPREADSHEET_ID).worksheet("キャスト情報")
-        sheet_images = gs_client.open_by_key(SPREADSHEET_ID).worksheet("キャスト画像")
-        
-        # 元の「名前ベース」でデータを取得（これでログイン失敗を防ぎます）
+        # 各シートの読み込み
+        spreadsheet = gs_client.open_by_key(SPREADSHEET_ID)
+        sheet_info = spreadsheet.worksheet("キャスト情報")
+        sheet_images = spreadsheet.worksheet("キャスト画像")
+        sheet_shops = spreadsheet.worksheet("シート3") # 登録店舗シート
+
         data_info = sheet_info.get_all_records()
         data_images = sheet_images.get_all_records()
+        data_shops = sheet_shops.get_all_records()
+
+        # 店舗情報を検索しやすいように辞書化
+        shop_dict = {str(s.get('登録店舗')).strip(): s for s in data_shops}
 
         count = 0
         for i, row in enumerate(data_info):
-            # ID/PASSWORDがあり、かつ「登録済」が空の場合に実行
-            # ※ヘッダー名はシートに合わせて「ID」または「ＩＤ」を自動判定
-            current_id = str(row.get('ＩＤ', row.get('ID', ''))).strip()
-            current_pass = str(row.get('PASSWORD', '')).strip()
-            is_registered = str(row.get('登録済', '')).strip()
+            cast_name = row.get('名前')
+            shop_name = str(row.get('登録店舗')).strip()
+            is_registered = str(row.get('登録済')).strip()
+            
+            # 店舗情報があるか確認
+            target_shop = shop_dict.get(shop_name)
 
-            if current_id and current_pass and not is_registered:
+            # 店舗ID/PASSがあり、かつ「登録済」が空の場合に実行
+            if target_shop and target_shop.get('店舗ID') and target_shop.get('店舗PASSWORD') and not is_registered:
                 count += 1
-                st.subheader(f"👤 {row.get('名前')}")
+                st.subheader(f"👤 {cast_name} (店舗: {shop_name})")
                 
-                # --- ここが修正ポイント：画像シートのCastIDと紐付け ---
-                sub_urls = [
-                    img['写真'] for img in data_images 
-                    if str(img.get('CastID')).strip() == current_id
-                ]
+                # キャスト情報A列(ID)とキャスト画像B列(CastID)で紐付け
+                target_id = str(row.get('ID')).strip()
+                sub_urls = [img['写真'] for img in data_images if str(img.get('CastID')).strip() == target_id]
 
-                with st.status(f"{row.get('名前')} さんの自動登録を実行中...") as status:
-                    # 以前と同じ形式でデータを渡します
-                    res = asyncio.run(run_automation(row, sub_urls))
+                with st.status(f"{cast_name} さんの自動登録を実行中...") as status:
+                    res = asyncio.run(run_automation(
+                        row, 
+                        target_shop.get('店舗ID'), 
+                        target_shop.get('店舗PASSWORD'), 
+                        sub_urls
+                    ))
                     
                     if res["status"] == "success":
-                        # 「登録済」列を更新（16列目）
-                        sheet_info.update_cell(i + 2, 16, "登録済")
+                        sheet_info.update_cell(i + 2, 14, "登録済") # 14はN列(登録済)
                         status.update(label="✅ 完了", state="complete")
                     else:
                         status.update(label="❌ エラー", state="error")
                         st.error(res["message"])
+            
+            elif not target_shop and shop_name and not is_registered:
+                st.warning(f"⚠️ {cast_name} さん：店舗「{shop_name}」のID情報がシート3に見つかりません。")
 
         if count == 0:
-            st.info("登録対象のキャスト（ID/PASSがあり、未登録の方）が見つかりませんでした。")
-
-    except Exception as e:
-        st.error(f"起動エラー: {e}")
-            st.info("登録対象のキャスト（ID/PASSがあり、未登録の方）が見つかりませんでした。")
+            st.info("登録対象のキャスト（未登録かつ店舗情報がある方）が見つかりませんでした。")
 
     except Exception as e:
         st.error(f"起動エラー: {e}")
