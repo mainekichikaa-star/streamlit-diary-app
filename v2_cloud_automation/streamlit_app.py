@@ -165,7 +165,7 @@ st.title("👸 キャスト一括登録システム")
 
 if st.button("🚀 実行開始"):
     try:
-        # スプレッドシート読み込みをボタン内に移動（フリーズ防止）
+        # スプレッドシート読み込み
         creds = Credentials.from_service_account_info(
             st.secrets["gcp_service_account"], 
             scopes=SCOPE
@@ -175,50 +175,45 @@ if st.button("🚀 実行開始"):
         sheet_info = gs_client.open_by_key(SPREADSHEET_ID).worksheet("キャスト情報")
         sheet_images = gs_client.open_by_key(SPREADSHEET_ID).worksheet("キャスト画像")
         
-        # 列番号で指定するために get_all_values() に変更
-        all_info_values = sheet_info.get_all_values()
-        all_image_values = sheet_images.get_all_values()
-        
-        # ヘッダーを除いたデータ
-        data_info_rows = all_info_values[1:]
-        data_images_rows = all_image_values[1:]
+        # 元の「名前ベース」でデータを取得（これでログイン失敗を防ぎます）
+        data_info = sheet_info.get_all_records()
+        data_images = sheet_images.get_all_records()
 
         count = 0
-        for i, row in enumerate(data_info_rows):
-            # 列番号での定義: A=0, C=2, L=11, N=13, P=15 (画像から推測)
-            row_id = str(row[0]).strip()
-            row_name = str(row[2]).strip()
-            row_pass = str(row[13]).strip()
-            row_registered = str(row[15]).strip()
-
+        for i, row in enumerate(data_info):
             # ID/PASSWORDがあり、かつ「登録済」が空の場合に実行
-            if row_id and row_pass and not row_registered:
+            # ※ヘッダー名はシートに合わせて「ID」または「ＩＤ」を自動判定
+            current_id = str(row.get('ＩＤ', row.get('ID', ''))).strip()
+            current_pass = str(row.get('PASSWORD', '')).strip()
+            is_registered = str(row.get('登録済', '')).strip()
+
+            if current_id and current_pass and not is_registered:
                 count += 1
-                st.subheader(f"👤 {row_name}")
+                st.subheader(f"👤 {row.get('名前')}")
                 
-                # 「キャスト画像」シートの列B(index 1)と紐付け
-                sub_urls = [img[2] for img in data_images_rows if str(img[1]).strip() == row_id]
+                # --- ここが修正ポイント：画像シートのCastIDと紐付け ---
+                sub_urls = [
+                    img['写真'] for img in data_images 
+                    if str(img.get('CastID')).strip() == current_id
+                ]
 
-                # 既存の run_automation に渡すための辞書を作成
-                cast_dict = {
-                    'ID': row_id,
-                    '名前': row_name,
-                    'PASSWORD': row_pass,
-                    'メイン画像': row[11], # 列L
-                    '身長': row[3], 'バスト': row[4], 'カップ数': row[5],
-                    'ウエスト': row[6], 'ヒップ': row[7], '年齢': row[8]
-                }
-
-                with st.status(f"{row_name} さんの自動登録を実行中...") as status:
-                    res = asyncio.run(run_automation(cast_dict, sub_urls))
+                with st.status(f"{row.get('名前')} さんの自動登録を実行中...") as status:
+                    # 以前と同じ形式でデータを渡します
+                    res = asyncio.run(run_automation(row, sub_urls))
+                    
                     if res["status"] == "success":
-                        sheet_info.update_cell(i + 2, 16, "登録済") # 列P
+                        # 「登録済」列を更新（16列目）
+                        sheet_info.update_cell(i + 2, 16, "登録済")
                         status.update(label="✅ 完了", state="complete")
                     else:
                         status.update(label="❌ エラー", state="error")
                         st.error(res["message"])
 
         if count == 0:
+            st.info("登録対象のキャスト（ID/PASSがあり、未登録の方）が見つかりませんでした。")
+
+    except Exception as e:
+        st.error(f"起動エラー: {e}")
             st.info("登録対象のキャスト（ID/PASSがあり、未登録の方）が見つかりませんでした。")
 
     except Exception as e:
