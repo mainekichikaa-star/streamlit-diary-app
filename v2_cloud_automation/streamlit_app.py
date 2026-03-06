@@ -13,12 +13,11 @@ from playwright.async_api import async_playwright
 # --- 1. インストール設定 (ここを完全に書き換え) ---
 @st.cache_resource
 def setup_playwright():
-    # ブラウザのインストール先を固定
-    os.environ["PLAYWRIGHT_BROWSERS_PATH"] = "0"
     try:
-        # すでにインストールされているか確認
-        subprocess.run(["playwright", "install", "chromium"], check=True)
+        # 依存関係（libnss3等）も含めてインストールを強制する
+        subprocess.run(["playwright", "install", "--with-deps", "chromium"], check=True)
     except Exception as e:
+        # エラーが出ても画面を止めないようにし、ログに詳細を出す
         st.error(f"Playwright Setup Error: {e}")
 
 setup_playwright()
