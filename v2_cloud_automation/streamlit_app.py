@@ -78,14 +78,28 @@ async def run_automation(cast_data, sub_image_paths):
             await page.click("#form_submit")
             await page.goto("https://ranking-deli.jp/admin/girls/create/")
 
-            # 2. プロフィール入力
+            # 2. プロフィール入力 (確実に値を代入)
             st.info("✍️ 基本情報を入力中...")
-            await page.fill("#form_name", str(cast_data['名前']))
-            await page.fill("#form_age", str(cast_data['若・妻']))
-            await page.fill("#form_tall", str(cast_data['身長']))
-            await page.fill("#form_bust", str(cast_data['バスト']))
-            await page.fill("#form_waist", str(cast_data['ウエスト']))
-            await page.fill("#form_hip", str(cast_data['ヒップ']))
+            
+            # スプレッドシートの列名が不安な場合、row.get() を使って安全に取得
+            name = str(cast_data.get('名前', ''))
+            age = str(cast_data.get('若・妻', '') or cast_data.get('年齢', ''))
+            tall = str(cast_data.get('身長', ''))
+            bust = str(cast_data.get('バスト', '') or cast_data.get('B', ''))
+            waist = str(cast_data.get('ウエスト', '') or cast_data.get('W', ''))
+            hip = str(cast_data.get('ヒップ', '') or cast_data.get('H', ''))
+
+            # 入力実行
+            await page.fill("#form_name", name)
+            await page.fill("#form_age", age)
+            await page.fill("#form_tall", tall)
+            await page.fill("#form_bust", bust)
+            await page.fill("#form_waist", waist)
+            await page.fill("#form_hip", hip)
+            
+            # もし上記が空欄だと保存できないため、デバッグ用ログ
+            if not all([age, tall, bust]):
+                return {"status": "error", "message": f"必須項目が空です (年齢:{age}, 身長:{tall})。スプレッドシートの列名を確認してください。"}
             
             # カップ数選択
             cup_text = f"{cast_data['カップ数']}カップ"
