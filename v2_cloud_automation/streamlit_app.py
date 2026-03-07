@@ -4,6 +4,7 @@ import os
 import subprocess
 import gspread
 import io
+import sys
 from google.oauth2.service_account import Credentials
 from googleapiclient.discovery import build
 from googleapiclient.http import MediaIoBaseDownload
@@ -16,8 +17,9 @@ SCOPE = [
     'https://www.googleapis.com/auth/drive'
 ]
 
-# ブラウザの保存先をユーザーディレクトリ内に指定
-PW_BROWSER_PATH = os.path.join(os.getcwd(), "pw-browsers")
+# ブラウザのインストール先をユーザーディレクトリ内に強制指定
+LOCAL_PW_PATH = os.path.join(os.getcwd(), "pw-browsers")
+os.environ["PLAYWRIGHT_BROWSERS_PATH"] = LOCAL_PW_PATH
 
 def get_drive_service():
     creds = Credentials.from_service_account_info(st.secrets["gcp_service_account"], scopes=SCOPE)
@@ -65,44 +67,40 @@ async def upload_and_crop(page, modal_id, file_path):
         
         await fix_btn.last.click(force=True)
         await asyncio.sleep(2)
-    except Exception: pass
+    except Exception:
+        st.warning(f"画像編集工程でスキップが発生しました: {modal_id}")
 
 async def run_automation(cast_row_list, shop_id, shop_pass, sub_image_paths):
+    # 列定義
     idx_name, idx_tall, idx_bust, idx_cup, idx_waist, idx_hip, idx_age, idx_main_img = 2, 3, 4, 5, 6, 7, 8, 11
     idx_catch, idx_girl_comment, idx_shop_comment = 14, 15, 16 
 
-    # 環境変数でパスを固定
-    os.environ["PLAYWRIGHT_BROWSERS_PATH"] = PW_BROWSER_PATH
-
-    # ブラウザがなければインストール
-    if not os.path.exists(PW_BROWSER_PATH):
+    # --- ブラウザのインストール (権限エラー回避版) ---
+    if not os.path.exists(LOCAL_PW_PATH):
         try:
-            subprocess.run(["python", "-m", "playwright", "install", "chromium"], check=True)
-        except:
-            pass
+            # システムのpythonを使用してローカルパスにインストール
+            subprocess.run([sys.executable, "-m", "playwright", "install", "chromium"], check=True)
+        except Exception as e:
+            st.error(f"Playwrightの準備に失敗しました: {e}")
 
     async with async_playwright() as p:
-        # パスを指定して起動
-        try:
-            browser = await p.chromium.launch(
-                headless=True, 
-                args=['--no-sandbox', '--disable-dev-shm-usage', '--lang=ja-JP']
-            )
-        except:
-            # 再試行ロジック
-            subprocess.run(["python", "-m", "playwright", "install", "chromium"], check=True)
-            browser = await p.chromium.launch(headless=True, args=['--no-sandbox'])
-
+        # ブラウザ起動 (以前の成功設定)
+        browser = await p.chromium.launch(
+            headless=True, 
+            args=['--no-sandbox', '--disable-dev-shm-usage', '--lang=ja-JP']
+        )
         context = await browser.new_context(viewport={'width': 1280, 'height': 2000}, locale="ja-JP")
         page = await context.new_page()
 
         try:
+            # 1. ログイン
             await page.goto("https://ranking-deli.jp/admin/login")
             await page.fill("#form_email", str(shop_id).strip())
             await page.fill("#form_password", str(shop_pass).strip())
             await page.click("#form_submit")
             await page.goto("https://ranking-deli.jp/admin/girls/create/")
 
+            # 2. 基本情報入力
             await page.fill("#form_name", str(cast_row_list[idx_name]))
             await page.fill("#form_age", str(cast_row_list[idx_age]))
             await page.fill("#form_tall", str(cast_row_list[idx_tall]))
@@ -110,6 +108,7 @@ async def run_automation(cast_row_list, shop_id, shop_pass, sub_image_paths):
             await page.fill("#form_waist", str(cast_row_list[idx_waist]))
             await page.fill("#form_hip", str(cast_row_list[idx_hip]))
 
+            # キャッチコピー・コメント (以前の機能)
             if len(cast_row_list) > idx_catch:
                 await page.fill("#form_catchcopy", str(cast_row_list[idx_catch]))
                 await page.fill("#form_title", str(cast_row_list[idx_catch]))
@@ -123,20 +122,24 @@ async def run_automation(cast_row_list, shop_id, shop_pass, sub_image_paths):
                 try: await page.locator("#form_cup").select_option(label=f"{cup_input}カップ")
                 except: pass
 
+            # ジャンル選択
             await page.locator('input[name="p_genre[1]"]').check()
             target_genre_ids = ["#genre17", "#genre30", "#genre31", "#genre33", "#genre34", "#genre36", "#genre25", "#genre35", "#genre41", "#genre43", "#genre44", "#genre55", "#genre73", "#genre74"]
             for selector in target_genre_ids:
                 if await page.locator(selector).count() > 0: await page.locator(selector).check(force=True)
 
+            # 登録実行
             await page.click("#form_update-btn", force=True)
             await page.get_by_text("データを登録しました。").wait_for(state="visible", timeout=30000)
 
+            # 3. メイン画像 (con1)
             main_tmp = "temp_main.jpg"
             if download_by_filename(cast_row_list[idx_main_img], main_tmp):
                 await page.click('a[data-target="con1"]')
                 await upload_and_crop(page, "#con1", main_tmp)
                 if os.path.exists(main_tmp): os.remove(main_tmp)
 
+            # 4. サブ画像 (con2 〜 con8)
             if sub_image_paths:
                 for i, sub_url in enumerate(sub_image_paths):
                     if i >= 7: break 
@@ -149,11 +152,15 @@ async def run_automation(cast_row_list, shop_id, shop_pass, sub_image_paths):
 
             await page.locator("#signup3").click()
             return {"status": "success"}
-        except Exception as e: return {"status": "error", "message": str(e)}
-        finally: await browser.close()
+
+        except Exception as e:
+            return {"status": "error", "message": str(e)}
+        finally:
+            await browser.close()
 
 # --- UI ---
 st.title("👸 キャスト一括登録システム")
+
 if st.button("🚀 通常登録 実行開始"):
     try:
         creds = Credentials.from_service_account_info(st.secrets["gcp_service_account"], scopes=SCOPE)
@@ -181,4 +188,5 @@ if st.button("🚀 通常登録 実行開始"):
                     else:
                         st.error(res["message"])
                         status.update(label="❌ エラー", state="error")
-    except Exception as e: st.error(f"起動エラー: {e}")
+    except Exception as e:
+        st.error(f"起動エラー: {e}")
