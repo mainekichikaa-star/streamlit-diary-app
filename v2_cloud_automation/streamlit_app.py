@@ -159,9 +159,13 @@ async def run_automation(cast_row_list, shop_id, shop_pass, sub_image_paths):
         finally:
             await browser.close()
 
+import asyncio
+from playwright.async_api import async_playwright
+import streamlit as st
+
 async def run_yoyaku_automation(s_id, s_pass):
     async with async_playwright() as p:
-        # ブラウザ起動
+        # ブラウザ起動（日本語設定）
         browser = await p.chromium.launch(headless=True, args=['--no-sandbox', '--lang=ja-JP'])
         context = await browser.new_context(viewport={'width': 1280, 'height': 1200})
         page = await context.new_page()
@@ -176,15 +180,38 @@ async def run_yoyaku_automation(s_id, s_pass):
             st.info("✅ ランキングデリ ログイン完了")
 
             # --- 2. ランキングデリから各データを取得 ---
-            # (プラン情報取得)
             await page.goto("https://ranking-deli.jp/admin/shopcharges/")
+            
+            # 2-1. メインプラン情報 (course[0])
             course_data = {"title": await page.locator("#form_course\\[0\\]\\[course_name\\]").get_attribute("value"), "prices": []}
             for i in range(1, 6):
                 t_val = await page.locator(f"#form_course\\[0\\]\\[time{i}\\]").get_attribute("value")
                 p_val = await page.locator(f"#form_course\\[0\\]\\[charge{i}\\]").get_attribute("value")
-                if t_val and p_val: course_data["prices"].append({"time": t_val, "price": p_val})
+                if t_val and p_val:
+                    course_data["prices"].append({"time": t_val, "price": p_val})
 
-            # (オプション情報取得)
+            # 2-2. その他料金 (course[1]) から 入会金・指名料 を取得
+            # 初期値設定（入会金はデフォルト空、指名料はデリから取れない場合を考慮して0）
+            extra_fees = {"admission": "", "nomination": "0", "repeat": "0"}
+            for i in range(1, 6):
+                label = await page.locator(f"#form_course\\[1\\]\\[time{i}\\]").get_attribute("value") or ""
+                val = await page.locator(f"#form_course\\[1\\]\\[charge{i}\\]").get_attribute("value") or ""
+                
+                # 入会金の判定（無料や0なら空、それ以外なら数字を抽出）
+                if "入会金" in label:
+                    clean_val = "".join(filter(str.isdigit, val))
+                    if clean_val and clean_val != "0":
+                        extra_fees["admission"] = clean_val
+                
+                # 指名料（通常）の判定
+                if any(x in label for x in ["指名料", "ネット指名料", "指名"]):
+                    extra_fees["nomination"] = "".join(filter(str.isdigit, val)) or "0"
+
+                # 本指名の判定
+                if any(x in label for x in ["本指名", "本指名料"]):
+                    extra_fees["repeat"] = "".join(filter(str.isdigit, val)) or "0"
+
+            # 2-3. オプション情報取得
             await page.goto("https://ranking-deli.jp/admin/shopoptions/")
             option_data = []
             for i in range(20):
@@ -193,10 +220,11 @@ async def run_yoyaku_automation(s_id, s_pass):
                 if await opt_name_el.count() > 0:
                     name = await opt_name_el.get_attribute("value")
                     fee = await opt_fee_el.get_attribute("value")
-                    if name and name.strip(): option_data.append({"name": name.strip(), "fee": fee or "0"})
+                    if name and name.strip():
+                        option_data.append({"name": name.strip(), "fee": fee or "0"})
                 else: break
 
-            # (交通費情報取得)
+            # 2-4. 交通費情報取得
             await page.goto("https://ranking-deli.jp/admin/shop/transportation")
             transport_data = []
             fee_divs = await page.locator(".carfare-fee-div").all()
@@ -206,9 +234,10 @@ async def run_yoyaku_automation(s_id, s_pass):
                 area_elements = await div.locator(".draggable.shop-area").all()
                 for area_el in area_elements:
                     area_name = (await area_el.inner_text()).strip()
-                    if area_name: transport_data.append({"area": area_name, "fee": fee_val})
+                    if area_name:
+                        transport_data.append({"area": area_name, "fee": fee_val})
             
-            st.info(f"📊 取得完了: プラン({len(course_data['prices'])}件) / オプション({len(option_data)}件) / 交通費({len(transport_data)}件)")
+            st.info(f"📊 取得完了: プラン({len(course_data['prices'])}) / 入会金({extra_fees['admission'] or '無'}) / 指名料({extra_fees['nomination']})")
 
             # --- 3. 予約管理（駅ちかネット）へデータ反映 ---
             async with context.expect_page() as new_page_info:
@@ -216,20 +245,23 @@ async def run_yoyaku_automation(s_id, s_pass):
             yoyaku_page = await new_page_info.value
             await yoyaku_page.wait_for_load_state()
 
-            # 設定メニュー展開
+            # 設定メニューを展開
             await yoyaku_page.locator(".listItem.setting .menuTxt").click()
             await asyncio.sleep(1)
 
-            # 3-1. 予約設定（公開・受付）
+            # 3-1. 予約設定（公開・受付・入会金）
             await yoyaku_page.locator("a.acListTxt", has_text="予約設定").first.click()
             await yoyaku_page.locator("label[for='release']").click()
             await yoyaku_page.locator("label[for='freeReserveAccept']").click()
+            # 入会金の入力（空文字なら未入力、値があれば入力）
+            await yoyaku_page.locator("input[name='admission_fee']").fill(extra_fees["admission"])
             await yoyaku_page.locator("button.saveBt", has_text="保存").click()
             await asyncio.sleep(1)
 
             # 3-2. 料金コース同期
             await yoyaku_page.locator("a.acListTxt", has_text="料金コース").first.click()
-            if course_data["title"]: await yoyaku_page.locator("input[name='courses[0][name]']").fill(course_data["title"])
+            if course_data["title"]:
+                await yoyaku_page.locator("input[name='courses[0][name]']").fill(course_data["title"])
             for idx, item in enumerate(course_data["prices"]):
                 time_sel = yoyaku_page.locator(f"select[name='courses[0][content][{idx}][time]']")
                 price_in = yoyaku_page.locator(f"input[name='courses[0][content][{idx}][fee]']")
@@ -260,9 +292,9 @@ async def run_yoyaku_automation(s_id, s_pass):
             await asyncio.sleep(1)
 
             # 3-5. チャット設定
+            target_email = "isgroup0001@gmail.com"
             await yoyaku_page.locator("a.acListTxt", has_text="チャット設定").first.click()
             await yoyaku_page.locator("label[for='Release']").click()
-            target_email = "isgroup0001@gmail.com"
             c_emails = await yoyaku_page.locator("input[type='email']").all_attribute_values("value")
             if target_email not in [e.strip() for e in c_emails if e]:
                 await yoyaku_page.locator("button.js-mail_user_add_button").click()
@@ -284,13 +316,13 @@ async def run_yoyaku_automation(s_id, s_pass):
             await yoyaku_page.wait_for_load_state()
             # 「女の子すべて」にチェック
             await yoyaku_page.locator("label[for='allGirls']").click()
-            # 指名料入力 (本指名: 1000円 / リピート指名: 2000円)
-            await yoyaku_page.locator("#nomination-input").fill("1000")
-            await yoyaku_page.locator("#repeat-nomination-input").fill("2000")
+            # デリ側から取得した指名料をセット
+            await yoyaku_page.locator("#nomination-input").fill(extra_fees["nomination"])
+            await yoyaku_page.locator("#repeat-nomination-input").fill(extra_fees["repeat"])
             # 一括保存ボタンをクリック
             await yoyaku_page.locator("button.js-bulk-form-btn").click()
             
-            st.info("💾 すべての設定項目（女の子指名料含む）を保存完了しました")
+            st.info(f"💾 同期完了 (入会金:{extra_fees['admission'] or '未設定'} / 指名:{extra_fees['nomination']} / 本指名:{extra_fees['repeat']})")
             await asyncio.sleep(2)
             return {"status": "success", "url": yoyaku_page.url}
 
