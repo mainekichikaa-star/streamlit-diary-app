@@ -16,6 +16,9 @@ SCOPE = [
     'https://www.googleapis.com/auth/drive'
 ]
 
+# ブラウザの保存先をユーザーディレクトリ内に指定
+PW_BROWSER_PATH = os.path.join(os.getcwd(), "pw-browsers")
+
 def get_drive_service():
     creds = Credentials.from_service_account_info(st.secrets["gcp_service_account"], scopes=SCOPE)
     return build('drive', 'v3', credentials=creds)
@@ -68,23 +71,28 @@ async def run_automation(cast_row_list, shop_id, shop_pass, sub_image_paths):
     idx_name, idx_tall, idx_bust, idx_cup, idx_waist, idx_hip, idx_age, idx_main_img = 2, 3, 4, 5, 6, 7, 8, 11
     idx_catch, idx_girl_comment, idx_shop_comment = 14, 15, 16 
 
-    # --- インストール先を環境変数で固定（権限エラー対策） ---
-    os.environ["PLAYWRIGHT_BROWSERS_PATH"] = "0" # 0は「現在の実行フォルダ内」を指す
+    # 環境変数でパスを固定
+    os.environ["PLAYWRIGHT_BROWSERS_PATH"] = PW_BROWSER_PATH
 
-    try:
-        # すでにブラウザがあるか確認し、なければインストール
-        if not os.path.exists("pw-browsers"):
-             subprocess.run(["python", "-m", "playwright", "install", "chromium"], check=True)
-    except Exception as e:
-        # 万が一失敗しても続行を試みる
-        pass
+    # ブラウザがなければインストール
+    if not os.path.exists(PW_BROWSER_PATH):
+        try:
+            subprocess.run(["python", "-m", "playwright", "install", "chromium"], check=True)
+        except:
+            pass
 
     async with async_playwright() as p:
-        # ブラウザ起動（以前の成功設定を維持）
-        browser = await p.chromium.launch(
-            headless=True, 
-            args=['--no-sandbox', '--disable-dev-shm-usage', '--lang=ja-JP']
-        )
+        # パスを指定して起動
+        try:
+            browser = await p.chromium.launch(
+                headless=True, 
+                args=['--no-sandbox', '--disable-dev-shm-usage', '--lang=ja-JP']
+            )
+        except:
+            # 再試行ロジック
+            subprocess.run(["python", "-m", "playwright", "install", "chromium"], check=True)
+            browser = await p.chromium.launch(headless=True, args=['--no-sandbox'])
+
         context = await browser.new_context(viewport={'width': 1280, 'height': 2000}, locale="ja-JP")
         page = await context.new_page()
 
@@ -95,7 +103,6 @@ async def run_automation(cast_row_list, shop_id, shop_pass, sub_image_paths):
             await page.click("#form_submit")
             await page.goto("https://ranking-deli.jp/admin/girls/create/")
 
-            # プロフィール入力
             await page.fill("#form_name", str(cast_row_list[idx_name]))
             await page.fill("#form_age", str(cast_row_list[idx_age]))
             await page.fill("#form_tall", str(cast_row_list[idx_tall]))
@@ -103,7 +110,6 @@ async def run_automation(cast_row_list, shop_id, shop_pass, sub_image_paths):
             await page.fill("#form_waist", str(cast_row_list[idx_waist]))
             await page.fill("#form_hip", str(cast_row_list[idx_hip]))
 
-            # O, P, Q列
             if len(cast_row_list) > idx_catch:
                 await page.fill("#form_catchcopy", str(cast_row_list[idx_catch]))
                 await page.fill("#form_title", str(cast_row_list[idx_catch]))
@@ -122,11 +128,9 @@ async def run_automation(cast_row_list, shop_id, shop_pass, sub_image_paths):
             for selector in target_genre_ids:
                 if await page.locator(selector).count() > 0: await page.locator(selector).check(force=True)
 
-            # 登録実行
             await page.click("#form_update-btn", force=True)
             await page.get_by_text("データを登録しました。").wait_for(state="visible", timeout=30000)
 
-            # 画像
             main_tmp = "temp_main.jpg"
             if download_by_filename(cast_row_list[idx_main_img], main_tmp):
                 await page.click('a[data-target="con1"]')
