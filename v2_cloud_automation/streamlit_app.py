@@ -255,5 +255,76 @@ with tab1:
         st.error(f"初期化エラー: {e}")
 
 with tab2:
-    st.info("🚉 駅ちかネット予約登録機能は現在準備中です。")
-    st.write("ここに駅ちかネット用の登録ロジックを実装できます。")
+    st.subheader("🚉 駅ちかネット予約登録 (e-yoyaku.jp)")
+    
+    # Tab 1で作成した shop_status を利用して店舗選択を表示
+    st.write("ネット予約設定を行う店舗を選択してください:")
+    selected_yoyaku_shops = []
+    
+    y_cols = st.columns(3)
+    for idx, shop in enumerate(shop_status):
+        with y_cols[idx % 3]:
+            # Tab 2専用のキーでチェックボックスを作成
+            is_y_selected = st.checkbox(f"{shop['店舗名']} を設定", key=f"yoyaku_{idx}")
+            if is_y_selected:
+                selected_yoyaku_shops.append(shop)
+
+    st.divider()
+
+    if st.button("🌐 ネット予約管理画面へログイン・設定開始", type="primary"):
+        if not selected_yoyaku_shops:
+            st.warning("店舗が選択されていません。")
+        else:
+            for shop in selected_yoyaku_shops:
+                st.markdown(f"### 🏢 店舗: {shop['店舗名']} の予約管理を処理中...")
+                
+                async def run_yoyaku_automation(s_id, s_pass):
+                    async with async_playwright() as p:
+                        browser = await p.chromium.launch(headless=True, args=['--no-sandbox', '--lang=ja-JP'])
+                        context = await browser.new_context(viewport={'width': 1280, 'height': 1200})
+                        page = await context.new_page()
+                        
+                        try:
+                            # 1. まずはランキングデリにログイン
+                            await page.goto("https://ranking-deli.jp/admin/login")
+                            await page.fill("#form_email", str(s_id).strip())
+                            await page.fill("#form_password", str(s_pass).strip())
+                            await page.click("#form_submit")
+                            await page.wait_for_url("**/admin/top/**", timeout=15000)
+
+                            # 2. 「予約管理」リンクをクリックして新しいタブを開くのを待機
+                            # context.expect_page() を使うことで、クリックで開いた別タブを捕捉
+                            async with context.expect_page() as new_page_info:
+                                # a.web_link が「予約管理」ボタン
+                                await page.locator("a.web_link").click()
+                            
+                            yoyaku_page = await new_page_info.value
+                            await yoyaku_page.wait_for_load_state()
+                            
+                            # 3. 駅ちかネット予約管理画面 (yoyaku_page) での操作
+                            # ここにログイン後の登録ロジックを記述します
+                            current_url = yoyaku_page.url
+                            st.info(f"🔗 予約管理画面に到達: {current_url}")
+                            
+                            # 例: キャスト一覧ページへ移動するなど
+                            # await yoyaku_page.goto("https://e-yoyaku.jp/admin/cast/") 
+                            
+                            # --- ここに具体的な入力・登録処理を完コピで追加 ---
+                            
+                            await asyncio.sleep(3) # 確認用
+                            return {"status": "success", "url": current_url}
+
+                        except Exception as e:
+                            return {"status": "error", "message": str(e)}
+                        finally:
+                            await browser.close()
+
+                # 実行
+                with st.status(f"{shop['店舗名']} のセッションを確立中...") as status:
+                    res = asyncio.run(run_yoyaku_automation(shop['ID'], shop['raw_pass']))
+                    if res["status"] == "success":
+                        status.update(label=f"✅ {shop['店舗名']} ログイン成功", state="complete")
+                        st.success(f"予約管理画面 ({res['url']}) へのアクセスが完了しました。")
+                    else:
+                        st.error(f"エラー: {res['message']}")
+                        status.update(label="❌ 失敗", state="error")
