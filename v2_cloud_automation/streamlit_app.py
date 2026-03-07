@@ -293,7 +293,7 @@ with tab2:
                             await page.fill("#form_email", str(s_id).strip())
                             await page.fill("#form_password", str(s_pass).strip())
                             await page.click("#form_submit")
-                            await page.wait_for_url("**/admin/top/**", timeout=15000)
+                            await page.wait_for_load_state("networkidle")
 
                             # --- 2. ランキングデリから各データを取得 ---
                             await page.goto("https://ranking-deli.jp/admin/shopcharges/")
