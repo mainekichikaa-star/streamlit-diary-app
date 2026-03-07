@@ -159,6 +159,92 @@ async def run_automation(cast_row_list, shop_id, shop_pass, sub_image_paths):
         finally:
             await browser.close()
 
+async def run_yoyaku_automation(s_id, s_pass):
+    async with async_playwright() as p:
+        # 人間味を出すため、スローモーション設定(ms)を入れることも可能
+        browser = await p.chromium.launch(headless=True, args=['--no-sandbox', '--lang=ja-JP'])
+        context = await browser.new_context(viewport={'width': 1280, 'height': 1200})
+        page = await context.new_page()
+        
+        try:
+            # 1. ランキングデリログイン
+            await page.goto("https://ranking-deli.jp/admin/login")
+            await page.fill("#form_email", str(s_id).strip())
+            await asyncio.sleep(1) # 入力の間の「タメ」
+            await page.fill("#form_password", str(s_pass).strip())
+            await asyncio.sleep(1)
+            await page.click("#form_submit")
+            await page.wait_for_url("**/admin/top/**", timeout=15000)
+            st.info("✅ ランキングデリ ログイン完了")
+
+            # 2. 「予約管理」を別タブで開く
+            async with context.expect_page() as new_page_info:
+                await page.locator("a.web_link").click()
+            
+            yoyaku_page = await new_page_info.value
+            await yoyaku_page.wait_for_load_state()
+            st.info("🔗 予約管理画面へ遷移しました")
+            await asyncio.sleep(2) # 読み込み待ち（人間らしい間隔）
+
+            # 3. 「各種設定」をクリックしてメニューを展開
+            # メニューが閉じている可能性を考慮してクリック
+            setting_menu = yoyaku_page.locator(".listItem.setting .menuTxt")
+            await setting_menu.scroll_into_view_if_needed()
+            await asyncio.sleep(1)
+            await setting_menu.click()
+            await asyncio.sleep(1)
+
+            # 4. 「予約設定」をクリック
+            # セレクターはHTMLに基づき、予約設定のリンクを指定
+            await yoyaku_page.locator("a.acListTxt", has_text="予約設定").first.click()
+            await yoyaku_page.wait_for_load_state()
+            st.info("⚙️ 予約設定ページを開きました")
+            await asyncio.sleep(2)
+
+            # --- ここから人間らしい設定操作 ---
+
+            # 5. 「公開」を選択
+            # label要素をクリックすることで、人間がラジオボタンを選んでいる動きを再現
+            release_label = yoyaku_page.locator("label[for='release']")
+            await release_label.scroll_into_view_if_needed()
+            await asyncio.sleep(1)
+            await release_label.click()
+            st.write("・公開を選択")
+
+            # 6. 「受付」を選択
+            accept_label = yoyaku_page.locator("label[for='freeReserveAccept']")
+            await accept_label.scroll_into_view_if_needed()
+            await asyncio.sleep(1)
+            await accept_label.click()
+            st.write("・受付を選択")
+
+            # 7. 保存ボタンをクリック
+            save_btn = yoyaku_page.locator("button.saveBt", has_text="保存")
+            await save_btn.scroll_into_view_if_needed()
+            await asyncio.sleep(1)
+            
+            # マウスをボタンの上に移動させてからクリック（人間らしさの強化）
+            box = await save_btn.bounding_box()
+            if box:
+                await yoyaku_page.mouse.move(box["x"] + box["width"]/2, box["y"] + box["height"]/2)
+                await asyncio.sleep(0.5)
+            
+            await save_btn.click()
+            st.info("💾 設定を保存しました")
+
+            # 保存後の反映待ち
+            await asyncio.sleep(3)
+            
+            return {"status": "success", "url": yoyaku_page.url}
+
+        except Exception as e:
+            # 失敗時は証拠を残す
+            if 'yoyaku_page' in locals():
+                await yoyaku_page.screenshot(path=f"yoyaku_error_{s_id}.png")
+            return {"status": "error", "message": str(e)}
+        finally:
+            await browser.close()
+
 # --- UI ---
 st.set_page_config(page_title="キャスト一括登録", layout="wide")
 st.title("👸 キャスト一括登録システム")
