@@ -69,19 +69,15 @@ async def run_automation(cast_row_list, shop_id, shop_pass, sub_image_paths):
     idx_name, idx_tall, idx_bust, idx_cup, idx_waist, idx_hip, idx_age, idx_main_img = 2, 3, 4, 5, 6, 7, 8, 11
     idx_catchcopy, idx_girl_comment, idx_shop_comment = 14, 15, 16
     
-    # --- Playwrightブラウザの強制インストール ---
-    # Streamlit Cloud環境では起動時にブラウザが存在しないため、明示的にコマンドを実行します
+    # ブラウザ本体のインストールだけにする（depsはpackages.txtに任せる）
     try:
-        # chromiumのみをインストール
-        cmd = ["python", "-m", "playwright", "install", "chromium"]
-        subprocess.run(cmd, check=True, capture_output=True)
+        subprocess.run(["python", "-m", "playwright", "install", "chromium"], check=True)
     except Exception as e:
-        st.error(f"Playwright Install Error: {e}")
+        st.warning(f"Browser install check: {e}")
 
     async with async_playwright() as p:
-        try:
-            # ブラウザ起動
-            browser = await p.chromium.launch(headless=True, args=['--lang=ja-JP'])
+        # 起動
+        browser = await p.chromium.launch(headless=True, args=['--lang=ja-JP'])
         except Exception:
             # 万が一失敗した場合は、依存関係を含めて再試行
             subprocess.run(["python", "-m", "playwright", "install-deps", "chromium"], check=True)
