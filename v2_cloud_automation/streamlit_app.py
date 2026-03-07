@@ -16,7 +16,6 @@ SCOPE = [
     'https://www.googleapis.com/auth/drive'
 ]
 
-# --- 共通関数 ---
 def get_drive_service():
     creds = Credentials.from_service_account_info(st.secrets["gcp_service_account"], scopes=SCOPE)
     return build('drive', 'v3', credentials=creds)
@@ -63,32 +62,22 @@ async def upload_and_crop(page, modal_id, file_path):
     except Exception as e:
         st.warning(f"画像編集工程でスキップが発生しました: {modal_id}")
 
-# --- オートメーション・ロジック ---
 async def run_automation(cast_row_list, shop_id, shop_pass, sub_image_paths):
-    # インデックス定義
+    # インデックス
     idx_name, idx_tall, idx_bust, idx_cup, idx_waist, idx_hip, idx_age, idx_main_img = 2, 3, 4, 5, 6, 7, 8, 11
     idx_catchcopy, idx_girl_comment, idx_shop_comment = 14, 15, 16
     
-    # ブラウザ本体のインストールだけにする（depsはpackages.txtに任せる）
     try:
-        subprocess.run(["python", "-m", "playwright", "install", "chromium"], check=True)
-    except Exception as e:
-        st.warning(f"Browser install check: {e}")
+        if not os.path.exists("/home/appuser/.cache/ms-playwright"):
+            subprocess.run(["python", "-m", "playwright", "install", "chromium"], check=True)
+    except: pass
 
     async with async_playwright() as p:
-        # 起動
         browser = await p.chromium.launch(headless=True, args=['--lang=ja-JP'])
-        except Exception:
-            # 万が一失敗した場合は、依存関係を含めて再試行
-            subprocess.run(["python", "-m", "playwright", "install-deps", "chromium"], check=True)
-            subprocess.run(["python", "-m", "playwright", "install", "chromium"], check=True)
-            browser = await p.chromium.launch(headless=True, args=['--lang=ja-JP'])
-            
         context = await browser.new_context(viewport={'width': 1280, 'height': 2000}, locale="ja-JP")
         page = await context.new_page()
 
         try:
-            # --- ログイン処理 ---
             await page.goto("https://ranking-deli.jp/admin/login")
             await page.fill("#form_email", str(shop_id).strip())
             await page.fill("#form_password", str(shop_pass).strip())
@@ -107,11 +96,12 @@ async def run_automation(cast_row_list, shop_id, shop_pass, sub_image_paths):
                 try: await page.locator("#form_cup").select_option(label=f"{cup_input}カップ")
                 except: pass
 
+            # O列・P列・Q列の入力追加
             catchcopy_val = str(cast_row_list[idx_catchcopy])
-            await page.fill("#form_catchcopy", catchcopy_val)
-            await page.fill("#form_title", catchcopy_val)
-            await page.fill("#form_girl_comments", str(cast_row_list[idx_girl_comment]))
-            await page.fill("#form_comments", str(cast_row_list[idx_shop_comment]))
+            await page.fill("#form_catchcopy", catchcopy_val) # O列: キャッチコピー
+            await page.fill("#form_title", catchcopy_val)      # メッセージタイトル(O列)
+            await page.fill("#form_girl_comments", str(cast_row_list[idx_girl_comment])) # P列: 女コメント
+            await page.fill("#form_comments", str(cast_row_list[idx_shop_comment]))      # Q列: 店コメント
 
             await page.locator('input[name="p_genre[1]"]').check()
             target_genre_ids = ["#genre17", "#genre30", "#genre31", "#genre33", "#genre34", "#genre36", "#genre25", "#genre35", "#genre41", "#genre43", "#genre44", "#genre55", "#genre73", "#genre74"]
@@ -141,18 +131,18 @@ async def run_automation(cast_row_list, shop_id, shop_pass, sub_image_paths):
 
             await page.locator("#signup3").click()
             return {"status": "success"}
+
         except Exception as e: return {"status": "error", "message": f"工程エラー: {str(e)}"}
         finally: await browser.close()
 
 # --- メイン UI ---
-st.set_page_config(page_title="総合管理システム", layout="wide")
+st.set_page_config(page_title="一括登録システム", layout="wide")
 
-# 上部タブによる切り替え
 tab1, tab2 = st.tabs(["👸 キャスト一括登録システム", "🚉 駅ちかネット予約登録システム"])
 
 with tab1:
-    st.header("キャスト一括登録")
-    if st.button("🚀 キャスト登録 実行開始"):
+    st.title("👸 キャスト一括登録システム")
+    if st.button("🚀 実行開始", key="btn_tab1"):
         try:
             creds = Credentials.from_service_account_info(st.secrets["gcp_service_account"], scopes=SCOPE)
             gs_client = gspread.authorize(creds)
@@ -184,8 +174,5 @@ with tab1:
         except Exception as e: st.error(f"起動エラー: {e}")
 
 with tab2:
-    st.header("駅ちかネット予約登録")
-    st.info("ここに駅ちかネット予約登録システムの機能を実装します。")
-    # ロジックが共通であれば流用、別であればここにコードを記述
-    if st.button("🚀 駅ちか予約登録 実行開始"):
-        st.warning("現在、このページの実行処理を構成中です。")
+    st.title("🚉 駅ちかネット予約登録システム")
+    st.info("このタブに駅ちかネット予約登録のロジックを実装可能です。")
