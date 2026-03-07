@@ -73,7 +73,11 @@ async def upload_and_crop(page, modal_id, file_path):
         st.warning(f"画像編集工程でスキップが発生しました: {modal_id}")
 
 async def run_automation(cast_row_list, shop_id, shop_pass, sub_image_paths):
+    # インデックス定義 (O列=14, P列=15, Q列=16)
     idx_name, idx_tall, idx_bust, idx_cup, idx_waist, idx_hip, idx_age, idx_main_img = 2, 3, 4, 5, 6, 7, 8, 11
+    idx_catchcopy = 14  # O列: キャッチコピー
+    idx_girl_comment = 15  # P列: 女コメント
+    idx_shop_comment = 16  # Q列: 店コメント
     
     try:
         if not os.path.exists("/home/appuser/.cache/ms-playwright"):
@@ -86,13 +90,14 @@ async def run_automation(cast_row_list, shop_id, shop_pass, sub_image_paths):
         page = await context.new_page()
 
         try:
-            # 1. ログイン〜基本情報入力
+            # 1. ログイン
             await page.goto("https://ranking-deli.jp/admin/login")
             await page.fill("#form_email", str(shop_id).strip())
             await page.fill("#form_password", str(shop_pass).strip())
             await page.click("#form_submit")
             await page.goto("https://ranking-deli.jp/admin/girls/create/")
 
+            # 2. 基本情報入力
             await page.fill("#form_name", str(cast_row_list[idx_name]))
             await page.fill("#form_age", str(cast_row_list[idx_age]))
             await page.fill("#form_tall", str(cast_row_list[idx_tall]))
@@ -105,11 +110,28 @@ async def run_automation(cast_row_list, shop_id, shop_pass, sub_image_paths):
                 try: await page.locator("#form_cup").select_option(label=f"{cup_input}カップ")
                 except: pass
 
+            # --- 追加: キャッチコピー・コメント入力 ---
+            # キャッチコピー (O列)
+            catchcopy_val = str(cast_row_list[idx_catchcopy])
+            await page.fill("#form_catchcopy", catchcopy_val)
+            
+            # メッセージタイトル (キャッチコピーと同じものを入れる)
+            await page.fill("#form_title", catchcopy_val)
+
+            # 女の子からのメッセージ (P列)
+            await page.fill("#form_girl_comments", str(cast_row_list[idx_girl_comment]))
+
+            # お店からのメッセージ (Q列)
+            await page.fill("#form_comments", str(cast_row_list[idx_shop_comment]))
+            # ---------------------------------------
+
+            # 3. ジャンル選択
             await page.locator('input[name="p_genre[1]"]').check()
             target_genre_ids = ["#genre17", "#genre30", "#genre31", "#genre33", "#genre34", "#genre36", "#genre25", "#genre35", "#genre41", "#genre43", "#genre44", "#genre55", "#genre73", "#genre74"]
             for selector in target_genre_ids:
                 if await page.locator(selector).count() > 0: await page.locator(selector).check(force=True)
 
+            # 登録実行 (画像アップロード前に一度保存)
             await page.click("#form_update-btn", force=True)
             await page.get_by_text("データを登録しました。").wait_for(state="visible", timeout=30000)
 
@@ -124,7 +146,7 @@ async def run_automation(cast_row_list, shop_id, shop_pass, sub_image_paths):
             # 5. サブ画像 (con2 〜 con8)
             if sub_image_paths:
                 for i, sub_url in enumerate(sub_image_paths):
-                    if i >= 7: break # 最大 con8 まで
+                    if i >= 7: break 
                     modal_id = f"#con{i+2}"
                     sub_tmp = f"temp_sub_{i}.jpg"
                     if download_by_filename(sub_url, sub_tmp):
