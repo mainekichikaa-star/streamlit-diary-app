@@ -39,7 +39,6 @@ def download_by_filename(path_str, save_path):
         return True
     except: return False
 
-# 画像アップロード〜Jcrop〜修正の一連の工程
 async def upload_and_crop(page, modal_id, file_path):
     await page.locator(f"{modal_id} input[type='file']").set_input_files(file_path)
     await asyncio.sleep(2)
@@ -63,34 +62,36 @@ async def upload_and_crop(page, modal_id, file_path):
         
         await fix_btn.last.click(force=True)
         await asyncio.sleep(2)
-    except Exception as e:
-        st.warning(f"画像編集工程でスキップが発生しました: {modal_id}")
+    except Exception:
+        pass
 
 async def run_automation(cast_row_list, shop_id, shop_pass, sub_image_paths):
-    # 列番号（以前の状態）
+    # 列定義 (元のまま)
     idx_name, idx_tall, idx_bust, idx_cup, idx_waist, idx_hip, idx_age, idx_main_img = 2, 3, 4, 5, 6, 7, 8, 11
-    # 追加項目 (O, P, Q列)
     idx_catch, idx_girl_comment, idx_shop_comment = 14, 15, 16 
 
-    # 以前のインストールロジック
+    # --- 以前のインストールロジックをそのまま適用 ---
     try:
-        if not os.path.exists("/home/appuser/.cache/ms-playwright"):
-            subprocess.run(["python", "-m", "playwright", "install", "chromium"], check=True)
-    except: pass
+        # パス指定をせず、カレント環境のpythonでinstallを叩く
+        subprocess.run(["python", "-m", "playwright", "install", "chromium"], check=True)
+    except Exception as e:
+        st.error(f"Playwright Install Error: {e}")
 
     async with async_playwright() as p:
-        browser = await p.chromium.launch(headless=True, args=['--lang=ja-JP', '--no-sandbox'])
+        # 以前の成功オプション。--no-sandboxを明示。
+        browser = await p.chromium.launch(headless=True, args=['--no-sandbox', '--disable-dev-shm-usage', '--lang=ja-JP'])
         context = await browser.new_context(viewport={'width': 1280, 'height': 2000}, locale="ja-JP")
         page = await context.new_page()
 
         try:
+            # 1. ログイン
             await page.goto("https://ranking-deli.jp/admin/login")
             await page.fill("#form_email", str(shop_id).strip())
             await page.fill("#form_password", str(shop_pass).strip())
             await page.click("#form_submit")
             await page.goto("https://ranking-deli.jp/admin/girls/create/")
 
-            # プロフィール入力
+            # 2. プロフィール
             await page.fill("#form_name", str(cast_row_list[idx_name]))
             await page.fill("#form_age", str(cast_row_list[idx_age]))
             await page.fill("#form_tall", str(cast_row_list[idx_tall]))
@@ -98,7 +99,7 @@ async def run_automation(cast_row_list, shop_id, shop_pass, sub_image_paths):
             await page.fill("#form_waist", str(cast_row_list[idx_waist]))
             await page.fill("#form_hip", str(cast_row_list[idx_hip]))
 
-            # --- O, P, Q列の入力 ---
+            # O, P, Q列
             if len(cast_row_list) > idx_catch:
                 await page.fill("#form_catchcopy", str(cast_row_list[idx_catch]))
                 await page.fill("#form_title", str(cast_row_list[idx_catch]))
@@ -117,17 +118,14 @@ async def run_automation(cast_row_list, shop_id, shop_pass, sub_image_paths):
             for selector in target_genre_ids:
                 if await page.locator(selector).count() > 0: await page.locator(selector).check(force=True)
 
-            # --- 修正点：クリックをより確実に ---
-            await page.locator("#form_update-btn").scroll_into_view_if_needed()
+            # 登録ボタン
             await page.click("#form_update-btn", force=True)
-            
-            # 完了メッセージを待機（以前の成功ロジック）
+            # 待機 (以前の成功ロジック)
             await page.get_by_text("データを登録しました。").wait_for(state="visible", timeout=30000)
 
             # 画像処理
             main_tmp = "temp_main.jpg"
             if download_by_filename(cast_row_list[idx_main_img], main_tmp):
-                st.info("📸 メイン画像を処理中...")
                 await page.click('a[data-target="con1"]')
                 await upload_and_crop(page, "#con1", main_tmp)
                 if os.path.exists(main_tmp): os.remove(main_tmp)
@@ -138,20 +136,20 @@ async def run_automation(cast_row_list, shop_id, shop_pass, sub_image_paths):
                     modal_id = f"#con{i+2}"
                     sub_tmp = f"temp_sub_{i}.jpg"
                     if download_by_filename(sub_url, sub_tmp):
-                        st.info(f"🖼 サブ画像 {i+1} 枚目を処理中...")
                         await page.click(f'a[data-target="con{i+2}"]')
                         await upload_and_crop(page, modal_id, sub_tmp)
                         if os.path.exists(sub_tmp): os.remove(sub_tmp)
 
             await page.locator("#signup3").click()
             return {"status": "success"}
-        except Exception as e: return {"status": "error", "message": f"工程エラー: {str(e)}"}
-        finally: await browser.close()
+
+        except Exception as e:
+            return {"status": "error", "message": str(e)}
+        finally:
+            await browser.close()
 
 # --- UI ---
 st.title("👸 キャスト一括登録システム")
-
-# タブ分け
 tab1, tab2 = st.tabs(["🚀 通常登録", "🚉 駅ちかネット予約登録"])
 
 with tab1:
@@ -174,9 +172,7 @@ with tab1:
 
                 if target_id and target_shop and not is_registered:
                     sub_urls = [img_row[2] for img_row in rows_images if str(img_row[1]).strip() == target_id]
-                    st.write(f"🔎 {cast_name} さん: サブ画像 {len(sub_urls)} 枚発見")
-
-                    with st.status(f"{cast_name} さんの登録を実行中...") as status:
+                    with st.status(f"{cast_name} さんの登録中...") as status:
                         res = asyncio.run(run_automation(row, target_shop.get('店舗ID'), target_shop.get('店舗PASSWORD'), sub_urls))
                         if res["status"] == "success":
                             spreadsheet.worksheet("キャスト情報").update_cell(i + 2, 14, "登録済")
@@ -184,7 +180,8 @@ with tab1:
                         else:
                             st.error(res["message"])
                             status.update(label="❌ エラー", state="error")
-        except Exception as e: st.error(f"起動エラー: {e}")
+        except Exception as e:
+            st.error(f"起動エラー: {e}")
 
 with tab2:
-    st.info("🚉 駅ちかネット予約登録：機能準備中")
+    st.write("駅ちか予約登録は準備中です。")
