@@ -66,18 +66,21 @@ async def upload_and_crop(page, modal_id, file_path):
         st.warning(f"画像編集工程でスキップが発生しました: {modal_id}")
 
 async def run_automation(cast_row_list, shop_id, shop_pass, sub_image_paths):
-    # インデックス定義 (O列=14, P列=15, Q列=16)
-    idx_name, idx_tall, idx_bust, idx_cup, idx_waist, idx_hip, idx_age, idx_main_img = 2, 3, 4, 5, 6, 7, 8, 11
-    idx_catch, idx_girl_comment, idx_shop_comment = 14, 15, 16 
-    
+    # --- 修正: ブラウザのインストール処理 ---
     try:
-        if not os.path.exists("/home/appuser/.cache/ms-playwright"):
-            subprocess.run(["python", "-m", "playwright", "install", "chromium"], check=True)
-    except: pass
+        # インストール済みか確認し、なければインストール
+        cmd = ["python", "-m", "playwright", "install", "chromium", "--with-deps"]
+        subprocess.run(cmd, check=True)
+    except Exception as e:
+        st.error(f"Playwrightのインストールに失敗しました: {e}")
+    # -----------------------------------
 
     async with async_playwright() as p:
-        browser = await p.chromium.launch(headless=True, args=['--lang=ja-JP'])
-        context = await browser.new_context(viewport={'width': 1280, 'height': 2000}, locale="ja-JP")
+        # headless_shellエラーを避けるため、通常のchromiumとして起動
+        browser = await p.chromium.launch(
+            headless=True, 
+            args=['--no-sandbox', '--disable-setuid-sandbox', '--lang=ja-JP']
+        )
         page = await context.new_page()
 
         try:
