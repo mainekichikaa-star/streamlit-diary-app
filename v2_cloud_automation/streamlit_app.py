@@ -66,32 +66,39 @@ async def upload_and_crop(page, modal_id, file_path):
         pass
 
 async def run_automation(cast_row_list, shop_id, shop_pass, sub_image_paths):
-    # 列定義 (元のまま)
     idx_name, idx_tall, idx_bust, idx_cup, idx_waist, idx_hip, idx_age, idx_main_img = 2, 3, 4, 5, 6, 7, 8, 11
     idx_catch, idx_girl_comment, idx_shop_comment = 14, 15, 16 
 
-    # --- 以前のインストールロジックをそのまま適用 ---
+    # --- ブラウザ本体のインストールを強制実行 ---
+    # エラーメッセージが勧めている通り、playwright install を明示的に実行
     try:
-        # パス指定をせず、カレント環境のpythonでinstallを叩く
         subprocess.run(["python", "-m", "playwright", "install", "chromium"], check=True)
     except Exception as e:
-        st.error(f"Playwright Install Error: {e}")
+        st.error(f"Playwright Browser Install Error: {e}")
 
     async with async_playwright() as p:
-        # 以前の成功オプション。--no-sandboxを明示。
-        browser = await p.chromium.launch(headless=True, args=['--no-sandbox', '--disable-dev-shm-usage', '--lang=ja-JP'])
+        try:
+            # 以前動いていた成功設定
+            browser = await p.chromium.launch(
+                headless=True, 
+                args=['--no-sandbox', '--disable-dev-shm-usage', '--lang=ja-JP']
+            )
+        except Exception as launch_error:
+            # もし上記で失敗した場合、さらにインストールを試みる
+            st.warning("ブラウザの再構成を試みています...")
+            subprocess.run(["python", "-m", "playwright", "install", "chromium"], check=True)
+            browser = await p.chromium.launch(headless=True, args=['--no-sandbox'])
+
         context = await browser.new_context(viewport={'width': 1280, 'height': 2000}, locale="ja-JP")
         page = await context.new_page()
 
         try:
-            # 1. ログイン
             await page.goto("https://ranking-deli.jp/admin/login")
             await page.fill("#form_email", str(shop_id).strip())
             await page.fill("#form_password", str(shop_pass).strip())
             await page.click("#form_submit")
             await page.goto("https://ranking-deli.jp/admin/girls/create/")
 
-            # 2. プロフィール
             await page.fill("#form_name", str(cast_row_list[idx_name]))
             await page.fill("#form_age", str(cast_row_list[idx_age]))
             await page.fill("#form_tall", str(cast_row_list[idx_tall]))
@@ -99,7 +106,7 @@ async def run_automation(cast_row_list, shop_id, shop_pass, sub_image_paths):
             await page.fill("#form_waist", str(cast_row_list[idx_waist]))
             await page.fill("#form_hip", str(cast_row_list[idx_hip]))
 
-            # O, P, Q列
+            # O, P, Q列の入力
             if len(cast_row_list) > idx_catch:
                 await page.fill("#form_catchcopy", str(cast_row_list[idx_catch]))
                 await page.fill("#form_title", str(cast_row_list[idx_catch]))
@@ -118,9 +125,7 @@ async def run_automation(cast_row_list, shop_id, shop_pass, sub_image_paths):
             for selector in target_genre_ids:
                 if await page.locator(selector).count() > 0: await page.locator(selector).check(force=True)
 
-            # 登録ボタン
             await page.click("#form_update-btn", force=True)
-            # 待機 (以前の成功ロジック)
             await page.get_by_text("データを登録しました。").wait_for(state="visible", timeout=30000)
 
             # 画像処理
