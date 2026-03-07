@@ -62,33 +62,29 @@ async def upload_and_crop(page, modal_id, file_path):
         
         await fix_btn.last.click(force=True)
         await asyncio.sleep(2)
-    except Exception:
-        pass
+    except Exception: pass
 
 async def run_automation(cast_row_list, shop_id, shop_pass, sub_image_paths):
     idx_name, idx_tall, idx_bust, idx_cup, idx_waist, idx_hip, idx_age, idx_main_img = 2, 3, 4, 5, 6, 7, 8, 11
     idx_catch, idx_girl_comment, idx_shop_comment = 14, 15, 16 
 
-    # --- ブラウザ本体のインストールを強制実行 ---
-    # エラーメッセージが勧めている通り、playwright install を明示的に実行
+    # --- インストール先を環境変数で固定（権限エラー対策） ---
+    os.environ["PLAYWRIGHT_BROWSERS_PATH"] = "0" # 0は「現在の実行フォルダ内」を指す
+
     try:
-        subprocess.run(["python", "-m", "playwright", "install", "chromium"], check=True)
+        # すでにブラウザがあるか確認し、なければインストール
+        if not os.path.exists("pw-browsers"):
+             subprocess.run(["python", "-m", "playwright", "install", "chromium"], check=True)
     except Exception as e:
-        st.error(f"Playwright Browser Install Error: {e}")
+        # 万が一失敗しても続行を試みる
+        pass
 
     async with async_playwright() as p:
-        try:
-            # 以前動いていた成功設定
-            browser = await p.chromium.launch(
-                headless=True, 
-                args=['--no-sandbox', '--disable-dev-shm-usage', '--lang=ja-JP']
-            )
-        except Exception as launch_error:
-            # もし上記で失敗した場合、さらにインストールを試みる
-            st.warning("ブラウザの再構成を試みています...")
-            subprocess.run(["python", "-m", "playwright", "install", "chromium"], check=True)
-            browser = await p.chromium.launch(headless=True, args=['--no-sandbox'])
-
+        # ブラウザ起動（以前の成功設定を維持）
+        browser = await p.chromium.launch(
+            headless=True, 
+            args=['--no-sandbox', '--disable-dev-shm-usage', '--lang=ja-JP']
+        )
         context = await browser.new_context(viewport={'width': 1280, 'height': 2000}, locale="ja-JP")
         page = await context.new_page()
 
@@ -99,6 +95,7 @@ async def run_automation(cast_row_list, shop_id, shop_pass, sub_image_paths):
             await page.click("#form_submit")
             await page.goto("https://ranking-deli.jp/admin/girls/create/")
 
+            # プロフィール入力
             await page.fill("#form_name", str(cast_row_list[idx_name]))
             await page.fill("#form_age", str(cast_row_list[idx_age]))
             await page.fill("#form_tall", str(cast_row_list[idx_tall]))
@@ -106,7 +103,7 @@ async def run_automation(cast_row_list, shop_id, shop_pass, sub_image_paths):
             await page.fill("#form_waist", str(cast_row_list[idx_waist]))
             await page.fill("#form_hip", str(cast_row_list[idx_hip]))
 
-            # O, P, Q列の入力
+            # O, P, Q列
             if len(cast_row_list) > idx_catch:
                 await page.fill("#form_catchcopy", str(cast_row_list[idx_catch]))
                 await page.fill("#form_title", str(cast_row_list[idx_catch]))
@@ -125,10 +122,11 @@ async def run_automation(cast_row_list, shop_id, shop_pass, sub_image_paths):
             for selector in target_genre_ids:
                 if await page.locator(selector).count() > 0: await page.locator(selector).check(force=True)
 
+            # 登録実行
             await page.click("#form_update-btn", force=True)
             await page.get_by_text("データを登録しました。").wait_for(state="visible", timeout=30000)
 
-            # 画像処理
+            # 画像
             main_tmp = "temp_main.jpg"
             if download_by_filename(cast_row_list[idx_main_img], main_tmp):
                 await page.click('a[data-target="con1"]')
@@ -147,46 +145,36 @@ async def run_automation(cast_row_list, shop_id, shop_pass, sub_image_paths):
 
             await page.locator("#signup3").click()
             return {"status": "success"}
-
-        except Exception as e:
-            return {"status": "error", "message": str(e)}
-        finally:
-            await browser.close()
+        except Exception as e: return {"status": "error", "message": str(e)}
+        finally: await browser.close()
 
 # --- UI ---
 st.title("👸 キャスト一括登録システム")
-tab1, tab2 = st.tabs(["🚀 通常登録", "🚉 駅ちかネット予約登録"])
+if st.button("🚀 通常登録 実行開始"):
+    try:
+        creds = Credentials.from_service_account_info(st.secrets["gcp_service_account"], scopes=SCOPE)
+        gs_client = gspread.authorize(creds)
+        spreadsheet = gs_client.open_by_key(SPREADSHEET_ID)
+        
+        data_info = spreadsheet.worksheet("キャスト情報").get_all_values()
+        rows_info = data_info[1:]
+        data_images = spreadsheet.worksheet("キャスト画像").get_all_values()
+        rows_images = data_images[1:]
+        data_shops = spreadsheet.worksheet("シート3").get_all_records()
+        shop_dict = {str(s.get('登録店舗')).strip(): s for s in data_shops}
 
-with tab1:
-    if st.button("🚀 通常登録 実行開始"):
-        try:
-            creds = Credentials.from_service_account_info(st.secrets["gcp_service_account"], scopes=SCOPE)
-            gs_client = gspread.authorize(creds)
-            spreadsheet = gs_client.open_by_key(SPREADSHEET_ID)
-            
-            data_info = spreadsheet.worksheet("キャスト情報").get_all_values()
-            rows_info = data_info[1:]
-            data_images = spreadsheet.worksheet("キャスト画像").get_all_values()
-            rows_images = data_images[1:]
-            data_shops = spreadsheet.worksheet("シート3").get_all_records()
-            shop_dict = {str(s.get('登録店舗')).strip(): s for s in data_shops}
+        for i, row in enumerate(rows_info):
+            target_id, cast_name, shop_name, is_registered = str(row[0]).strip(), row[2], str(row[12]).strip(), str(row[13]).strip()
+            target_shop = shop_dict.get(shop_name)
 
-            for i, row in enumerate(rows_info):
-                target_id, cast_name, shop_name, is_registered = str(row[0]).strip(), row[2], str(row[12]).strip(), str(row[13]).strip()
-                target_shop = shop_dict.get(shop_name)
-
-                if target_id and target_shop and not is_registered:
-                    sub_urls = [img_row[2] for img_row in rows_images if str(img_row[1]).strip() == target_id]
-                    with st.status(f"{cast_name} さんの登録中...") as status:
-                        res = asyncio.run(run_automation(row, target_shop.get('店舗ID'), target_shop.get('店舗PASSWORD'), sub_urls))
-                        if res["status"] == "success":
-                            spreadsheet.worksheet("キャスト情報").update_cell(i + 2, 14, "登録済")
-                            status.update(label=f"✅ {cast_name} 完了", state="complete")
-                        else:
-                            st.error(res["message"])
-                            status.update(label="❌ エラー", state="error")
-        except Exception as e:
-            st.error(f"起動エラー: {e}")
-
-with tab2:
-    st.write("駅ちか予約登録は準備中です。")
+            if target_id and target_shop and not is_registered:
+                sub_urls = [img_row[2] for img_row in rows_images if str(img_row[1]).strip() == target_id]
+                with st.status(f"{cast_name} さんの登録中...") as status:
+                    res = asyncio.run(run_automation(row, target_shop.get('店舗ID'), target_shop.get('店舗PASSWORD'), sub_urls))
+                    if res["status"] == "success":
+                        spreadsheet.worksheet("キャスト情報").update_cell(i + 2, 14, "登録済")
+                        status.update(label=f"✅ {cast_name} 完了", state="complete")
+                    else:
+                        st.error(res["message"])
+                        status.update(label="❌ エラー", state="error")
+    except Exception as e: st.error(f"起動エラー: {e}")
