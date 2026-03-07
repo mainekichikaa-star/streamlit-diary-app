@@ -5,6 +5,7 @@ import subprocess
 import gspread
 import io
 import sys
+import pandas as pd
 from google.oauth2.service_account import Credentials
 from googleapiclient.discovery import build
 from googleapiclient.http import MediaIoBaseDownload
@@ -20,6 +21,7 @@ SCOPE = [
 LOCAL_PW_PATH = os.path.join(os.getcwd(), "pw-browsers")
 os.environ["PLAYWRIGHT_BROWSERS_PATH"] = LOCAL_PW_PATH
 
+# --- ヘルパー関数 ---
 def get_drive_service():
     creds = Credentials.from_service_account_info(st.secrets["gcp_service_account"], scopes=SCOPE)
     return build('drive', 'v3', credentials=creds)
@@ -43,19 +45,15 @@ def download_by_filename(path_str, save_path):
         return True
     except: return False
 
-# 画像アップロード〜Jcrop〜修正の一連の工程
+# --- 自動化ロジック ---
 async def upload_and_crop(page, modal_id, file_path):
     try:
-        # 1. ファイル選択
         await page.locator(f"{modal_id} input[type='file']").set_input_files(file_path)
         await asyncio.sleep(2)
-
-        # 2. アップロードボタンクリック
         up_btn = page.locator(f"{modal_id} button.upbtn")
         await up_btn.scroll_into_view_if_needed()
         await up_btn.click(force=True)
         
-        # 3. Jcrop待機と操作
         tracker = page.locator(f"{modal_id} .jcrop-tracker.target").first
         await tracker.wait_for(state="visible", timeout=15000)
         box = await tracker.bounding_box()
@@ -66,22 +64,16 @@ async def upload_and_crop(page, modal_id, file_path):
             await page.mouse.up()
             await asyncio.sleep(1)
         
-        # 4. 「修正する」ボタンクリック（メイン画像モーダルの特殊構造に対応）
-        # モーダル内のすべての「修正する」ボタンを取得
         fix_btns = page.locator(f"{modal_id} input[value='修正する']")
         btn_count = await fix_btns.count()
-        
         if btn_count > 0:
-            # メイン画像(con1)の場合、ボタンが2つあるので両方順番に試みる
             for i in range(btn_count):
                 target_btn = fix_btns.nth(i)
                 if await target_btn.is_visible():
                     await target_btn.click(force=True)
                     await asyncio.sleep(1)
         else:
-            # roleでのフォールバック
             await page.get_by_role("button", name="修正する").last.click(force=True)
-            
         await asyncio.sleep(3) 
     except Exception as e:
         st.warning(f"画像編集工程でスキップが発生しました ({modal_id}): {e}")
@@ -100,16 +92,12 @@ async def run_automation(cast_row_list, shop_id, shop_pass, sub_image_paths):
         page = await context.new_page()
 
         try:
-            # 1. ログイン
             await page.goto("https://ranking-deli.jp/admin/login")
             await page.fill("#form_email", str(shop_id).strip())
             await page.fill("#form_password", str(shop_pass).strip())
             await page.click("#form_submit")
-            
-            # 2. 新規作成ページへ
             await page.goto("https://ranking-deli.jp/admin/girls/create/")
 
-            # 3. プロフィール入力
             await page.fill("#form_name", str(cast_row_list[idx_name]))
             await page.fill("#form_age", str(cast_row_list[idx_age]))
             await page.fill("#form_tall", str(cast_row_list[idx_tall]))
@@ -135,49 +123,36 @@ async def run_automation(cast_row_list, shop_id, shop_pass, sub_image_paths):
             for selector in target_genre_ids:
                 if await page.locator(selector).count() > 0: await page.locator(selector).check(force=True)
 
-            # 4. 登録ボタン
             await page.click("#form_update-btn", force=True)
-            
-            # タイムアウトエラー対策：メッセージ待機
-            try:
-                await page.wait_for_selector("text=データを登録しました。", timeout=15000)
-            except:
-                st.warning("登録完了の確認がタイムアウトしましたが、画像処理を続行します。")
+            try: await page.wait_for_selector("text=データを登録しました。", timeout=15000)
+            except: pass
 
-            # --- 5. メイン画像 (con1) ---
             await asyncio.sleep(2)
             main_tmp = "temp_main.jpg"
             if download_by_filename(cast_row_list[idx_main_img], main_tmp):
-                st.info("📸 メイン画像を処理中...")
                 main_tab = page.locator('a[data-target="con1"]')
                 await main_tab.scroll_into_view_if_needed()
                 await main_tab.click(force=True)
                 await asyncio.sleep(2)
-                
                 await upload_and_crop(page, "#con1", main_tmp)
                 if os.path.exists(main_tmp): os.remove(main_tmp)
 
-            # 6. サブ画像 (con2 〜 con8)
             if sub_image_paths:
                 for i, sub_url in enumerate(sub_image_paths):
                     if i >= 7: break 
                     modal_id = f"#con{i+2}"
                     sub_tmp = f"temp_sub_{i}.jpg"
                     if download_by_filename(sub_url, sub_tmp):
-                        st.info(f"🖼 サブ画像 {i+1} 枚目を処理中 ({modal_id})...")
                         sub_tab = page.locator(f'a[data-target="con{i+2}"]')
                         await sub_tab.scroll_into_view_if_needed()
                         await sub_tab.click(force=True)
                         await asyncio.sleep(2)
-                        
                         await upload_and_crop(page, modal_id, sub_tmp)
                         if os.path.exists(sub_tmp): os.remove(sub_tmp)
 
-            # 7. 最終保存
             await page.locator("#signup3").click()
             await asyncio.sleep(2)
             return {"status": "success"}
-
         except Exception as e:
             await page.screenshot(path=f"error_{cast_row_list[idx_name]}.png")
             return {"status": "error", "message": str(e)}
@@ -188,33 +163,97 @@ async def run_automation(cast_row_list, shop_id, shop_pass, sub_image_paths):
 st.set_page_config(page_title="キャスト一括登録", layout="wide")
 st.title("👸 キャスト一括登録システム")
 
-if st.button("🚀 実行開始"):
+tab1, tab2 = st.tabs(["🚀 通常登録", "🚉 駅ちかネット予約登録"])
+
+with tab1:
+    st.subheader("店舗別・未登録キャスト状況")
+    
     try:
+        # データ取得
         creds = Credentials.from_service_account_info(st.secrets["gcp_service_account"], scopes=SCOPE)
         gs_client = gspread.authorize(creds)
         spreadsheet = gs_client.open_by_key(SPREADSHEET_ID)
         
-        data_info = spreadsheet.worksheet("キャスト情報").get_all_values()
+        worksheet_cast = spreadsheet.worksheet("キャスト情報")
+        worksheet_images = spreadsheet.worksheet("キャスト画像")
+        worksheet_shops = spreadsheet.worksheet("シート3")
+
+        data_info = worksheet_cast.get_all_values()
+        headers_info = data_info[0]
         rows_info = data_info[1:]
-        data_images = spreadsheet.worksheet("キャスト画像").get_all_values()
+        
+        data_images = worksheet_images.get_all_values()
         rows_images = data_images[1:]
-        data_shops = spreadsheet.worksheet("シート3").get_all_records()
-        shop_dict = {str(s.get('登録店舗')).strip(): s for s in data_shops}
+        
+        data_shops = worksheet_shops.get_all_records()
+        
+        # 店舗ごとの未登録数をカウント
+        shop_status = []
+        for shop in data_shops:
+            s_name = str(shop.get('登録店舗')).strip()
+            s_id = str(shop.get('店舗ID')).strip()
+            s_pass = str(shop.get('店舗PASSWORD')).strip()
+            
+            # この店舗に所属し、かつ「未登録」または空白の人数を出す
+            unregistered_casts = [r for r in rows_info if str(r[12]).strip() == s_name and (len(r) < 14 or str(r[13]).strip() != "登録済")]
+            
+            if s_id and s_pass:
+                shop_status.append({
+                    "店舗名": s_name,
+                    "ID": s_id,
+                    "PW": "********",
+                    "未登録数": len(unregistered_casts),
+                    "raw_pass": s_pass,
+                    "casts": unregistered_casts
+                })
 
-        for i, row in enumerate(rows_info):
-            if len(row) < 14: continue
-            target_id, cast_name, shop_name, is_registered = str(row[0]).strip(), row[2], str(row[12]).strip(), str(row[13]).strip()
-            target_shop = shop_dict.get(shop_name)
+        # テーブル表示用のデータフレーム
+        df_shops = pd.DataFrame(shop_status)
+        
+        # 実行対象の選択
+        st.write("実行する店舗を選択してください:")
+        selected_shops = []
+        
+        # 列形式でチェックボックスを並べる
+        cols = st.columns(3)
+        for idx, shop in enumerate(shop_status):
+            with cols[idx % 3]:
+                is_selected = st.checkbox(f"{shop['店舗名']} ({shop['未登録数']}名)", key=f"shop_{idx}")
+                if is_selected:
+                    selected_shops.append(shop)
 
-            if target_id and target_shop and is_registered != "登録済":
-                sub_urls = [img_row[2] for img_row in rows_images if str(img_row[1]).strip() == target_id]
-                with st.status(f"{cast_name} さんの登録を実行中...") as status:
-                    res = asyncio.run(run_automation(row, target_shop.get('店舗ID'), target_shop.get('店舗PASSWORD'), sub_urls))
-                    if res["status"] == "success":
-                        spreadsheet.worksheet("キャスト情報").update_cell(i + 2, 14, "登録済")
-                        status.update(label=f"✅ {cast_name} 完了", state="complete")
-                    else:
-                        st.error(f"{cast_name} エラー: {res['message']}")
-                        if os.path.exists(f"error_{cast_name}.png"): st.image(f"error_{cast_name}.png")
-                        status.update(label="❌ エラー", state="error")
-    except Exception as e: st.error(f"起動エラー: {e}")
+        st.divider()
+        
+        if st.button("🚀 選択した店舗の登録を開始", type="primary"):
+            if not selected_shops:
+                st.warning("店舗が選択されていません。")
+            else:
+                for shop in selected_shops:
+                    st.markdown(f"### 🏢 店舗: {shop['店舗名']}")
+                    for cast in shop['casts']:
+                        target_id = str(cast[0]).strip()
+                        cast_name = cast[2]
+                        sub_urls = [img_row[2] for img_row in rows_images if str(img_row[1]).strip() == target_id]
+                        
+                        with st.status(f"【{shop['店舗名']}】{cast_name} さんの登録中...") as status:
+                            res = asyncio.run(run_automation(cast, shop['ID'], shop['raw_pass'], sub_urls))
+                            if res["status"] == "success":
+                                # スプレッドシート上の行番号を特定して更新
+                                # rows_infoは1行目(index 0)がデータなので、全体では index + 2
+                                # 正確な行を特定するためにIDで検索
+                                row_idx = next((i for i, r in enumerate(data_info) if str(r[0]).strip() == target_id), None)
+                                if row_idx:
+                                    worksheet_cast.update_cell(row_idx + 1, 14, "登録済")
+                                status.update(label=f"✅ {cast_name} 完了", state="complete")
+                            else:
+                                st.error(f"{cast_name} エラー: {res['message']}")
+                                if os.path.exists(f"error_{cast_name}.png"): st.image(f"error_{cast_name}.png")
+                                status.update(label="❌ エラー", state="error")
+                st.success("全ての処理が完了しました。")
+
+    except Exception as e:
+        st.error(f"初期化エラー: {e}")
+
+with tab2:
+    st.info("🚉 駅ちかネット予約登録機能は現在準備中です。")
+    st.write("ここに駅ちかネット用の登録ロジックを実装できます。")
