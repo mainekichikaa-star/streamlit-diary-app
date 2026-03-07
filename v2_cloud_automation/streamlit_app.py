@@ -13,7 +13,7 @@ from playwright.async_api import async_playwright
 from playwright.async_api import async_playwright
 
 # --- 設定 ---
-SPREADSHEET_ID = "1Fta23cis4AY9j2_lytfh0OOAJq-EFinLjqp_dLIAgtM"
+SPREADSHEET_ID = "1Xodf14PC3urWIbu49aqMImH6REAlYenOr9YW2WvNYTI"
 SCOPE = [
     'https://www.googleapis.com/auth/spreadsheets',
     'https://www.googleapis.com/auth/drive'
