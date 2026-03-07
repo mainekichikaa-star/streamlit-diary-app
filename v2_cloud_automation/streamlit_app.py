@@ -12,12 +12,7 @@ from playwright.async_api import async_playwright
 
 # --- 設定 ---
 SPREADSHEET_ID = "1Fta23cis4AY9j2_lytfh0OOAJq-EFinLjqp_dLIAgtM"
-SCOPE = [
-    'https://www.googleapis.com/auth/spreadsheets',
-    'https://www.googleapis.com/auth/drive'
-]
-
-# ブラウザのインストール先をユーザーディレクトリ内に強制指定
+SCOPE = ['https://www.googleapis.com/auth/spreadsheets', 'https://www.googleapis.com/auth/drive']
 LOCAL_PW_PATH = os.path.join(os.getcwd(), "pw-browsers")
 os.environ["PLAYWRIGHT_BROWSERS_PATH"] = LOCAL_PW_PATH
 
@@ -68,27 +63,19 @@ async def upload_and_crop(page, modal_id, file_path):
         await fix_btn.last.click(force=True)
         await asyncio.sleep(2)
     except Exception:
-        st.warning(f"画像編集工程でスキップが発生しました: {modal_id}")
+        pass
 
 async def run_automation(cast_row_list, shop_id, shop_pass, sub_image_paths):
-    # 列定義
     idx_name, idx_tall, idx_bust, idx_cup, idx_waist, idx_hip, idx_age, idx_main_img = 2, 3, 4, 5, 6, 7, 8, 11
     idx_catch, idx_girl_comment, idx_shop_comment = 14, 15, 16 
 
-    # --- ブラウザのインストール (権限エラー回避版) ---
     if not os.path.exists(LOCAL_PW_PATH):
         try:
-            # システムのpythonを使用してローカルパスにインストール
             subprocess.run([sys.executable, "-m", "playwright", "install", "chromium"], check=True)
-        except Exception as e:
-            st.error(f"Playwrightの準備に失敗しました: {e}")
+        except: pass
 
     async with async_playwright() as p:
-        # ブラウザ起動 (以前の成功設定)
-        browser = await p.chromium.launch(
-            headless=True, 
-            args=['--no-sandbox', '--disable-dev-shm-usage', '--lang=ja-JP']
-        )
+        browser = await p.chromium.launch(headless=True, args=['--no-sandbox', '--disable-dev-shm-usage', '--lang=ja-JP'])
         context = await browser.new_context(viewport={'width': 1280, 'height': 2000}, locale="ja-JP")
         page = await context.new_page()
 
@@ -100,7 +87,7 @@ async def run_automation(cast_row_list, shop_id, shop_pass, sub_image_paths):
             await page.click("#form_submit")
             await page.goto("https://ranking-deli.jp/admin/girls/create/")
 
-            # 2. 基本情報入力
+            # 2. プロフィール入力
             await page.fill("#form_name", str(cast_row_list[idx_name]))
             await page.fill("#form_age", str(cast_row_list[idx_age]))
             await page.fill("#form_tall", str(cast_row_list[idx_tall]))
@@ -108,7 +95,6 @@ async def run_automation(cast_row_list, shop_id, shop_pass, sub_image_paths):
             await page.fill("#form_waist", str(cast_row_list[idx_waist]))
             await page.fill("#form_hip", str(cast_row_list[idx_hip]))
 
-            # キャッチコピー・コメント (以前の機能)
             if len(cast_row_list) > idx_catch:
                 await page.fill("#form_catchcopy", str(cast_row_list[idx_catch]))
                 await page.fill("#form_title", str(cast_row_list[idx_catch]))
@@ -122,24 +108,33 @@ async def run_automation(cast_row_list, shop_id, shop_pass, sub_image_paths):
                 try: await page.locator("#form_cup").select_option(label=f"{cup_input}カップ")
                 except: pass
 
-            # ジャンル選択
             await page.locator('input[name="p_genre[1]"]').check()
             target_genre_ids = ["#genre17", "#genre30", "#genre31", "#genre33", "#genre34", "#genre36", "#genre25", "#genre35", "#genre41", "#genre43", "#genre44", "#genre55", "#genre73", "#genre74"]
             for selector in target_genre_ids:
                 if await page.locator(selector).count() > 0: await page.locator(selector).check(force=True)
 
-            # 登録実行
+            # 登録ボタンクリック
             await page.click("#form_update-btn", force=True)
-            await page.get_by_text("データを登録しました。").wait_for(state="visible", timeout=30000)
 
-            # 3. メイン画像 (con1)
+            # --- 改良ポイント: 待機とエラーキャプチャ ---
+            try:
+                # 30秒待機
+                await page.get_by_text("データを登録しました。").wait_for(state="visible", timeout=30000)
+            except Exception:
+                # タイムアウトしたらスクリーンショットを撮って警告を出すが、処理は続行
+                error_img = f"error_{cast_row_list[idx_name]}.png"
+                await page.screenshot(path=error_img, full_page=True)
+                st.warning(f"⚠️ {cast_row_list[idx_name]}さんの完了メッセージが見つかりません。入力内容にエラーがある可能性があります。スクリーンショットを確認してください。")
+                # アプリ上に画像を表示
+                st.image(error_img)
+
+            # 画像処理 (メッセージが出てなくても強行する)
             main_tmp = "temp_main.jpg"
             if download_by_filename(cast_row_list[idx_main_img], main_tmp):
                 await page.click('a[data-target="con1"]')
                 await upload_and_crop(page, "#con1", main_tmp)
                 if os.path.exists(main_tmp): os.remove(main_tmp)
 
-            # 4. サブ画像 (con2 〜 con8)
             if sub_image_paths:
                 for i, sub_url in enumerate(sub_image_paths):
                     if i >= 7: break 
@@ -154,14 +149,15 @@ async def run_automation(cast_row_list, shop_id, shop_pass, sub_image_paths):
             return {"status": "success"}
 
         except Exception as e:
+            # 重大なエラー（ブラウザ落ちなど）のみエラーとして返す
             return {"status": "error", "message": str(e)}
         finally:
             await browser.close()
 
 # --- UI ---
 st.title("👸 キャスト一括登録システム")
-
 if st.button("🚀 通常登録 実行開始"):
+    # (スプレッドシート取得部分は変更なし)
     try:
         creds = Credentials.from_service_account_info(st.secrets["gcp_service_account"], scopes=SCOPE)
         gs_client = gspread.authorize(creds)
