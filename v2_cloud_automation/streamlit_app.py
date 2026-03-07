@@ -332,10 +332,10 @@ async def run_yoyaku_automation(s_id, s_pass):
         finally:
             await browser.close()
 # --- UI ---
-st.set_page_config(page_title="キャスト一括登録", layout="wide")
-st.title("👸 キャスト一括登録システム")
+st.set_page_config(page_title="登録システム", layout="wide")
+st.title("登録システム")
 
-tab1, tab2 = st.tabs(["🚀 通常登録", "🚉 駅ちかネット予約登録"])
+tab1, tab2 = st.tabs(["🚀 キャスト登録", "🚉 駅ちかネット予約登録"])
 
 with tab1:
     st.subheader("店舗別・未登録キャスト状況")
