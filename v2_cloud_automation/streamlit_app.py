@@ -176,25 +176,34 @@ async def run_yoyaku_automation(s_id, s_pass):
             await page.wait_for_url("**/admin/top/**", timeout=15000)
             st.info("✅ ランキングデリ ログイン完了")
 
-            # --- [追加] ランキングデリ側からプラン情報を一時取得 ---
+            # --- [追加] ランキングデリ側からプラン情報を取得 ---
             await page.goto("https://ranking-deli.jp/admin/shopcharges/")
-            await page.wait_for_selector(".form_courses")
-            
-            # 最初のコース(0番目)からタイトル、時間、料金を抽出
-            course_data = {
-                "title": await page.locator("#form_course\\[0\\]\\[course_name\\]").get_attribute("value"),
-                "prices": []
-            }
-            for i in range(1, 6): # time1～5, charge1～5をチェック
+            course_data = {"title": await page.locator("#form_course\\[0\\]\\[course_name\\]").get_attribute("value"), "prices": []}
+            for i in range(1, 6):
                 t_val = await page.locator(f"#form_course\\[0\\]\\[time{i}\\]").get_attribute("value")
                 p_val = await page.locator(f"#form_course\\[0\\]\\[charge{i}\\]").get_attribute("value")
                 if t_val and p_val:
                     course_data["prices"].append({"time": t_val, "price": p_val})
-            st.info(f"📊 デリ側からプラン「{course_data['title']}」を取得しました")
+
+            # --- [追加] ランキングデリ側からオプション情報を取得 ---
+            await page.goto("https://ranking-deli.jp/admin/shopoptions/")
+            await page.wait_for_selector("#option_root")
+            option_data = []
+            # option[0]から最大20項目程度（必要に応じて調整）スキャン
+            for i in range(20):
+                opt_name_el = page.locator(f"#form_option\\[{i}\\]\\[option_name\\]")
+                opt_fee_el = page.locator(f"#form_option\\[{i}\\]\\[option_fee\\]")
+                if await opt_name_el.count() > 0:
+                    name = await opt_name_el.get_attribute("value")
+                    fee = await opt_fee_el.get_attribute("value")
+                    if name and name.strip():
+                        option_data.append({"name": name.strip(), "fee": fee or "0"})
+                else:
+                    break
+            st.info(f"📊 オプションを {len(option_data)} 件取得しました")
 
             # 2. 「予約管理」を別タブで開く
             async with context.expect_page() as new_page_info:
-                # 元のページ(page)はプラン画面にいるので、ヘッダーの「予約管理」リンクをクリック
                 await page.locator("a.web_link").click()
             
             yoyaku_page = await new_page_info.value
@@ -205,52 +214,54 @@ async def run_yoyaku_automation(s_id, s_pass):
             # 3. 「各種設定」をクリックしてメニューを展開
             setting_menu = yoyaku_page.locator(".listItem.setting .menuTxt")
             await setting_menu.scroll_into_view_if_needed()
-            await asyncio.sleep(1)
             await setting_menu.click()
             await asyncio.sleep(1)
 
-            # 4. 「予約設定」をクリック（公開/受付の設定）
+            # 4. 「予約設定」の更新（公開/受付）
             await yoyaku_page.locator("a.acListTxt", has_text="予約設定").first.click()
             await yoyaku_page.wait_for_load_state()
-            st.info("⚙️ 予約設定ページを開きました")
-            await asyncio.sleep(1)
-
-            # 5. 「公開」「受付」を選択
             await yoyaku_page.locator("label[for='release']").click()
-            await asyncio.sleep(0.5)
             await yoyaku_page.locator("label[for='freeReserveAccept']").click()
-            
-            # 予約設定の保存
             await yoyaku_page.locator("button.saveBt", has_text="保存").click()
-            st.info("💾 予約設定(公開/受付)を保存しました")
+            st.info("💾 予約設定(公開/受付)を保存")
             await asyncio.sleep(2)
 
-            # --- [追加] 料金コース同期の工程 ---
-            # 料金コース設定ページへ移動
+            # 5. 「料金コース」の同期
             await yoyaku_page.locator("a.acListTxt", has_text="料金コース").first.click()
             await yoyaku_page.wait_for_load_state()
-            await asyncio.sleep(2)
-
-            # タイトルの入力
             if course_data["title"]:
                 await yoyaku_page.locator("input[name='courses[0][name]']").fill(course_data["title"])
-            
-            # 取得した時間・料金を順番に入力
             for idx, item in enumerate(course_data["prices"]):
                 time_sel = yoyaku_page.locator(f"select[name='courses[0][content][{idx}][time]']")
                 price_in = yoyaku_page.locator(f"input[name='courses[0][content][{idx}][fee]']")
-                
                 if await time_sel.count() > 0:
                     await time_sel.select_option(value=str(item["time"]))
-                    await asyncio.sleep(0.5)
-                    await price_in.fill(str(item["price"]))
-                    await asyncio.sleep(0.5)
+                    await price_in.fill(str(item["fee"]))
+            await yoyaku_page.locator("button.js-save-btn").click()
+            st.info("💾 料金コースを保存")
+            await asyncio.sleep(2)
 
-            # 料金設定の保存
-            y_save_btn = yoyaku_page.locator("button.js-save-btn")
-            await y_save_btn.scroll_into_view_if_needed()
-            await y_save_btn.click()
-            st.info("💾 料金コースを同期・保存しました")
+            # --- [追加] 「オプション」の同期 ---
+            await yoyaku_page.locator("a.acListTxt", has_text="オプション").first.click()
+            await yoyaku_page.wait_for_load_state()
+            await asyncio.sleep(2)
+
+            for idx, opt in enumerate(option_data):
+                opt_name_in = yoyaku_page.locator(f"input[name='options[{idx}][name]']")
+                opt_fee_in = yoyaku_page.locator(f"input[name='options[{idx}][fee]']")
+                
+                if await opt_name_in.count() > 0:
+                    await opt_name_in.scroll_into_view_if_needed()
+                    await opt_name_in.fill(opt["name"])
+                    await asyncio.sleep(0.3)
+                    await opt_fee_in.fill(str(opt["fee"]))
+                    await asyncio.sleep(0.3)
+                else:
+                    # 入力枠が足りない場合はループを抜ける
+                    break
+
+            await yoyaku_page.locator("button.js-save-btn").click()
+            st.info("💾 オプション設定を保存しました")
             
             await asyncio.sleep(3)
             return {"status": "success", "url": yoyaku_page.url}
