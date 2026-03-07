@@ -69,28 +69,30 @@ async def run_automation(cast_row_list, shop_id, shop_pass, sub_image_paths):
     idx_name, idx_tall, idx_bust, idx_cup, idx_waist, idx_hip, idx_age, idx_main_img = 2, 3, 4, 5, 6, 7, 8, 11
     idx_catchcopy, idx_girl_comment, idx_shop_comment = 14, 15, 16
     
-    # --- ブラウザチェックとインストール ---
+    # --- Playwrightブラウザの強制インストール ---
+    # Streamlit Cloud環境では起動時にブラウザが存在しないため、明示的にコマンドを実行します
     try:
-        # インストール済みか確認し、なければインストールを実行
-        process = subprocess.run(["python", "-m", "playwright", "install", "chromium"], capture_output=True, text=True)
-        # headless-shellも必要な場合があるため追加
-        subprocess.run(["python", "-m", "playwright", "install-deps"], capture_output=True)
+        # chromiumのみをインストール
+        cmd = ["python", "-m", "playwright", "install", "chromium"]
+        subprocess.run(cmd, check=True, capture_output=True)
     except Exception as e:
-        st.error(f"Playwrightの準備中にエラーが発生しました: {e}")
+        st.error(f"Playwright Install Error: {e}")
 
     async with async_playwright() as p:
-        # 起動時に実行ファイルのパスを探す設定を追加
         try:
+            # ブラウザ起動
             browser = await p.chromium.launch(headless=True, args=['--lang=ja-JP'])
         except Exception:
-            # 万が一パスエラーが出る場合は、強制的に再インストールを試みてから再起動
-            subprocess.run(["python", "-m", "playwright", "install", "chromium"])
+            # 万が一失敗した場合は、依存関係を含めて再試行
+            subprocess.run(["python", "-m", "playwright", "install-deps", "chromium"], check=True)
+            subprocess.run(["python", "-m", "playwright", "install", "chromium"], check=True)
             browser = await p.chromium.launch(headless=True, args=['--lang=ja-JP'])
-        
+            
         context = await browser.new_context(viewport={'width': 1280, 'height': 2000}, locale="ja-JP")
-        # ... (以下、元のコードと同じ)
         page = await context.new_page()
+
         try:
+            # --- ログイン処理 ---
             await page.goto("https://ranking-deli.jp/admin/login")
             await page.fill("#form_email", str(shop_id).strip())
             await page.fill("#form_password", str(shop_pass).strip())
