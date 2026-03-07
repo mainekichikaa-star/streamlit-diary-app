@@ -204,7 +204,7 @@ async def run_yoyaku_automation(s_id, s_pass):
                         extra_fees["admission"] = clean_val
                 
                 # 指名料（通常）の判定
-                if any(x in label for x in ["指名料", "ネット指名料", "指名"]):
+                if any(x in label for x in ["指名料", "ネット指名料", "指名", "写真指名料"]):
                     extra_fees["nomination"] = "".join(filter(str.isdigit, val)) or "0"
 
                 # 本指名の判定
