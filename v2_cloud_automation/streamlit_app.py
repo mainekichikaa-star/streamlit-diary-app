@@ -70,14 +70,25 @@ async def run_automation(cast_row_list, shop_id, shop_pass, sub_image_paths):
     idx_name, idx_tall, idx_bust, idx_cup, idx_waist, idx_hip, idx_age, idx_main_img = 2, 3, 4, 5, 6, 7, 8, 11
     idx_catch, idx_girl_comment, idx_shop_comment = 14, 15, 16 
 
-    # --- 強制インストール処理 ---
-    if not os.path.exists(CUSTOM_BROWSER_PATH):
-        st.info("初回起動：ブラウザをセットアップしています。少々お待ちください...")
-        subprocess.run(["python", "-m", "playwright", "install", "chromium"], check=True)
-
+    # --- インストール処理を削除し、起動オプションを調整 ---
     async with async_playwright() as p:
-        # 確実にインストールされたブラウザを使う
-        browser = await p.chromium.launch(headless=True, args=['--no-sandbox', '--disable-setuid-sandbox', '--lang=ja-JP'])
+        try:
+            # クラウド環境で安定するオプションを追加
+            browser = await p.chromium.launch(
+                headless=True, 
+                args=[
+                    '--no-sandbox', 
+                    '--disable-setuid-sandbox', 
+                    '--disable-dev-shm-usage', # メモリ不足対策
+                    '--lang=ja-JP'
+                ]
+            )
+        except Exception as launch_error:
+            # もしブラウザがないと言われたら、その場で最小限のインストールを試みる
+            st.warning("ブラウザの準備中...")
+            subprocess.run(["playwright", "install", "chromium"], check=True)
+            browser = await p.chromium.launch(headless=True, args=['--no-sandbox', '--lang=ja-JP'])
+
         context = await browser.new_context(viewport={'width': 1280, 'height': 2000}, locale="ja-JP")
         page = await context.new_page()
 
