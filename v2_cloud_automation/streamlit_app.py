@@ -65,17 +65,30 @@ async def upload_and_crop(page, modal_id, file_path):
 
 # --- オートメーション・ロジック ---
 async def run_automation(cast_row_list, shop_id, shop_pass, sub_image_paths):
+    # インデックス定義
     idx_name, idx_tall, idx_bust, idx_cup, idx_waist, idx_hip, idx_age, idx_main_img = 2, 3, 4, 5, 6, 7, 8, 11
     idx_catchcopy, idx_girl_comment, idx_shop_comment = 14, 15, 16
     
+    # --- ブラウザチェックとインストール ---
     try:
-        if not os.path.exists("/home/appuser/.cache/ms-playwright"):
-            subprocess.run(["python", "-m", "playwright", "install", "chromium"], check=True)
-    except: pass
+        # インストール済みか確認し、なければインストールを実行
+        process = subprocess.run(["python", "-m", "playwright", "install", "chromium"], capture_output=True, text=True)
+        # headless-shellも必要な場合があるため追加
+        subprocess.run(["python", "-m", "playwright", "install-deps"], capture_output=True)
+    except Exception as e:
+        st.error(f"Playwrightの準備中にエラーが発生しました: {e}")
 
     async with async_playwright() as p:
-        browser = await p.chromium.launch(headless=True, args=['--lang=ja-JP'])
+        # 起動時に実行ファイルのパスを探す設定を追加
+        try:
+            browser = await p.chromium.launch(headless=True, args=['--lang=ja-JP'])
+        except Exception:
+            # 万が一パスエラーが出る場合は、強制的に再インストールを試みてから再起動
+            subprocess.run(["python", "-m", "playwright", "install", "chromium"])
+            browser = await p.chromium.launch(headless=True, args=['--lang=ja-JP'])
+        
         context = await browser.new_context(viewport={'width': 1280, 'height': 2000}, locale="ja-JP")
+        # ... (以下、元のコードと同じ)
         page = await context.new_page()
         try:
             await page.goto("https://ranking-deli.jp/admin/login")
