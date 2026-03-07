@@ -40,7 +40,6 @@ def download_by_filename(path_str, save_path):
         return True
     except: return False
 
-# --- Playwright関連関数 (キャスト登録用) ---
 async def upload_and_crop(page, modal_id, file_path):
     await page.locator(f"{modal_id} input[type='file']").set_input_files(file_path)
     await asyncio.sleep(2)
@@ -64,11 +63,10 @@ async def upload_and_crop(page, modal_id, file_path):
     except Exception as e:
         st.warning(f"画像編集工程でスキップが発生しました: {modal_id}")
 
+# --- オートメーション・ロジック ---
 async def run_automation(cast_row_list, shop_id, shop_pass, sub_image_paths):
     idx_name, idx_tall, idx_bust, idx_cup, idx_waist, idx_hip, idx_age, idx_main_img = 2, 3, 4, 5, 6, 7, 8, 11
-    idx_catchcopy = 14  
-    idx_girl_comment = 15
-    idx_shop_comment = 16
+    idx_catchcopy, idx_girl_comment, idx_shop_comment = 14, 15, 16
     
     try:
         if not os.path.exists("/home/appuser/.cache/ms-playwright"):
@@ -79,7 +77,6 @@ async def run_automation(cast_row_list, shop_id, shop_pass, sub_image_paths):
         browser = await p.chromium.launch(headless=True, args=['--lang=ja-JP'])
         context = await browser.new_context(viewport={'width': 1280, 'height': 2000}, locale="ja-JP")
         page = await context.new_page()
-
         try:
             await page.goto("https://ranking-deli.jp/admin/login")
             await page.fill("#form_email", str(shop_id).strip())
@@ -133,18 +130,18 @@ async def run_automation(cast_row_list, shop_id, shop_pass, sub_image_paths):
 
             await page.locator("#signup3").click()
             return {"status": "success"}
-
         except Exception as e: return {"status": "error", "message": f"工程エラー: {str(e)}"}
         finally: await browser.close()
 
-# --- メインメニュー (サイドバー) ---
-page_choice = st.sidebar.radio("メニューを選択", ["キャスト一括登録システム", "駅ちかネット予約登録システム"])
+# --- メイン UI ---
+st.set_page_config(page_title="総合管理システム", layout="wide")
 
-# --- ページ1: キャスト一括登録システム ---
-if page_choice == "キャスト一括登録システム":
-    st.title("👸 キャスト一括登録システム")
+# 上部タブによる切り替え
+tab1, tab2 = st.tabs(["👸 キャスト一括登録システム", "🚉 駅ちかネット予約登録システム"])
 
-    if st.button("🚀 実行開始"):
+with tab1:
+    st.header("キャスト一括登録")
+    if st.button("🚀 キャスト登録 実行開始"):
         try:
             creds = Credentials.from_service_account_info(st.secrets["gcp_service_account"], scopes=SCOPE)
             gs_client = gspread.authorize(creds)
@@ -175,9 +172,9 @@ if page_choice == "キャスト一括登録システム":
                             status.update(label="❌ エラー", state="error")
         except Exception as e: st.error(f"起動エラー: {e}")
 
-# --- ページ2: 駅ちかネット予約登録システム ---
-elif page_choice == "駅ちかネット予約登録システム":
-    st.title("🚉 駅ちかネット予約登録システム")
-    st.info("ここに駅ちかネット予約登録の機能を実装してください。")
-    
-    # 必要に応じて、async def run_automation_ekichika(...) 等を追加してここで呼び出します
+with tab2:
+    st.header("駅ちかネット予約登録")
+    st.info("ここに駅ちかネット予約登録システムの機能を実装します。")
+    # ロジックが共通であれば流用、別であればここにコードを記述
+    if st.button("🚀 駅ちか予約登録 実行開始"):
+        st.warning("現在、このページの実行処理を構成中です。")
