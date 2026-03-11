@@ -452,9 +452,20 @@ with tab3:
 
     # --- 同期処理用関数 ---
     async def run_fetch_cast_data(shop_id, shop_pass, shop_name):
+        # 【修正箇所】ブラウザがなければインストールする処理を追加
+        if not os.path.exists(LOCAL_PW_PATH):
+            try:
+                subprocess.run([sys.executable, "-m", "playwright", "install", "chromium"], check=True)
+            except:
+                pass
+
         cast_data_list = []
         async with async_playwright() as p:
-            browser = await p.chromium.launch(headless=True, args=['--no-sandbox'])
+            # headless=True, args=['--no-sandbox'] は維持
+            browser = await p.chromium.launch(
+                headless=True, 
+                args=['--no-sandbox', '--disable-dev-shm-usage', '--disable-gpu']
+            )
             context = await browser.new_context(locale="ja-JP")
             page = await context.new_page()
 
@@ -469,7 +480,6 @@ with tab3:
                 await page.goto("https://ranking-deli.jp/admin/girls/")
                 
                 # 3. 各女の子の編集ページURLを取得
-                # HTML内の .girl-btn a (編集ボタン) の href を収集
                 edit_links = await page.locator('.girl-btn a[href*="edit"]').evaluate_all(
                     "nodes => nodes.map(n => n.href)"
                 )
@@ -489,25 +499,17 @@ with tab3:
                     waist = await page.input_value("#form_waist")
                     hip = await page.input_value("#form_hip")
                     
-                    # カップ数 (セレクトボックスから "Gカップ" -> "G" に変換)
                     cup_full = await page.locator("#form_cup option:checked").text_content()
                     cup = cup_full.replace("カップ", "").strip() if cup_full else ""
 
-                    # キャッチ・コメント
                     catch = await page.input_value("#form_catchcopy")
                     girl_comment = await page.input_value("#form_girl_comments")
                     shop_comment = await page.input_value("#form_comments")
 
-                    # スプレッドシート形式に整形
-                    # A:空, B:空, C:店舗名 名前, D:身長, E:バスト, F:カップ, G:ウエスト, H:ヒップ, I:年齢...
                     row = [
-                        "", # A列
-                        "", # B列
-                        f"{shop_name} {name}", # C列
+                        "", "", f"{shop_name} {name}",
                         tall, bust, cup, waist, hip, age,
-                        "", "", "", # J, K, L (予備)
-                        shop_name, # M列: 登録店舗
-                        "登録済",  # N列: ステータス
+                        "", "", "", shop_name, "登録済",
                         catch, girl_comment, shop_comment
                     ]
                     cast_data_list.append(row)
@@ -518,26 +520,3 @@ with tab3:
                 return {"status": "error", "message": str(e)}
             finally:
                 await browser.close()
-
-    # --- 実行ボタン ---
-    if st.button("🔄 同期を実行（スプレッドシートへ追記）", type="primary"):
-        with st.status("同期処理を実行中...") as status:
-            loop = asyncio.new_event_loop()
-            asyncio.set_event_loop(loop)
-            result = loop.run_until_complete(run_fetch_cast_data(target_shop['ID'], target_shop['raw_pass'], target_shop['店舗名']))
-            
-            if result["status"] == "success":
-                # スプレッドシートに書き込み
-                creds = Credentials.from_service_account_info(st.secrets["gcp_service_account"], scopes=SCOPE)
-                gs_client = gspread.authorize(creds)
-                worksheet = gs_client.open_by_key(SPREADSHEET_ID).worksheet("キャスト情報")
-                
-                if result["data"]:
-                    worksheet.append_rows(result["data"])
-                    st.success(f"✅ {len(result['data'])} 名の情報をシートに追加しました。")
-                else:
-                    st.warning("キャスト情報が見つかりませんでした。")
-                status.update(label="同期完了", state="complete")
-            else:
-                st.error(f"エラーが発生しました: {result['message']}")
-                status.update(label="エラー終了", state="error")
