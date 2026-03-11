@@ -498,7 +498,7 @@ with tab3:
                         await asyncio.sleep(1) 
 
                         # データ抽出
-                        name = await page.input_value("#form_name")
+                        site_girl_name = await page.input_value("#form_name")
                         age = await page.input_value("#form_age")
                         tall = await page.input_value("#form_tall")
                         bust = await page.input_value("#form_bust")
@@ -516,27 +516,24 @@ with tab3:
                         shop_comment = await page.input_value("#form_comments")
 
                         # --- IDの生成 (店舗ID + 連番2桁) ---
-                        # i は 0 から始まるので +1。zfill(2) で 01, 02 にする
                         custom_id = f"{str(shop_id).strip()}{(i + 1):02d}"
 
                         # --- 指定された列順に構成 ---
-                        # 列順: ID(A), エリア(B:空), 名前(C), 年齢(D), 身長(E), バスト(F), 
-                        #      カップ(G), ウエスト(H), ヒップ(I), 系統(J:空), キャッチ(K), 
-                        #      女コメント(L), 店コメント(M)
+                        # C列を「店舗名 名前」の形式に結合
                         row = [
-                            custom_id,      # A: ID (店舗ID+連番)
-                            "",             # B: エリア (除外のため空)
-                            name,           # C: 名前
-                            age,            # D: 年齢
-                            tall,           # E: 身長
-                            bust,           # F: バスト
-                            cup,            # G: カップ数
-                            waist,          # H: ウエスト
-                            hip,            # I: ヒップ
-                            "",             # J: 系統 (除外のため空)
-                            catch,          # K: キャッチコピー
-                            girl_comment,   # L: 女の子コメント
-                            shop_comment    # M: 店舗コメント
+                            custom_id,                  # A: ID (店舗ID+連番)
+                            "",                         # B: エリア (空)
+                            f"{shop_name} {site_girl_name}", # C: 店舗名 名前
+                            age,                        # D: 年齢
+                            tall,                       # E: 身長
+                            bust,                       # F: バスト
+                            cup,                        # G: カップ数
+                            waist,                      # H: ウエスト
+                            hip,                        # I: ヒップ
+                            "",                         # J: 系統 (空)
+                            catch,                      # K: キャッチコピー
+                            girl_comment,               # L: 女の子コメント
+                            shop_comment                # M: 店舗コメント
                         ]
                         cast_data_list.append(row)
                         progress_bar.progress((i + 1) / len(edit_links))
@@ -561,7 +558,6 @@ with tab3:
                             gs_client = gspread.authorize(creds)
                             worksheet = gs_client.open_by_key(SPREADSHEET_ID).worksheet("キャスト情報")
                             
-                            # 指定された列数に合わせるため、必要に応じて append_rows
                             worksheet.append_rows(result["data"])
                             st.success(f"✅ {len(result['data'])} 名の情報をシートに追加しました。")
                             st.dataframe(pd.DataFrame(result["data"], columns=["ID", "エリア", "名前", "年齢", "身長", "バスト", "カップ", "ウエスト", "ヒップ", "系統", "キャッチ", "女コメント", "店コメント"]))
