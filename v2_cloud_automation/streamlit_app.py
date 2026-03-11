@@ -441,3 +441,53 @@ with tab2:
                     else:
                         st.error(f"❌ {shop['店舗名']} エラー: {res['message']}")
                         status.update(label="❌ 同期失敗", state="error")
+
+with tab3:
+    st.subheader("📊 登録状況の確認・メンテナンス")
+    
+    # 登録済みキャストを抽出
+    registered_casts = [r for r in rows_info if len(r) > 13 and str(r[13]).strip() == "登録済"]
+    
+    st.write(f"現在の登録済みキャスト数: **{len(registered_casts)}** 名")
+    
+    if registered_casts:
+        # 表示用のデータフレーム作成
+        df_registered = pd.DataFrame(
+            registered_casts, 
+            columns=headers_info[:len(registered_casts[0])] # ヘッダー調整
+        )
+        
+        # 必要な列だけ表示（ID, 名前, 店舗名, 登録ステータスなど）
+        # 列番号は元のidxに合わせて適宜調整してください
+        display_cols = [0, 2, 12, 13] 
+        st.dataframe(df_registered.iloc[:, display_cols], use_container_width=True)
+        
+        col_m1, col_m2 = st.columns(2)
+        
+        with col_m1:
+            st.info("💡 ヒント: スプレッドシート側で「登録済」の文字を消すと、Tab 1の未登録リストに再度表示されます。")
+            
+        with col_m2:
+            # デバッグ用のエラーログ画像があれば表示する機能
+            if st.button("📁 直近のエラースクリーンショットを確認"):
+                error_files = [f for f in os.listdir() if f.startswith("error_") and f.endswith(".png")]
+                if error_files:
+                    for img_file in error_files:
+                        st.image(img_file, caption=img_file)
+                else:
+                    st.write("現在、エラーログ画像はありません。")
+    else:
+        st.write("登録済みのキャストはまだいません。")
+
+    st.divider()
+    
+    # システム情報の表示
+    with st.expander("🛠 システム詳細情報"):
+        st.write(f"Playwright Browser Path: `{LOCAL_PW_PATH}`")
+        st.write(f"Spreadsheet ID: `{SPREADSHEET_ID}`")
+        if st.button("ブラウザキャッシュのクリア"):
+            # 不要な一時ファイルの削除ロジックなど
+            for f in os.listdir():
+                if f.startswith("temp_") or f.startswith("error_"):
+                    os.remove(f)
+            st.success("一時ファイルを削除しました。")
