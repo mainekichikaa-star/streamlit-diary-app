@@ -443,61 +443,101 @@ with tab2:
                         status.update(label="❌ 同期失敗", state="error")
                         
 with tab3:
-    st.subheader("📋 既存店コピー (設定の複製)")
-    st.info("コピー元の店舗から設定（料金・オプション・交通費など）を取得し、コピー先の店舗へ上書きします。")
+    st.subheader("📥 既存店キャスト情報の同期 (Web → シート)")
+    st.info("選択した店舗の管理画面にログインし、登録されている全てのキャスト情報をスプレッドシートへ書き出します。")
 
-    # セレクトボックスなどで店舗を選択
-    col_src, col_dst = st.columns(2)
-    
-    with col_src:
-        st.markdown("### 📥 コピー元 (From)")
-        src_shop_name = st.selectbox("情報を取得する店舗", [s['店舗名'] for s in shop_status], key="src_shop_select")
-        src_shop = next(s for s in shop_status if s['店舗名'] == src_shop_name)
+    # 店舗選択（tab1で作成した shop_status を利用）
+    selected_sync_shop_name = st.selectbox("情報を取得する店舗を選択", [s['店舗名'] for s in shop_status], key="sync_shop_select")
+    target_shop = next(s for s in shop_status if s['店舗名'] == selected_sync_shop_name)
 
-    with col_dst:
-        st.markdown("### 📤 コピー先 (To)")
-        dst_shop_names = st.multiselect("情報を反映させる店舗", [s['店舗名'] for s in shop_status if s['店舗名'] != src_shop_name], key="dst_shops_select")
+    # --- 同期処理用関数 ---
+    async def run_fetch_cast_data(shop_id, shop_pass, shop_name):
+        cast_data_list = []
+        async with async_playwright() as p:
+            browser = await p.chromium.launch(headless=True, args=['--no-sandbox'])
+            context = await browser.new_context(locale="ja-JP")
+            page = await context.new_page()
 
-    st.divider()
-
-    # --- コピー専用の非同期ロジック ---
-    async def execute_copy_process(src_info, dst_info_list):
-        """
-        src_info: コピー元のショップ辞書
-        dst_info_list: コピー先のショップ辞書リスト
-        """
-        # Tab2で定義した run_yoyaku_automation と同様のロジックで実装
-        # 実際にはここで src から get し、dst へ set する処理をループします
-        # ここではエラー回避のため、構造を示します
-        results = []
-        for dst_info in dst_info_list:
             try:
-                # 本来はここに Playwright の取得＆入力ロジックを書きます
-                # 現在は動作確認用のスリープ処理
-                await asyncio.sleep(1) 
-                results.append({"name": dst_info['店舗名'], "status": "success"})
+                # 1. ログイン
+                await page.goto("https://ranking-deli.jp/admin/login")
+                await page.fill("#form_email", str(shop_id).strip())
+                await page.fill("#form_password", str(shop_pass).strip())
+                await page.click("#form_submit")
+                
+                # 2. 女の子一覧ページへ
+                await page.goto("https://ranking-deli.jp/admin/girls/")
+                
+                # 3. 各女の子の編集ページURLを取得
+                # HTML内の .girl-btn a (編集ボタン) の href を収集
+                edit_links = await page.locator('.girl-btn a[href*="edit"]').evaluate_all(
+                    "nodes => nodes.map(n => n.href)"
+                )
+                
+                st.write(f"🔍 {len(edit_links)} 名のキャストを検出しました。取得を開始します...")
+                
+                progress_bar = st.progress(0)
+                for i, link in enumerate(edit_links):
+                    await page.goto(link)
+                    await asyncio.sleep(1) # 負荷軽減
+
+                    # データの抽出
+                    name = await page.input_value("#form_name")
+                    age = await page.input_value("#form_age")
+                    tall = await page.input_value("#form_tall")
+                    bust = await page.input_value("#form_bust")
+                    waist = await page.input_value("#form_waist")
+                    hip = await page.input_value("#form_hip")
+                    
+                    # カップ数 (セレクトボックスから "Gカップ" -> "G" に変換)
+                    cup_full = await page.locator("#form_cup option:checked").text_content()
+                    cup = cup_full.replace("カップ", "").strip() if cup_full else ""
+
+                    # キャッチ・コメント
+                    catch = await page.input_value("#form_catchcopy")
+                    girl_comment = await page.input_value("#form_girl_comments")
+                    shop_comment = await page.input_value("#form_comments")
+
+                    # スプレッドシート形式に整形
+                    # A:空, B:空, C:店舗名 名前, D:身長, E:バスト, F:カップ, G:ウエスト, H:ヒップ, I:年齢...
+                    row = [
+                        "", # A列
+                        "", # B列
+                        f"{shop_name} {name}", # C列
+                        tall, bust, cup, waist, hip, age,
+                        "", "", "", # J, K, L (予備)
+                        shop_name, # M列: 登録店舗
+                        "登録済",  # N列: ステータス
+                        catch, girl_comment, shop_comment
+                    ]
+                    cast_data_list.append(row)
+                    progress_bar.progress((i + 1) / len(edit_links))
+
+                return {"status": "success", "data": cast_data_list}
             except Exception as e:
-                results.append({"name": dst_info['店舗名'], "status": "error", "message": str(e)})
-        return results
+                return {"status": "error", "message": str(e)}
+            finally:
+                await browser.close()
 
     # --- 実行ボタン ---
-    if st.button("📝 設定をコピーして同期開始", type="primary"):
-        if not dst_shop_names:
-            st.warning("コピー先の店舗を選択してください。")
-        else:
-            dst_shops = [s for s in shop_status if s['店舗名'] in dst_shop_names]
+    if st.button("🔄 同期を実行（スプレッドシートへ追記）", type="primary"):
+        with st.status("同期処理を実行中...") as status:
+            loop = asyncio.new_event_loop()
+            asyncio.set_event_loop(loop)
+            result = loop.run_until_complete(run_fetch_cast_data(target_shop['ID'], target_shop['raw_pass'], target_shop['店舗名']))
             
-            with st.status("🚀 既存店からの設定コピーを実行中...") as status:
-                # 修正ポイント: await を直接使わず asyncio.run() で囲む
-                loop = asyncio.new_event_loop()
-                asyncio.set_event_loop(loop)
-                res_list = loop.run_until_complete(execute_copy_process(src_shop, dst_shops))
+            if result["status"] == "success":
+                # スプレッドシートに書き込み
+                creds = Credentials.from_service_account_info(st.secrets["gcp_service_account"], scopes=SCOPE)
+                gs_client = gspread.authorize(creds)
+                worksheet = gs_client.open_by_key(SPREADSHEET_ID).worksheet("キャスト情報")
                 
-                for res in res_list:
-                    if res["status"] == "success":
-                        st.write(f"✅ {res['name']}: コピー完了")
-                    else:
-                        st.error(f"❌ {res['name']}: {res['message']}")
-                
-                status.update(label="全てのコピー処理が終了しました", state="complete")
-            st.success("処理が完了しました。")
+                if result["data"]:
+                    worksheet.append_rows(result["data"])
+                    st.success(f"✅ {len(result['data'])} 名の情報をシートに追加しました。")
+                else:
+                    st.warning("キャスト情報が見つかりませんでした。")
+                status.update(label="同期完了", state="complete")
+            else:
+                st.error(f"エラーが発生しました: {result['message']}")
+                status.update(label="エラー終了", state="error")
