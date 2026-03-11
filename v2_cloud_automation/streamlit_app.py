@@ -83,20 +83,18 @@ async def upload_and_crop(page, modal_id, file_path):
         st.warning(f"画像編集工程でスキップが発生しました ({modal_id}): {e}")
 
 async def run_automation(cast_row_list, shop_id, shop_pass, sub_image_paths):
-    # 新しい列構成（Q列まで）に基づいたインデックス設定
-    # A:0, B:1, C:2(店舗名 名前), D:3(年齢), E:4(身長), F:5(バスト), G:6(カップ), H:7(ウエスト), I:8(ヒップ)
-    # K:10(キャッチ), L:11(娘コメ), M:12(店コメ), Q:16(画像)
-    idx_name = 2        # C列: 名前
-    idx_age = 3         # D列: 年齢
-    idx_tall = 4        # E列: 身長
-    idx_bust = 5        # F列: バスト
-    idx_cup = 6         # G列: カップ数
-    idx_waist = 7       # H列: ウエスト
-    idx_hip = 8         # I列: ヒップ
-    idx_catch = 10      # K列: キャッチコピー
+    # --- Q列までの新構成に基づいたインデックス設定 ---
+    idx_name = 2         # C列: 名前 (スプレッドシートの値をそのまま使用)
+    idx_age = 3          # D列: 年齢
+    idx_tall = 4         # E列: 身長
+    idx_bust = 5         # F列: バスト
+    idx_cup = 6          # G列: カップ数
+    idx_waist = 7        # H列: ウエスト
+    idx_hip = 8          # I列: ヒップ
+    idx_catch = 10       # K列: キャッチコピー
     idx_girl_comment = 11 # L列: 女の子コメント
     idx_shop_comment = 12 # M列: 店舗コメント
-    idx_main_img = 16   # Q列: メイン画像
+    idx_main_img = 16    # Q列: メイン画像
     
     if not os.path.exists(LOCAL_PW_PATH):
         try: subprocess.run([sys.executable, "-m", "playwright", "install", "chromium"], check=True)
@@ -211,17 +209,16 @@ with tab1:
             s_id = str(shop.get('店舗ID')).strip()
             s_pass = str(shop.get('店舗PASSWORD')).strip()
             
-            # --- Q列構成に合わせた判定ロジック ---
-            # 新構成 C列(index 2): 「店舗名 名前」が含まれる
-            # 新構成 N列(index 13): ステータス（ここが「登録済」以外を表示）
+            # --- O列(index 14)が店舗名、P列(index 15)が登録状況の判定 ---
             unregistered_casts = []
             for r in rows_info:
-                if len(r) > 13:
-                    cast_name_field = str(r[2]).strip()  # C列
-                    status_field = str(r[13]).strip()    # N列
+                if len(r) > 14:
+                    cast_shop_field = str(r[14]).strip()  # O列: 登録店舗
+                    # P列が存在すれば取得
+                    status_field = str(r[15]).strip() if len(r) > 15 else "" 
                     
-                    # C列に店舗名が含まれており、かつN列が「登録済」でない場合
-                    if s_name in cast_name_field and status_field != "登録済":
+                    # O列が店舗名と一致し、かつP列が「登録済」でない場合
+                    if cast_shop_field == s_name and status_field != "登録済":
                         unregistered_casts.append(r)
             
             if s_id and s_pass:
@@ -234,14 +231,9 @@ with tab1:
                     "casts": unregistered_casts
                 })
 
-        # テーブル表示用のデータフレーム
-        df_shops = pd.DataFrame(shop_status)
-        
-        # 実行対象の選択
+        # 実行対象の選択表示
         st.write("実行する店舗を選択してください:")
         selected_shops = []
-        
-        # 列形式でチェックボックスを並べる
         cols = st.columns(3)
         for idx, shop in enumerate(shop_status):
             with cols[idx % 3]:
@@ -259,18 +251,17 @@ with tab1:
                     st.markdown(f"### 🏢 店舗: {shop['店舗名']}")
                     for cast in shop['casts']:
                         target_id = str(cast[0]).strip()
-                        cast_name = cast[2] # C列
+                        cast_name = cast[2] # C列の名前
                         sub_urls = [img_row[2] for img_row in rows_images if str(img_row[1]).strip() == target_id]
                         
                         with st.status(f"【{shop['店舗名']}】{cast_name} さんの登録中...") as status:
                             res = asyncio.run(run_automation(cast, shop['ID'], shop['raw_pass'], sub_urls))
+                            
                             if res["status"] == "success":
-                                # スプレッドシート上の行番号を特定して更新
-                                # 正確な行を特定するためにID(A列)で検索
+                                # P列(16列目)を「登録済」に更新
                                 row_idx = next((i for i, r in enumerate(data_info) if str(r[0]).strip() == target_id), None)
                                 if row_idx:
-                                    # N列(14列目)を「登録済」に更新
-                                    worksheet_cast.update_cell(row_idx + 1, 14, "登録済")
+                                    worksheet_cast.update_cell(row_idx + 1, 16, "登録済")
                                 status.update(label=f"✅ {cast_name} 完了", state="complete")
                             else:
                                 st.error(f"{cast_name} エラー: {res['message']}")
