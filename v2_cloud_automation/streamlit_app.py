@@ -83,8 +83,10 @@ async def upload_and_crop(page, modal_id, file_path):
         st.warning(f"画像編集工程でスキップが発生しました ({modal_id}): {e}")
 
 async def run_automation(cast_row_list, shop_id, shop_pass, sub_image_paths):
-    # --- Q列までの新構成に基づいたインデックス設定 ---
-    idx_name = 2         # C列: 名前 (スプレッドシートの値をそのまま使用)
+    # --- 新構成(Q列まで)に基づいたインデックス設定 ---
+    # A:0, B:1, C:2(名前), D:3(年齢), E:4(身長), F:5(バスト), G:6(カップ), H:7(ウエスト), I:8(ヒップ)
+    # K:10(キャッチ), L:11(娘コメ), M:12(店コメ), Q:16(メイン画像)
+    idx_name = 2         # C列: 名前 (スプレッドシート上の名前を使用)
     idx_age = 3          # D列: 年齢
     idx_tall = 4         # E列: 身長
     idx_bust = 5         # F列: バスト
@@ -112,7 +114,7 @@ async def run_automation(cast_row_list, shop_id, shop_pass, sub_image_paths):
             await page.click("#form_submit")
             await page.goto("https://ranking-deli.jp/admin/girls/create/")
 
-            # 修正したインデックスで各フィールドを入力
+            # フィールド入力
             await page.fill("#form_name", str(cast_row_list[idx_name]))
             await page.fill("#form_age", str(cast_row_list[idx_age]))
             await page.fill("#form_tall", str(cast_row_list[idx_tall]))
