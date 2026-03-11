@@ -444,23 +444,34 @@ with tab2:
                         
 with tab3:
     st.subheader("📥 既存店キャスト情報の同期 (Web → シート)")
-    st.info("管理画面からキャスト情報を抽出し、Tab 1の登録形式に合わせてスプレッドシートへ書き出します。")
+    st.info("選択した店舗の管理画面にログインし、登録されている全てのキャスト情報をスプレッドシートへ書き出します。")
 
     # 店舗リストの作成
-    if 'shop_status' in locals() and shop_status:
-        shop_names = [s['店舗名'] for s in shop_status]
+    shop_names = [s['店舗名'] for s in shop_status] if 'shop_status' in locals() else []
+
+    if shop_names:
         selected_sync_shop_name = st.selectbox("情報を取得する店舗を選択", shop_names, key="sync_shop_select")
         target_shop = next(s for s in shop_status if s['店舗名'] == selected_sync_shop_name)
 
         # --- 同期処理用関数 ---
         async def run_fetch_cast_data(shop_id, shop_pass, shop_name):
+            import random
+            import requests
+            from googleapiclient.http import MediaIoBaseUpload
+
+            # ブラウザのインストール確認
             if not os.path.exists(LOCAL_PW_PATH):
-                try: subprocess.run([sys.executable, "-m", "playwright", "install", "chromium"], check=True)
-                except: pass
+                try:
+                    subprocess.run([sys.executable, "-m", "playwright", "install", "chromium"], check=True)
+                except:
+                    pass
 
             cast_data_list = []
             async with async_playwright() as p:
-                browser = await p.chromium.launch(headless=True, args=['--no-sandbox', '--disable-dev-shm-usage'])
+                browser = await p.chromium.launch(
+                    headless=True, 
+                    args=['--no-sandbox', '--disable-dev-shm-usage', '--disable-gpu']
+                )
                 context = await browser.new_context(locale="ja-JP")
                 page = await context.new_page()
 
@@ -483,15 +494,27 @@ with tab3:
                     if not edit_links:
                         return {"status": "success", "data": []}
 
-                    st.write(f"🔍 {len(edit_links)} 名のキャストを検出。詳細データを解析中...")
-                    progress_bar = st.progress(0)
+                    st.write(f"🔍 {len(edit_links)} 名のキャストを検出しました。取得を開始します...")
+                    
+                    # ドライブ準備
+                    drive_service = get_drive_service()
+                    folder_name = "キャスト情報_Images"
+                    query = f"name = '{folder_name}' and mimeType = 'application/vnd.google-apps.folder' and trashed = false"
+                    folders = drive_service.files().list(q=query, fields="files(id)").execute().get('files', [])
+                    if folders:
+                        folder_id = folders[0]['id']
+                    else:
+                        file_metadata = {'name': folder_name, 'mimeType': 'application/vnd.google-apps.folder'}
+                        folder = drive_service.files().create(body=file_metadata, fields='id').execute()
+                        folder_id = folder.get('id')
 
+                    progress_bar = st.progress(0)
                     for i, link in enumerate(edit_links):
                         await page.goto(link)
                         await asyncio.sleep(1) 
 
-                        # 基本データ抽出
-                        name = await page.input_value("#form_name")
+                        # データ抽出
+                        site_girl_name = await page.input_value("#form_name")
                         age = await page.input_value("#form_age")
                         tall = await page.input_value("#form_tall")
                         bust = await page.input_value("#form_bust")
@@ -501,45 +524,61 @@ with tab3:
                         try:
                             cup_full = await page.locator("#form_cup option:checked").text_content()
                             cup = cup_full.replace("カップ", "").strip() if cup_full else ""
-                        except: cup = ""
+                        except:
+                            cup = ""
 
                         catch = await page.input_value("#form_catchcopy")
                         girl_comment = await page.input_value("#form_girl_comments")
                         shop_comment = await page.input_value("#form_comments")
 
-                        # 【追加機能】メイン画像のURLを取得 (imgタグのsrcから取得)
-                        main_img_url = ""
+                        # --- 画像1の取得と保存 ---
+                        image_path_in_sheet = ""
                         try:
-                            # プレビュー画像があればそのURLを取得
-                            img_element = page.locator(".upload-img-box img").first
-                            if await img_element.count() > 0:
-                                main_img_url = await img_element.get_attribute("src")
-                        except: pass
+                            # 画像1の大画像のsrcを取得
+                            img_src = await page.locator("#image-box1 .img_b img").get_attribute("src")
+                            if img_src:
+                                # 画像ダウンロード
+                                response = requests.get(img_src, timeout=10)
+                                if response.status_code == 200:
+                                    # IDとランダム文字列でリネーム
+                                    custom_id = f"{str(shop_id).strip()}{(i + 1):02d}"
+                                    rand_str = f"{random.randint(100000, 999999)}"
+                                    new_filename = f"{custom_id}.メイン画像.{rand_str}.jpg"
+                                    
+                                    # ドライブへアップロード
+                                    image_content = io.BytesIO(response.content)
+                                    media = MediaIoBaseUpload(image_content, mimetype='image/jpeg')
+                                    drive_service.files().create(
+                                        body={'name': new_filename, 'parents': [folder_id]},
+                                        media_body=media
+                                    ).execute()
+                                    
+                                    # Q列に入れる用のパス文字列
+                                    image_path_in_sheet = f"{folder_name}/{new_filename}"
+                            else:
+                                custom_id = f"{str(shop_id).strip()}{(i + 1):02d}"
+                        except:
+                            custom_id = f"{str(shop_id).strip()}{(i + 1):02d}"
 
-                        # ID生成
-                        custom_id = f"{str(shop_id).strip()}{(i + 1):02d}"
-
-                        # --- Tab 1の登録用インデックスに完全対応させた列順 ---
-                        # 0:ID, 1:エリア, 2:名前, 3:身長, 4:バスト, 5:カップ, 6:ウエスト, 7:ヒップ, 8:年齢, 
-                        # 9:系統, 10:予備, 11:画像URL, 12:店舗名, 13:ステータス, 14:キャッチ, 15:女コメ, 16:店コメ
+                        # --- 指定された列順に構成 ---
                         row = [
-                            custom_id,          # 0: ID
-                            "",                 # 1: エリア (空)
-                            name,               # 2: 名前 (idx_name)
-                            tall,               # 3: 身長 (idx_tall)
-                            bust,               # 4: バスト (idx_bust)
-                            cup,                # 5: カップ (idx_cup)
-                            waist,              # 6: ウエスト (idx_waist)
-                            hip,                # 7: ヒップ (idx_hip)
-                            age,                # 8: 年齢 (idx_age)
-                            "",                 # 9: 系統
-                            "",                 # 10: 予備
-                            main_img_url,       # 11: 画像URL (idx_main_img) ※URLからDL可能か判定
-                            shop_name,          # 12: 所属店舗名 (フィルタ用)
-                            "コピー済",         # 13: ステータス
-                            catch,              # 14: キャッチ (idx_catch)
-                            girl_comment,       # 15: 女の子コメント (idx_girl_comment)
-                            shop_comment        # 16: 店舗コメント (idx_shop_comment)
+                            custom_id,                  # A: ID (店舗ID+連番)
+                            "",                         # B: エリア (空)
+                            f"{shop_name} {site_girl_name}", # C: 店舗名 名前
+                            age,                        # D: 年齢
+                            tall,                       # E: 身長
+                            bust,                       # F: バスト
+                            cup,                        # G: カップ数
+                            waist,                      # H: ウエスト
+                            hip,                        # I: ヒップ
+                            "",                         # J: 系統 (空)
+                            catch,                      # K: キャッチコピー
+                            girl_comment,               # L: 女の子コメント
+                            shop_comment,               # M: 店舗コメント
+                            "",                         # N: 空
+                            "",                         # O: 空
+                            "",                         # P: 空
+                            image_path_in_sheet         # Q: メイン画像パス
                         ]
                         cast_data_list.append(row)
                         progress_bar.progress((i + 1) / len(edit_links))
@@ -550,32 +589,30 @@ with tab3:
                 finally:
                     await browser.close()
 
-        # --- 実行 ---
+        # --- 実行ボタン ---
         if st.button("🔄 同期を実行（スプレッドシートへ追記）", type="primary", key="exec_sync_btn"):
             with st.status("同期処理を実行中...") as status:
+                loop = asyncio.new_event_loop()
+                asyncio.set_event_loop(loop)
                 try:
-                    # Streamlitの非同期実行
-                    result = asyncio.run(run_fetch_cast_data(target_shop['ID'], target_shop['raw_pass'], target_shop['店舗名']))
+                    result = loop.run_until_complete(run_fetch_cast_data(target_shop['ID'], target_shop['raw_pass'], target_shop['店舗名']))
                     
-                    if result["status"] == "success" and result["data"]:
-                        creds = Credentials.from_service_account_info(st.secrets["gcp_service_account"], scopes=SCOPE)
-                        gs_client = gspread.authorize(creds)
-                        worksheet = gs_client.open_by_key(SPREADSHEET_ID).worksheet("キャスト情報")
-                        
-                        # A列〜Q列（17列分）にデータを追記
-                        worksheet.append_rows(result["data"])
-                        
-                        st.success(f"✅ {len(result['data'])} 名の情報を追加しました。そのままTab 1で一括登録が可能です。")
-                        st.dataframe(pd.DataFrame(result["data"]))
+                    if result["status"] == "success":
+                        if result["data"]:
+                            creds = Credentials.from_service_account_info(st.secrets["gcp_service_account"], scopes=SCOPE)
+                            gs_client = gspread.authorize(creds)
+                            worksheet = gs_client.open_by_key(SPREADSHEET_ID).worksheet("キャスト情報")
+                            
+                            worksheet.append_rows(result["data"])
+                            st.success(f"✅ {len(result['data'])} 名の情報をシートに追加しました。")
+                            st.dataframe(pd.DataFrame(result["data"]))
+                        else:
+                            st.warning("キャスト情報が見つかりませんでした。")
                         status.update(label="同期完了", state="complete")
-                    elif not result["data"]:
-                        st.warning("登録されているキャストが見つかりませんでした。")
-                        status.update(label="データなし", state="complete")
                     else:
-                        st.error(f"エラー: {result['message']}")
+                        st.error(f"エラーが発生しました: {result['message']}")
                         status.update(label="エラー終了", state="error")
-                except Exception as e:
-                    st.error(f"致命的なエラー: {e}")
-                    status.update(label="エラー終了", state="error")
+                finally:
+                    loop.close()
     else:
         st.error("店舗データが読み込まれていません。")
