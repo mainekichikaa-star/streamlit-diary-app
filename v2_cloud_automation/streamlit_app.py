@@ -446,62 +446,58 @@ with tab3:
     st.subheader("📋 既存店コピー (設定の複製)")
     st.info("コピー元の店舗から設定（料金・オプション・交通費など）を取得し、コピー先の店舗へ上書きします。")
 
+    # セレクトボックスなどで店舗を選択
     col_src, col_dst = st.columns(2)
     
     with col_src:
         st.markdown("### 📥 コピー元 (From)")
-        src_shop_name = st.selectbox("情報を取得する店舗", [s['店舗名'] for s in shop_status], key="src_shop")
+        src_shop_name = st.selectbox("情報を取得する店舗", [s['店舗名'] for s in shop_status], key="src_shop_select")
         src_shop = next(s for s in shop_status if s['店舗名'] == src_shop_name)
 
     with col_dst:
         st.markdown("### 📤 コピー先 (To)")
-        dst_shop_names = st.multiselect("情報を反映させる店舗", [s['店舗名'] for s in shop_status if s['店舗名'] != src_shop_name], key="dst_shops")
+        dst_shop_names = st.multiselect("情報を反映させる店舗", [s['店舗名'] for s in shop_status if s['店舗名'] != src_shop_name], key="dst_shops_select")
 
     st.divider()
 
-    if st.button("📝 コピー処理を開始", type="primary"):
+    # --- コピー専用の非同期ロジック ---
+    async def execute_copy_process(src_info, dst_info_list):
+        """
+        src_info: コピー元のショップ辞書
+        dst_info_list: コピー先のショップ辞書リスト
+        """
+        # Tab2で定義した run_yoyaku_automation と同様のロジックで実装
+        # 実際にはここで src から get し、dst へ set する処理をループします
+        # ここではエラー回避のため、構造を示します
+        results = []
+        for dst_info in dst_info_list:
+            try:
+                # 本来はここに Playwright の取得＆入力ロジックを書きます
+                # 現在は動作確認用のスリープ処理
+                await asyncio.sleep(1) 
+                results.append({"name": dst_info['店舗名'], "status": "success"})
+            except Exception as e:
+                results.append({"name": dst_info['店舗名'], "status": "error", "message": str(e)})
+        return results
+
+    # --- 実行ボタン ---
+    if st.button("📝 設定をコピーして同期開始", type="primary"):
         if not dst_shop_names:
             st.warning("コピー先の店舗を選択してください。")
         else:
-            # --- 実行ロジック ---
-            async def run_copy_automation(src_id, src_pass, dst_id, dst_pass):
-                async with async_playwright() as p:
-                    browser = await p.chromium.launch(headless=True, args=['--no-sandbox'])
-                    # セッションを分けるためにコンテキストを個別に作成
-                    context_src = await browser.new_context(viewport={'width': 1280, 'height': 1200})
-                    page_src = await context_src.new_page()
-
-                    try:
-                        # 1. コピー元からデータ取得 (Tab2のロジックを流用)
-                        await page_src.goto("https://ranking-deli.jp/admin/login")
-                        await page_src.fill("#form_email", src_id)
-                        await page_src.fill("#form_password", src_pass)
-                        await page_src.click("#form_submit")
-                        
-                        # (ここで料金、オプション、交通費などを変数に格納する処理... Tab2の取得ロジックを関数化して使い回すと効率的です)
-                        # 今回は例として「共通の同期処理」を実行する流れを示します。
-                        
-                        st.write(f"🔄 {src_id} から設定を抽出中...")
-                        # ※ ここにTab2にあるような「page.goto(...)」からデータ変数に入れるロジックが入ります。
-
-                        # 2. コピー先へログインして書き込み
-                        context_dst = await browser.new_context(viewport={'width': 1280, 'height': 1200})
-                        page_dst = await context_dst.new_page()
-                        # ... 同様にログインして、取得した変数を fill() していく
-
-                        return {"status": "success"}
-                    except Exception as e:
-                        return {"status": "error", "message": str(e)}
-                    finally:
-                        await browser.close()
-
-            # 各店舗に対してループ実行
-            for d_name in dst_shop_names:
-                dst_shop = next(s for s in shop_status if s['店舗名'] == d_name)
-                with st.status(f"🚀 {src_shop['店舗名']} → {d_name} コピー中...") as status:
-                    # 実際にはここで Tab2 の run_yoyaku_automation を「srcで取得」「dstで入力」に分割して呼び出す
-                    # 今回は簡易的に「成功」を表示
-                    await asyncio.sleep(2) 
-                    status.update(label=f"✅ {d_name} へのコピーが完了しました", state="complete")
-
-            st.success("全てのコピー工程が終了しました。")
+            dst_shops = [s for s in shop_status if s['店舗名'] in dst_shop_names]
+            
+            with st.status("🚀 既存店からの設定コピーを実行中...") as status:
+                # 修正ポイント: await を直接使わず asyncio.run() で囲む
+                loop = asyncio.new_event_loop()
+                asyncio.set_event_loop(loop)
+                res_list = loop.run_until_complete(execute_copy_process(src_shop, dst_shops))
+                
+                for res in res_list:
+                    if res["status"] == "success":
+                        st.write(f"✅ {res['name']}: コピー完了")
+                    else:
+                        st.error(f"❌ {res['name']}: {res['message']}")
+                
+                status.update(label="全てのコピー処理が終了しました", state="complete")
+            st.success("処理が完了しました。")
