@@ -444,7 +444,7 @@ with tab2:
                         
 with tab3:
     st.subheader("📥 既存店キャスト情報の同期 (Web → シート)")
-    st.info("選択した店舗の管理画面にログインし、登録されている全てのキャスト情報をスプレッドシートへ書き出します。")
+    st.info("管理画面からキャスト情報を抽出し、Tab 1の登録形式に合わせてスプレッドシートへ書き出します。")
 
     # 店舗リストの作成
     if 'shop_status' in locals() and shop_status:
@@ -454,19 +454,13 @@ with tab3:
 
         # --- 同期処理用関数 ---
         async def run_fetch_cast_data(shop_id, shop_pass, shop_name):
-            # ブラウザのインストール確認
             if not os.path.exists(LOCAL_PW_PATH):
-                try:
-                    subprocess.run([sys.executable, "-m", "playwright", "install", "chromium"], check=True)
-                except:
-                    pass
+                try: subprocess.run([sys.executable, "-m", "playwright", "install", "chromium"], check=True)
+                except: pass
 
             cast_data_list = []
             async with async_playwright() as p:
-                browser = await p.chromium.launch(
-                    headless=True, 
-                    args=['--no-sandbox', '--disable-dev-shm-usage', '--disable-gpu']
-                )
+                browser = await p.chromium.launch(headless=True, args=['--no-sandbox', '--disable-dev-shm-usage'])
                 context = await browser.new_context(locale="ja-JP")
                 page = await context.new_page()
 
@@ -489,15 +483,15 @@ with tab3:
                     if not edit_links:
                         return {"status": "success", "data": []}
 
-                    st.write(f"🔍 {len(edit_links)} 名のキャストを検出しました。取得を開始します...")
-                    
+                    st.write(f"🔍 {len(edit_links)} 名のキャストを検出。詳細データを解析中...")
                     progress_bar = st.progress(0)
+
                     for i, link in enumerate(edit_links):
                         await page.goto(link)
                         await asyncio.sleep(1) 
 
-                        # データ抽出
-                        site_girl_name = await page.input_value("#form_name")
+                        # 基本データ抽出
+                        name = await page.input_value("#form_name")
                         age = await page.input_value("#form_age")
                         tall = await page.input_value("#form_tall")
                         bust = await page.input_value("#form_bust")
@@ -507,36 +501,45 @@ with tab3:
                         try:
                             cup_full = await page.locator("#form_cup option:checked").text_content()
                             cup = cup_full.replace("カップ", "").strip() if cup_full else ""
-                        except:
-                            cup = ""
+                        except: cup = ""
 
                         catch = await page.input_value("#form_catchcopy")
                         girl_comment = await page.input_value("#form_girl_comments")
                         shop_comment = await page.input_value("#form_comments")
 
-                        # --- IDの生成 (店舗ID + 連番2桁) ---
+                        # 【追加機能】メイン画像のURLを取得 (imgタグのsrcから取得)
+                        main_img_url = ""
+                        try:
+                            # プレビュー画像があればそのURLを取得
+                            img_element = page.locator(".upload-img-box img").first
+                            if await img_element.count() > 0:
+                                main_img_url = await img_element.get_attribute("src")
+                        except: pass
+
+                        # ID生成
                         custom_id = f"{str(shop_id).strip()}{(i + 1):02d}"
 
-                        # --- スプレッドシートの列構成に厳密に合わせる ---
-                        # run_automationのインデックス: 0:ID, 1:エリア, 2:名前, 3:身長, 4:バスト, 5:カップ, 6:ウエスト, 7:ヒップ, 8:年齢... 12:店舗名
+                        # --- Tab 1の登録用インデックスに完全対応させた列順 ---
+                        # 0:ID, 1:エリア, 2:名前, 3:身長, 4:バスト, 5:カップ, 6:ウエスト, 7:ヒップ, 8:年齢, 
+                        # 9:系統, 10:予備, 11:画像URL, 12:店舗名, 13:ステータス, 14:キャッチ, 15:女コメ, 16:店コメ
                         row = [
-                            custom_id,          # A(0): ID
-                            "",                 # B(1): エリア
-                            site_girl_name,     # C(2): 名前 (idx_name=2)
-                            tall,               # D(3): 身長 (idx_tall=3)
-                            bust,               # E(4): バスト (idx_bust=4)
-                            cup,                # F(5): カップ (idx_cup=5)
-                            waist,              # G(6): ウエスト (idx_waist=6)
-                            hip,                # H(7): ヒップ (idx_hip=7)
-                            age,                # I(8): 年齢 (idx_age=8)
-                            "",                 # J(9): 系統
-                            "",                 # K(10): (予備)
-                            "",                 # L(11): メイン画像URL (idx_main_img=11)
-                            shop_name,          # M(12): 登録店舗名 (フィルタ用)
-                            "未登録",           # N(13): ステータス
-                            catch,              # O(14): キャッチ (idx_catch=14)
-                            girl_comment,       # P(15): 女の子コメント (idx_girl_comment=15)
-                            shop_comment        # Q(16): 店舗コメント (idx_shop_comment=16)
+                            custom_id,          # 0: ID
+                            "",                 # 1: エリア (空)
+                            name,               # 2: 名前 (idx_name)
+                            tall,               # 3: 身長 (idx_tall)
+                            bust,               # 4: バスト (idx_bust)
+                            cup,                # 5: カップ (idx_cup)
+                            waist,              # 6: ウエスト (idx_waist)
+                            hip,                # 7: ヒップ (idx_hip)
+                            age,                # 8: 年齢 (idx_age)
+                            "",                 # 9: 系統
+                            "",                 # 10: 予備
+                            main_img_url,       # 11: 画像URL (idx_main_img) ※URLからDL可能か判定
+                            shop_name,          # 12: 所属店舗名 (フィルタ用)
+                            "コピー済",         # 13: ステータス
+                            catch,              # 14: キャッチ (idx_catch)
+                            girl_comment,       # 15: 女の子コメント (idx_girl_comment)
+                            shop_comment        # 16: 店舗コメント (idx_shop_comment)
                         ]
                         cast_data_list.append(row)
                         progress_bar.progress((i + 1) / len(edit_links))
@@ -547,33 +550,32 @@ with tab3:
                 finally:
                     await browser.close()
 
-        # --- 実行ボタン ---
+        # --- 実行 ---
         if st.button("🔄 同期を実行（スプレッドシートへ追記）", type="primary", key="exec_sync_btn"):
             with st.status("同期処理を実行中...") as status:
                 try:
-                    # asyncio.run() を直接使う形に修正（Streamlit内での安定性のため）
+                    # Streamlitの非同期実行
                     result = asyncio.run(run_fetch_cast_data(target_shop['ID'], target_shop['raw_pass'], target_shop['店舗名']))
                     
-                    if result["status"] == "success":
-                        if result["data"]:
-                            creds = Credentials.from_service_account_info(st.secrets["gcp_service_account"], scopes=SCOPE)
-                            gs_client = gspread.authorize(creds)
-                            worksheet = gs_client.open_by_key(SPREADSHEET_ID).worksheet("キャスト情報")
-                            
-                            worksheet.append_rows(result["data"])
-                            st.success(f"✅ {len(result['data'])} 名の情報をシートに追加しました。")
-                            
-                            # 表示用のプレビュー
-                            df_preview = pd.DataFrame(result["data"])
-                            st.dataframe(df_preview)
-                        else:
-                            st.warning("キャスト情報が見つかりませんでした。")
+                    if result["status"] == "success" and result["data"]:
+                        creds = Credentials.from_service_account_info(st.secrets["gcp_service_account"], scopes=SCOPE)
+                        gs_client = gspread.authorize(creds)
+                        worksheet = gs_client.open_by_key(SPREADSHEET_ID).worksheet("キャスト情報")
+                        
+                        # A列〜Q列（17列分）にデータを追記
+                        worksheet.append_rows(result["data"])
+                        
+                        st.success(f"✅ {len(result['data'])} 名の情報を追加しました。そのままTab 1で一括登録が可能です。")
+                        st.dataframe(pd.DataFrame(result["data"]))
                         status.update(label="同期完了", state="complete")
+                    elif not result["data"]:
+                        st.warning("登録されているキャストが見つかりませんでした。")
+                        status.update(label="データなし", state="complete")
                     else:
-                        st.error(f"エラーが発生しました: {result['message']}")
+                        st.error(f"エラー: {result['message']}")
                         status.update(label="エラー終了", state="error")
                 except Exception as e:
-                    st.error(f"実行エラー: {e}")
+                    st.error(f"致命的なエラー: {e}")
                     status.update(label="エラー終了", state="error")
     else:
-        st.error("店舗データが読み込まれていません。Tab 1でスプレッドシートが正しく読み込まれているか確認してください。")
+        st.error("店舗データが読み込まれていません。")
