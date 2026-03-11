@@ -580,5 +580,3 @@ with tab3:
                     status.update(label="エラー終了", state="error")
     else:
         st.error("店舗データが読み込まれていません。Tab 1でスプレッドシートが正しく読み込まれているか確認してください。")
-    else:
-        st.error("店舗データが読み込まれていません。")
