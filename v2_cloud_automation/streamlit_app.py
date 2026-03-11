@@ -83,8 +83,20 @@ async def upload_and_crop(page, modal_id, file_path):
         st.warning(f"画像編集工程でスキップが発生しました ({modal_id}): {e}")
 
 async def run_automation(cast_row_list, shop_id, shop_pass, sub_image_paths):
-    idx_name, idx_tall, idx_bust, idx_cup, idx_waist, idx_hip, idx_age, idx_main_img = 2, 3, 4, 5, 6, 7, 8, 11
-    idx_catch, idx_girl_comment, idx_shop_comment = 14, 15, 16 
+    # 新しい列構成（Q列まで）に基づいたインデックス設定
+    # A:0, B:1, C:2(店舗名 名前), D:3(年齢), E:4(身長), F:5(バスト), G:6(カップ), H:7(ウエスト), I:8(ヒップ)
+    # K:10(キャッチ), L:11(娘コメ), M:12(店コメ), Q:16(画像)
+    idx_name = 2        # C列: 名前
+    idx_age = 3         # D列: 年齢
+    idx_tall = 4        # E列: 身長
+    idx_bust = 5        # F列: バスト
+    idx_cup = 6         # G列: カップ数
+    idx_waist = 7       # H列: ウエスト
+    idx_hip = 8         # I列: ヒップ
+    idx_catch = 10      # K列: キャッチコピー
+    idx_girl_comment = 11 # L列: 女の子コメント
+    idx_shop_comment = 12 # M列: 店舗コメント
+    idx_main_img = 16   # Q列: メイン画像
     
     if not os.path.exists(LOCAL_PW_PATH):
         try: subprocess.run([sys.executable, "-m", "playwright", "install", "chromium"], check=True)
@@ -102,6 +114,7 @@ async def run_automation(cast_row_list, shop_id, shop_pass, sub_image_paths):
             await page.click("#form_submit")
             await page.goto("https://ranking-deli.jp/admin/girls/create/")
 
+            # 修正したインデックスで各フィールドを入力
             await page.fill("#form_name", str(cast_row_list[idx_name]))
             await page.fill("#form_age", str(cast_row_list[idx_age]))
             await page.fill("#form_tall", str(cast_row_list[idx_tall]))
@@ -198,8 +211,18 @@ with tab1:
             s_id = str(shop.get('店舗ID')).strip()
             s_pass = str(shop.get('店舗PASSWORD')).strip()
             
-            # この店舗に所属し、かつ「未登録」または空白の人数を出す
-            unregistered_casts = [r for r in rows_info if str(r[12]).strip() == s_name and (len(r) < 14 or str(r[13]).strip() != "登録済")]
+            # --- Q列構成に合わせた判定ロジック ---
+            # 新構成 C列(index 2): 「店舗名 名前」が含まれる
+            # 新構成 N列(index 13): ステータス（ここが「登録済」以外を表示）
+            unregistered_casts = []
+            for r in rows_info:
+                if len(r) > 13:
+                    cast_name_field = str(r[2]).strip()  # C列
+                    status_field = str(r[13]).strip()    # N列
+                    
+                    # C列に店舗名が含まれており、かつN列が「登録済」でない場合
+                    if s_name in cast_name_field and status_field != "登録済":
+                        unregistered_casts.append(r)
             
             if s_id and s_pass:
                 shop_status.append({
@@ -236,17 +259,17 @@ with tab1:
                     st.markdown(f"### 🏢 店舗: {shop['店舗名']}")
                     for cast in shop['casts']:
                         target_id = str(cast[0]).strip()
-                        cast_name = cast[2]
+                        cast_name = cast[2] # C列
                         sub_urls = [img_row[2] for img_row in rows_images if str(img_row[1]).strip() == target_id]
                         
                         with st.status(f"【{shop['店舗名']}】{cast_name} さんの登録中...") as status:
                             res = asyncio.run(run_automation(cast, shop['ID'], shop['raw_pass'], sub_urls))
                             if res["status"] == "success":
                                 # スプレッドシート上の行番号を特定して更新
-                                # rows_infoは1行目(index 0)がデータなので、全体では index + 2
-                                # 正確な行を特定するためにIDで検索
+                                # 正確な行を特定するためにID(A列)で検索
                                 row_idx = next((i for i, r in enumerate(data_info) if str(r[0]).strip() == target_id), None)
                                 if row_idx:
+                                    # N列(14列目)を「登録済」に更新
                                     worksheet_cast.update_cell(row_idx + 1, 14, "登録済")
                                 status.update(label=f"✅ {cast_name} 完了", state="complete")
                             else:
@@ -445,19 +468,43 @@ with tab2:
                         st.error(f"❌ {shop['店舗名']} エラー: {res['message']}")
                         status.update(label="❌ 同期失敗", state="error")
                         
+import random
+import string
+import requests
+
 with tab3:
     st.subheader("📥 既存店キャスト情報の同期 (Web → シート)")
     st.info("選択した店舗の管理画面にログインし、登録されている全てのキャスト情報をスプレッドシートへ書き出します。")
 
     # 店舗リストの作成
-    if 'shop_status' in locals() and shop_status:
-        shop_names = [s['店舗名'] for s in shop_status]
+    shop_names = [s['店舗名'] for s in shop_status] if 'shop_status' in locals() else []
+
+    if shop_names:
         selected_sync_shop_name = st.selectbox("情報を取得する店舗を選択", shop_names, key="sync_shop_select")
         target_shop = next(s for s in shop_status if s['店舗名'] == selected_sync_shop_name)
 
+        # --- ドライブ用ヘルパー ---
+        def upload_to_drive_custom(file_content, folder_name, file_name):
+            drive_service = get_drive_service()
+            # フォルダを探す
+            query = f"name = '{folder_name}' and mimeType = 'application/vnd.google-apps.folder' and trashed = false"
+            folders = drive_service.files().list(q=query, fields="files(id)").execute().get('files', [])
+            
+            if not folders:
+                folder_metadata = {'name': folder_name, 'mimeType': 'application/vnd.google-apps.folder'}
+                folder = drive_service.files().create(body=folder_metadata, fields='id').execute()
+                folder_id = folder.get('id')
+            else:
+                folder_id = folders[0]['id']
+                
+            file_metadata = {'name': file_name, 'parents': [folder_id]}
+            from googleapiclient.http import MediaIoBaseUpload
+            media = MediaIoBaseUpload(io.BytesIO(file_content), mimetype='image/jpeg')
+            drive_service.files().create(body=file_metadata, media_body=media, fields='id').execute()
+            return f"{folder_name}/{file_name}"
+
         # --- 同期処理用関数 ---
         async def run_fetch_cast_data(shop_id, shop_pass, shop_name):
-            # ブラウザのインストール確認
             if not os.path.exists(LOCAL_PW_PATH):
                 try:
                     subprocess.run([sys.executable, "-m", "playwright", "install", "chromium"], check=True)
@@ -517,29 +564,44 @@ with tab3:
                         girl_comment = await page.input_value("#form_girl_comments")
                         shop_comment = await page.input_value("#form_comments")
 
+                        # --- 画像1の取得 ---
+                        main_image_path_in_sheet = ""
+                        try:
+                            # セレクタから画像1の大画像URLを取得
+                            img_src = await page.locator("#image-box1 .img_b img").get_attribute("src")
+                            if img_src:
+                                response = requests.get(img_src)
+                                if response.status_code == 200:
+                                    rand_str = ''.join(random.choices(string.digits, k=6))
+                                    custom_id = f"{str(shop_id).strip()}{(i + 1):02d}"
+                                    filename = f"{custom_id}.メイン画像.{rand_str}.jpg"
+                                    # ドライブへアップロード
+                                    main_image_path_in_sheet = upload_to_drive_custom(response.content, "キャスト情報_Images", filename)
+                        except Exception as e:
+                            st.warning(f"画像取得スキップ ({site_girl_name}): {e}")
+
                         # --- IDの生成 (店舗ID + 連番2桁) ---
                         custom_id = f"{str(shop_id).strip()}{(i + 1):02d}"
 
-                        # --- スプレッドシートの列構成に厳密に合わせる ---
-                        # run_automationのインデックス: 0:ID, 1:エリア, 2:名前, 3:身長, 4:バスト, 5:カップ, 6:ウエスト, 7:ヒップ, 8:年齢... 12:店舗名
+                        # --- 指定された列順に構成 (Q列まで拡張) ---
                         row = [
-                            custom_id,          # A(0): ID
-                            "",                 # B(1): エリア
-                            site_girl_name,     # C(2): 名前 (idx_name=2)
-                            tall,               # D(3): 身長 (idx_tall=3)
-                            bust,               # E(4): バスト (idx_bust=4)
-                            cup,                # F(5): カップ (idx_cup=5)
-                            waist,              # G(6): ウエスト (idx_waist=6)
-                            hip,                # H(7): ヒップ (idx_hip=7)
-                            age,                # I(8): 年齢 (idx_age=8)
-                            "",                 # J(9): 系統
-                            "",                 # K(10): (予備)
-                            "",                 # L(11): メイン画像URL (idx_main_img=11)
-                            shop_name,          # M(12): 登録店舗名 (フィルタ用)
-                            "未登録",           # N(13): ステータス
-                            catch,              # O(14): キャッチ (idx_catch=14)
-                            girl_comment,       # P(15): 女の子コメント (idx_girl_comment=15)
-                            shop_comment        # Q(16): 店舗コメント (idx_shop_comment=16)
+                            custom_id,                  # A: ID
+                            "",                         # B: エリア
+                            f"{shop_name} {site_girl_name}", # C: 店舗名 名前
+                            age,                        # D: 年齢
+                            tall,                       # E: 身長
+                            bust,                       # F: バスト
+                            cup,                        # G: カップ数
+                            waist,                      # H: ウエスト
+                            hip,                        # I: ヒップ
+                            "",                         # J: 系統
+                            catch,                      # K: キャッチコピー
+                            girl_comment,               # L: 女の子コメント
+                            shop_comment,               # M: 店舗コメント
+                            "",                         # N: (空)
+                            "",                         # O: (空)
+                            "",                         # P: (空)
+                            main_image_path_in_sheet    # Q: メイン画像
                         ]
                         cast_data_list.append(row)
                         progress_bar.progress((i + 1) / len(edit_links))
@@ -553,9 +615,10 @@ with tab3:
         # --- 実行ボタン ---
         if st.button("🔄 同期を実行（スプレッドシートへ追記）", type="primary", key="exec_sync_btn"):
             with st.status("同期処理を実行中...") as status:
+                loop = asyncio.new_event_loop()
+                asyncio.set_event_loop(loop)
                 try:
-                    # asyncio.run() を直接使う形に修正（Streamlit内での安定性のため）
-                    result = asyncio.run(run_fetch_cast_data(target_shop['ID'], target_shop['raw_pass'], target_shop['店舗名']))
+                    result = loop.run_until_complete(run_fetch_cast_data(target_shop['ID'], target_shop['raw_pass'], target_shop['店舗名']))
                     
                     if result["status"] == "success":
                         if result["data"]:
@@ -564,19 +627,15 @@ with tab3:
                             worksheet = gs_client.open_by_key(SPREADSHEET_ID).worksheet("キャスト情報")
                             
                             worksheet.append_rows(result["data"])
-                            st.success(f"✅ {len(result['data'])} 名の情報をシートに追加しました。")
-                            
-                            # 表示用のプレビュー
-                            df_preview = pd.DataFrame(result["data"])
-                            st.dataframe(df_preview)
+                            st.success(f"✅ {len(result['data'])} 名の情報を画像と共にシートに追加しました。")
+                            st.dataframe(pd.DataFrame(result["data"], columns=["ID", "エリア", "名前", "年齢", "身長", "バスト", "カップ", "ウエスト", "ヒップ", "系統", "キャッチ", "女コメント", "店コメント", "空1", "空2", "空3", "メイン画像"]))
                         else:
                             st.warning("キャスト情報が見つかりませんでした。")
                         status.update(label="同期完了", state="complete")
                     else:
                         st.error(f"エラーが発生しました: {result['message']}")
                         status.update(label="エラー終了", state="error")
-                except Exception as e:
-                    st.error(f"実行エラー: {e}")
-                    status.update(label="エラー終了", state="error")
+                finally:
+                    loop.close()
     else:
-        st.error("店舗データが読み込まれていません。Tab 1でスプレッドシートが正しく読み込まれているか確認してください。")
+        st.error("店舗データが読み込まれていません。")
