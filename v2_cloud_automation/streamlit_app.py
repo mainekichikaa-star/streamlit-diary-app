@@ -446,7 +446,7 @@ with tab3:
     st.subheader("📥 既存店キャスト情報の同期 (Web → シート)")
     st.info("選択した店舗の管理画面にログインし、登録されている全てのキャスト情報をスプレッドシートへ書き出します。")
 
-    # 店舗リストの作成（shop_statusがない場合の安全策）
+    # 店舗リストの作成
     shop_names = [s['店舗名'] for s in shop_status] if 'shop_status' in locals() else []
 
     if shop_names:
@@ -455,7 +455,7 @@ with tab3:
 
         # --- 同期処理用関数 ---
         async def run_fetch_cast_data(shop_id, shop_pass, shop_name):
-            # ブラウザのインストール確認（LOCAL_PW_PATHを使用）
+            # ブラウザのインストール確認
             if not os.path.exists(LOCAL_PW_PATH):
                 try:
                     subprocess.run([sys.executable, "-m", "playwright", "install", "chromium"], check=True)
@@ -464,7 +464,6 @@ with tab3:
 
             cast_data_list = []
             async with async_playwright() as p:
-                # 安定性のための引数追加
                 browser = await p.chromium.launch(
                     headless=True, 
                     args=['--no-sandbox', '--disable-dev-shm-usage', '--disable-gpu']
@@ -483,7 +482,7 @@ with tab3:
                     # 2. 女の子一覧ページへ
                     await page.goto("https://ranking-deli.jp/admin/girls/")
                     
-                    # 3. 各女の子の編集ページURLを取得
+                    # 3. 編集URL取得
                     edit_links = await page.locator('.girl-btn a[href*="edit"]').evaluate_all(
                         "nodes => nodes.map(n => n.href)"
                     )
@@ -496,9 +495,9 @@ with tab3:
                     progress_bar = st.progress(0)
                     for i, link in enumerate(edit_links):
                         await page.goto(link)
-                        await asyncio.sleep(1) # 負荷軽減
+                        await asyncio.sleep(1) 
 
-                        # データの抽出
+                        # データ抽出
                         name = await page.input_value("#form_name")
                         age = await page.input_value("#form_age")
                         tall = await page.input_value("#form_tall")
@@ -516,12 +515,28 @@ with tab3:
                         girl_comment = await page.input_value("#form_girl_comments")
                         shop_comment = await page.input_value("#form_comments")
 
+                        # --- IDの生成 (店舗ID + 連番2桁) ---
+                        # i は 0 から始まるので +1。zfill(2) で 01, 02 にする
+                        custom_id = f"{str(shop_id).strip()}{(i + 1):02d}"
+
+                        # --- 指定された列順に構成 ---
+                        # 列順: ID(A), エリア(B:空), 名前(C), 年齢(D), 身長(E), バスト(F), 
+                        #      カップ(G), ウエスト(H), ヒップ(I), 系統(J:空), キャッチ(K), 
+                        #      女コメント(L), 店コメント(M)
                         row = [
-                            "", "", f"{shop_name} {name}", 
-                            tall, bust, cup, waist, hip, age,
-                            "", "", "", 
-                            shop_name, "登録済", 
-                            catch, girl_comment, shop_comment
+                            custom_id,      # A: ID (店舗ID+連番)
+                            "",             # B: エリア (除外のため空)
+                            name,           # C: 名前
+                            age,            # D: 年齢
+                            tall,           # E: 身長
+                            bust,           # F: バスト
+                            cup,            # G: カップ数
+                            waist,          # H: ウエスト
+                            hip,            # I: ヒップ
+                            "",             # J: 系統 (除外のため空)
+                            catch,          # K: キャッチコピー
+                            girl_comment,   # L: 女の子コメント
+                            shop_comment    # M: 店舗コメント
                         ]
                         cast_data_list.append(row)
                         progress_bar.progress((i + 1) / len(edit_links))
@@ -532,10 +547,9 @@ with tab3:
                 finally:
                     await browser.close()
 
-        # --- 実行ボタン（確実に表示される位置） ---
+        # --- 実行ボタン ---
         if st.button("🔄 同期を実行（スプレッドシートへ追記）", type="primary", key="exec_sync_btn"):
             with st.status("同期処理を実行中...") as status:
-                # 新規イベントループで実行
                 loop = asyncio.new_event_loop()
                 asyncio.set_event_loop(loop)
                 try:
@@ -546,8 +560,11 @@ with tab3:
                             creds = Credentials.from_service_account_info(st.secrets["gcp_service_account"], scopes=SCOPE)
                             gs_client = gspread.authorize(creds)
                             worksheet = gs_client.open_by_key(SPREADSHEET_ID).worksheet("キャスト情報")
+                            
+                            # 指定された列数に合わせるため、必要に応じて append_rows
                             worksheet.append_rows(result["data"])
                             st.success(f"✅ {len(result['data'])} 名の情報をシートに追加しました。")
+                            st.dataframe(pd.DataFrame(result["data"], columns=["ID", "エリア", "名前", "年齢", "身長", "バスト", "カップ", "ウエスト", "ヒップ", "系統", "キャッチ", "女コメント", "店コメント"]))
                         else:
                             st.warning("キャスト情報が見つかりませんでした。")
                         status.update(label="同期完了", state="complete")
@@ -557,4 +574,4 @@ with tab3:
                 finally:
                     loop.close()
     else:
-        st.error("店舗データが読み込まれていません。Tab 1でスプレッドシートの読み込みが成功しているか確認してください。")
+        st.error("店舗データが読み込まれていません。")
