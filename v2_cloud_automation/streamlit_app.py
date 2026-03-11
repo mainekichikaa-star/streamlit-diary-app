@@ -202,30 +202,34 @@ with tab1:
         data_images = worksheet_images.get_all_values()
         rows_images = data_images[1:]
         
+        # シート3をレコード形式で取得
         data_shops = worksheet_shops.get_all_records()
         
         # 店舗ごとの未登録数をカウント
         shop_status = []
         for shop in data_shops:
+            # シート3の各列を取得
             s_name = str(shop.get('登録店舗')).strip()
             s_id = str(shop.get('店舗ID')).strip()
             s_pass = str(shop.get('店舗PASSWORD')).strip()
             
-            # --- O列(index 14)が店舗名、P列(index 15)が登録状況の判定 ---
+            # --- 判定ロジック ---
+            # キャスト情報のO列(index 14)と、シート3の「店舗ID」を照合
             unregistered_casts = []
             for r in rows_info:
                 if len(r) > 14:
-                    cast_shop_field = str(r[14]).strip()  # O列: 登録店舗
-                    # P列が存在すれば取得
-                    status_field = str(r[15]).strip() if len(r) > 15 else "" 
+                    # O列(14): 登録店舗（ここに入っている店舗IDを確認）
+                    cast_shop_id = str(r[14]).strip()
+                    # P列(15): 登録ステータス（「登録済」以外、または空白を対象）
+                    status_field = str(r[15]).strip() if len(r) > 15 else ""
                     
-                    # O列が店舗名と一致し、かつP列が「登録済」でない場合
-                    if cast_shop_field == s_name and status_field != "登録済":
+                    # キャスト側のO列とシート3の店舗IDが一致し、かつ未登録の場合
+                    if cast_shop_id == s_id and status_field != "登録済":
                         unregistered_casts.append(r)
             
             if s_id and s_pass:
                 shop_status.append({
-                    "店舗名": s_name,
+                    "店舗名": s_name,      # 表示用は「登録店舗」名
                     "ID": s_id,
                     "PW": "********",
                     "未登録数": len(unregistered_casts),
@@ -236,12 +240,17 @@ with tab1:
         # 実行対象の選択表示
         st.write("実行する店舗を選択してください:")
         selected_shops = []
-        cols = st.columns(3)
-        for idx, shop in enumerate(shop_status):
-            with cols[idx % 3]:
-                is_selected = st.checkbox(f"{shop['店舗名']} ({shop['未登録数']}名)", key=f"shop_{idx}")
-                if is_selected:
-                    selected_shops.append(shop)
+        
+        if not shop_status:
+            st.info("表示できる店舗データがありません。")
+        else:
+            cols = st.columns(3)
+            for idx, shop in enumerate(shop_status):
+                with cols[idx % 3]:
+                    # ボタン表示は「店舗名 (人数)」
+                    is_selected = st.checkbox(f"{shop['店舗名']} ({shop['未登録数']}名)", key=f"shop_{idx}")
+                    if is_selected:
+                        selected_shops.append(shop)
 
         st.divider()
         
@@ -253,14 +262,15 @@ with tab1:
                     st.markdown(f"### 🏢 店舗: {shop['店舗名']}")
                     for cast in shop['casts']:
                         target_id = str(cast[0]).strip()
-                        cast_name = cast[2] # C列の名前
+                        cast_name = cast[2] # C列の名前をそのまま使用
                         sub_urls = [img_row[2] for img_row in rows_images if str(img_row[1]).strip() == target_id]
                         
                         with st.status(f"【{shop['店舗名']}】{cast_name} さんの登録中...") as status:
+                            # 自動化処理の実行
                             res = asyncio.run(run_automation(cast, shop['ID'], shop['raw_pass'], sub_urls))
                             
                             if res["status"] == "success":
-                                # P列(16列目)を「登録済」に更新
+                                # スプレッドシートのP列(16列目)を「登録済」に更新
                                 row_idx = next((i for i, r in enumerate(data_info) if str(r[0]).strip() == target_id), None)
                                 if row_idx:
                                     worksheet_cast.update_cell(row_idx + 1, 16, "登録済")
