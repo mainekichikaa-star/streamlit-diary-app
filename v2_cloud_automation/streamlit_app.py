@@ -446,77 +446,115 @@ with tab3:
     st.subheader("📥 既存店キャスト情報の同期 (Web → シート)")
     st.info("選択した店舗の管理画面にログインし、登録されている全てのキャスト情報をスプレッドシートへ書き出します。")
 
-    # 店舗選択（tab1で作成した shop_status を利用）
-    selected_sync_shop_name = st.selectbox("情報を取得する店舗を選択", [s['店舗名'] for s in shop_status], key="sync_shop_select")
-    target_shop = next(s for s in shop_status if s['店舗名'] == selected_sync_shop_name)
+    # 店舗リストの作成（shop_statusがない場合の安全策）
+    shop_names = [s['店舗名'] for s in shop_status] if 'shop_status' in locals() else []
 
-    # --- 同期処理用関数 ---
-    async def run_fetch_cast_data(shop_id, shop_pass, shop_name):
-        # 【修正箇所】ブラウザがなければインストールする処理を追加
-        if not os.path.exists(LOCAL_PW_PATH):
-            try:
-                subprocess.run([sys.executable, "-m", "playwright", "install", "chromium"], check=True)
-            except:
-                pass
+    if shop_names:
+        selected_sync_shop_name = st.selectbox("情報を取得する店舗を選択", shop_names, key="sync_shop_select")
+        target_shop = next(s for s in shop_status if s['店舗名'] == selected_sync_shop_name)
 
-        cast_data_list = []
-        async with async_playwright() as p:
-            # headless=True, args=['--no-sandbox'] は維持
-            browser = await p.chromium.launch(
-                headless=True, 
-                args=['--no-sandbox', '--disable-dev-shm-usage', '--disable-gpu']
-            )
-            context = await browser.new_context(locale="ja-JP")
-            page = await context.new_page()
+        # --- 同期処理用関数 ---
+        async def run_fetch_cast_data(shop_id, shop_pass, shop_name):
+            # ブラウザのインストール確認（LOCAL_PW_PATHを使用）
+            if not os.path.exists(LOCAL_PW_PATH):
+                try:
+                    subprocess.run([sys.executable, "-m", "playwright", "install", "chromium"], check=True)
+                except:
+                    pass
 
-            try:
-                # 1. ログイン
-                await page.goto("https://ranking-deli.jp/admin/login")
-                await page.fill("#form_email", str(shop_id).strip())
-                await page.fill("#form_password", str(shop_pass).strip())
-                await page.click("#form_submit")
-                
-                # 2. 女の子一覧ページへ
-                await page.goto("https://ranking-deli.jp/admin/girls/")
-                
-                # 3. 各女の子の編集ページURLを取得
-                edit_links = await page.locator('.girl-btn a[href*="edit"]').evaluate_all(
-                    "nodes => nodes.map(n => n.href)"
+            cast_data_list = []
+            async with async_playwright() as p:
+                # 安定性のための引数追加
+                browser = await p.chromium.launch(
+                    headless=True, 
+                    args=['--no-sandbox', '--disable-dev-shm-usage', '--disable-gpu']
                 )
-                
-                st.write(f"🔍 {len(edit_links)} 名のキャストを検出しました。取得を開始します...")
-                
-                progress_bar = st.progress(0)
-                for i, link in enumerate(edit_links):
-                    await page.goto(link)
-                    await asyncio.sleep(1) # 負荷軽減
+                context = await browser.new_context(locale="ja-JP")
+                page = await context.new_page()
 
-                    # データの抽出
-                    name = await page.input_value("#form_name")
-                    age = await page.input_value("#form_age")
-                    tall = await page.input_value("#form_tall")
-                    bust = await page.input_value("#form_bust")
-                    waist = await page.input_value("#form_waist")
-                    hip = await page.input_value("#form_hip")
+                try:
+                    # 1. ログイン
+                    await page.goto("https://ranking-deli.jp/admin/login")
+                    await page.fill("#form_email", str(shop_id).strip())
+                    await page.fill("#form_password", str(shop_pass).strip())
+                    await page.click("#form_submit")
+                    await page.wait_for_load_state("networkidle")
                     
-                    cup_full = await page.locator("#form_cup option:checked").text_content()
-                    cup = cup_full.replace("カップ", "").strip() if cup_full else ""
+                    # 2. 女の子一覧ページへ
+                    await page.goto("https://ranking-deli.jp/admin/girls/")
+                    
+                    # 3. 各女の子の編集ページURLを取得
+                    edit_links = await page.locator('.girl-btn a[href*="edit"]').evaluate_all(
+                        "nodes => nodes.map(n => n.href)"
+                    )
+                    
+                    if not edit_links:
+                        return {"status": "success", "data": []}
 
-                    catch = await page.input_value("#form_catchcopy")
-                    girl_comment = await page.input_value("#form_girl_comments")
-                    shop_comment = await page.input_value("#form_comments")
+                    st.write(f"🔍 {len(edit_links)} 名のキャストを検出しました。取得を開始します...")
+                    
+                    progress_bar = st.progress(0)
+                    for i, link in enumerate(edit_links):
+                        await page.goto(link)
+                        await asyncio.sleep(1) # 負荷軽減
 
-                    row = [
-                        "", "", f"{shop_name} {name}",
-                        tall, bust, cup, waist, hip, age,
-                        "", "", "", shop_name, "登録済",
-                        catch, girl_comment, shop_comment
-                    ]
-                    cast_data_list.append(row)
-                    progress_bar.progress((i + 1) / len(edit_links))
+                        # データの抽出
+                        name = await page.input_value("#form_name")
+                        age = await page.input_value("#form_age")
+                        tall = await page.input_value("#form_tall")
+                        bust = await page.input_value("#form_bust")
+                        waist = await page.input_value("#form_waist")
+                        hip = await page.input_value("#form_hip")
+                        
+                        try:
+                            cup_full = await page.locator("#form_cup option:checked").text_content()
+                            cup = cup_full.replace("カップ", "").strip() if cup_full else ""
+                        except:
+                            cup = ""
 
-                return {"status": "success", "data": cast_data_list}
-            except Exception as e:
-                return {"status": "error", "message": str(e)}
-            finally:
-                await browser.close()
+                        catch = await page.input_value("#form_catchcopy")
+                        girl_comment = await page.input_value("#form_girl_comments")
+                        shop_comment = await page.input_value("#form_comments")
+
+                        row = [
+                            "", "", f"{shop_name} {name}", 
+                            tall, bust, cup, waist, hip, age,
+                            "", "", "", 
+                            shop_name, "登録済", 
+                            catch, girl_comment, shop_comment
+                        ]
+                        cast_data_list.append(row)
+                        progress_bar.progress((i + 1) / len(edit_links))
+
+                    return {"status": "success", "data": cast_data_list}
+                except Exception as e:
+                    return {"status": "error", "message": str(e)}
+                finally:
+                    await browser.close()
+
+        # --- 実行ボタン（確実に表示される位置） ---
+        if st.button("🔄 同期を実行（スプレッドシートへ追記）", type="primary", key="exec_sync_btn"):
+            with st.status("同期処理を実行中...") as status:
+                # 新規イベントループで実行
+                loop = asyncio.new_event_loop()
+                asyncio.set_event_loop(loop)
+                try:
+                    result = loop.run_until_complete(run_fetch_cast_data(target_shop['ID'], target_shop['raw_pass'], target_shop['店舗名']))
+                    
+                    if result["status"] == "success":
+                        if result["data"]:
+                            creds = Credentials.from_service_account_info(st.secrets["gcp_service_account"], scopes=SCOPE)
+                            gs_client = gspread.authorize(creds)
+                            worksheet = gs_client.open_by_key(SPREADSHEET_ID).worksheet("キャスト情報")
+                            worksheet.append_rows(result["data"])
+                            st.success(f"✅ {len(result['data'])} 名の情報をシートに追加しました。")
+                        else:
+                            st.warning("キャスト情報が見つかりませんでした。")
+                        status.update(label="同期完了", state="complete")
+                    else:
+                        st.error(f"エラーが発生しました: {result['message']}")
+                        status.update(label="エラー終了", state="error")
+                finally:
+                    loop.close()
+    else:
+        st.error("店舗データが読み込まれていません。Tab 1でスプレッドシートの読み込みが成功しているか確認してください。")
