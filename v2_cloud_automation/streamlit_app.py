@@ -447,9 +447,8 @@ with tab3:
     st.info("選択した店舗の管理画面にログインし、登録されている全てのキャスト情報をスプレッドシートへ書き出します。")
 
     # 店舗リストの作成
-    shop_names = [s['店舗名'] for s in shop_status] if 'shop_status' in locals() else []
-
-    if shop_names:
+    if 'shop_status' in locals() and shop_status:
+        shop_names = [s['店舗名'] for s in shop_status]
         selected_sync_shop_name = st.selectbox("情報を取得する店舗を選択", shop_names, key="sync_shop_select")
         target_shop = next(s for s in shop_status if s['店舗名'] == selected_sync_shop_name)
 
@@ -518,22 +517,26 @@ with tab3:
                         # --- IDの生成 (店舗ID + 連番2桁) ---
                         custom_id = f"{str(shop_id).strip()}{(i + 1):02d}"
 
-                        # --- 指定された列順に構成 ---
-                        # C列を「店舗名 名前」の形式に結合
+                        # --- スプレッドシートの列構成に厳密に合わせる ---
+                        # run_automationのインデックス: 0:ID, 1:エリア, 2:名前, 3:身長, 4:バスト, 5:カップ, 6:ウエスト, 7:ヒップ, 8:年齢... 12:店舗名
                         row = [
-                            custom_id,                  # A: ID (店舗ID+連番)
-                            "",                         # B: エリア (空)
-                            f"{shop_name} {site_girl_name}", # C: 店舗名 名前
-                            age,                        # D: 年齢
-                            tall,                       # E: 身長
-                            bust,                       # F: バスト
-                            cup,                        # G: カップ数
-                            waist,                      # H: ウエスト
-                            hip,                        # I: ヒップ
-                            "",                         # J: 系統 (空)
-                            catch,                      # K: キャッチコピー
-                            girl_comment,               # L: 女の子コメント
-                            shop_comment                # M: 店舗コメント
+                            custom_id,          # A(0): ID
+                            "",                 # B(1): エリア
+                            site_girl_name,     # C(2): 名前 (idx_name=2)
+                            tall,               # D(3): 身長 (idx_tall=3)
+                            bust,               # E(4): バスト (idx_bust=4)
+                            cup,                # F(5): カップ (idx_cup=5)
+                            waist,              # G(6): ウエスト (idx_waist=6)
+                            hip,                # H(7): ヒップ (idx_hip=7)
+                            age,                # I(8): 年齢 (idx_age=8)
+                            "",                 # J(9): 系統
+                            "",                 # K(10): (予備)
+                            "",                 # L(11): メイン画像URL (idx_main_img=11)
+                            shop_name,          # M(12): 登録店舗名 (フィルタ用)
+                            "未登録",           # N(13): ステータス
+                            catch,              # O(14): キャッチ (idx_catch=14)
+                            girl_comment,       # P(15): 女の子コメント (idx_girl_comment=15)
+                            shop_comment        # Q(16): 店舗コメント (idx_shop_comment=16)
                         ]
                         cast_data_list.append(row)
                         progress_bar.progress((i + 1) / len(edit_links))
@@ -547,10 +550,9 @@ with tab3:
         # --- 実行ボタン ---
         if st.button("🔄 同期を実行（スプレッドシートへ追記）", type="primary", key="exec_sync_btn"):
             with st.status("同期処理を実行中...") as status:
-                loop = asyncio.new_event_loop()
-                asyncio.set_event_loop(loop)
                 try:
-                    result = loop.run_until_complete(run_fetch_cast_data(target_shop['ID'], target_shop['raw_pass'], target_shop['店舗名']))
+                    # asyncio.run() を直接使う形に修正（Streamlit内での安定性のため）
+                    result = asyncio.run(run_fetch_cast_data(target_shop['ID'], target_shop['raw_pass'], target_shop['店舗名']))
                     
                     if result["status"] == "success":
                         if result["data"]:
@@ -560,14 +562,18 @@ with tab3:
                             
                             worksheet.append_rows(result["data"])
                             st.success(f"✅ {len(result['data'])} 名の情報をシートに追加しました。")
-                            st.dataframe(pd.DataFrame(result["data"], columns=["ID", "エリア", "名前", "年齢", "身長", "バスト", "カップ", "ウエスト", "ヒップ", "系統", "キャッチ", "女コメント", "店コメント"]))
+                            
+                            # 表示用のプレビュー
+                            df_preview = pd.DataFrame(result["data"])
+                            st.dataframe(df_preview)
                         else:
                             st.warning("キャスト情報が見つかりませんでした。")
                         status.update(label="同期完了", state="complete")
                     else:
                         st.error(f"エラーが発生しました: {result['message']}")
                         status.update(label="エラー終了", state="error")
-                finally:
-                    loop.close()
+                except Exception as e:
+                    st.error(f"実行エラー: {e}")
+                    status.update(label="エラー終了", state="error")
     else:
-        st.error("店舗データが読み込まれていません。")
+        st.error("店舗データが読み込まれていません。Tab 1でスプレッドシートが正しく読み込まれているか確認してください。")
