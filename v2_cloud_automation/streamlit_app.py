@@ -5,6 +5,9 @@ import subprocess
 import gspread
 import io
 import sys
+import random
+import string
+import requests
 import pandas as pd
 from google.oauth2.service_account import Credentials
 from googleapiclient.discovery import build
@@ -453,13 +456,28 @@ with tab3:
         selected_sync_shop_name = st.selectbox("情報を取得する店舗を選択", shop_names, key="sync_shop_select")
         target_shop = next(s for s in shop_status if s['店舗名'] == selected_sync_shop_name)
 
+        # --- ドライブ用ヘルパー ---
+        def upload_to_drive_custom(file_content, folder_name, file_name):
+            drive_service = get_drive_service()
+            # フォルダを探す
+            query = f"name = '{folder_name}' and mimeType = 'application/vnd.google-apps.folder' and trashed = false"
+            folders = drive_service.files().list(q=query, fields="files(id)").execute().get('files', [])
+            
+            if not folders:
+                folder_metadata = {'name': folder_name, 'mimeType': 'application/vnd.google-apps.folder'}
+                folder = drive_service.files().create(body=folder_metadata, fields='id').execute()
+                folder_id = folder.get('id')
+            else:
+                folder_id = folders[0]['id']
+                
+            file_metadata = {'name': file_name, 'parents': [folder_id]}
+            from googleapiclient.http import MediaIoBaseUpload
+            media = MediaIoBaseUpload(io.BytesIO(file_content), mimetype='image/jpeg')
+            drive_service.files().create(body=file_metadata, media_body=media, fields='id').execute()
+            return f"{folder_name}/{file_name}"
+
         # --- 同期処理用関数 ---
         async def run_fetch_cast_data(shop_id, shop_pass, shop_name):
-            import random
-            import requests
-            from googleapiclient.http import MediaIoBaseUpload
-
-            # ブラウザのインストール確認
             if not os.path.exists(LOCAL_PW_PATH):
                 try:
                     subprocess.run([sys.executable, "-m", "playwright", "install", "chromium"], check=True)
@@ -496,18 +514,6 @@ with tab3:
 
                     st.write(f"🔍 {len(edit_links)} 名のキャストを検出しました。取得を開始します...")
                     
-                    # ドライブ準備
-                    drive_service = get_drive_service()
-                    folder_name = "キャスト情報_Images"
-                    query = f"name = '{folder_name}' and mimeType = 'application/vnd.google-apps.folder' and trashed = false"
-                    folders = drive_service.files().list(q=query, fields="files(id)").execute().get('files', [])
-                    if folders:
-                        folder_id = folders[0]['id']
-                    else:
-                        file_metadata = {'name': folder_name, 'mimeType': 'application/vnd.google-apps.folder'}
-                        folder = drive_service.files().create(body=file_metadata, fields='id').execute()
-                        folder_id = folder.get('id')
-
                     progress_bar = st.progress(0)
                     for i, link in enumerate(edit_links):
                         await page.goto(link)
@@ -531,39 +537,29 @@ with tab3:
                         girl_comment = await page.input_value("#form_girl_comments")
                         shop_comment = await page.input_value("#form_comments")
 
-                        # --- 画像1の取得と保存 ---
-                        image_path_in_sheet = ""
+                        # --- 画像1の取得 ---
+                        main_image_path_in_sheet = ""
                         try:
-                            # 画像1の大画像のsrcを取得
+                            # セレクタから画像1の大画像URLを取得
                             img_src = await page.locator("#image-box1 .img_b img").get_attribute("src")
                             if img_src:
-                                # 画像ダウンロード
-                                response = requests.get(img_src, timeout=10)
+                                response = requests.get(img_src)
                                 if response.status_code == 200:
-                                    # IDとランダム文字列でリネーム
+                                    rand_str = ''.join(random.choices(string.digits, k=6))
                                     custom_id = f"{str(shop_id).strip()}{(i + 1):02d}"
-                                    rand_str = f"{random.randint(100000, 999999)}"
-                                    new_filename = f"{custom_id}.メイン画像.{rand_str}.jpg"
-                                    
+                                    filename = f"{custom_id}.メイン画像.{rand_str}.jpg"
                                     # ドライブへアップロード
-                                    image_content = io.BytesIO(response.content)
-                                    media = MediaIoBaseUpload(image_content, mimetype='image/jpeg')
-                                    drive_service.files().create(
-                                        body={'name': new_filename, 'parents': [folder_id]},
-                                        media_body=media
-                                    ).execute()
-                                    
-                                    # Q列に入れる用のパス文字列
-                                    image_path_in_sheet = f"{folder_name}/{new_filename}"
-                            else:
-                                custom_id = f"{str(shop_id).strip()}{(i + 1):02d}"
-                        except:
-                            custom_id = f"{str(shop_id).strip()}{(i + 1):02d}"
+                                    main_image_path_in_sheet = upload_to_drive_custom(response.content, "キャスト情報_Images", filename)
+                        except Exception as e:
+                            st.warning(f"画像取得スキップ ({site_girl_name}): {e}")
 
-                        # --- 指定された列順に構成 ---
+                        # --- IDの生成 (店舗ID + 連番2桁) ---
+                        custom_id = f"{str(shop_id).strip()}{(i + 1):02d}"
+
+                        # --- 指定された列順に構成 (Q列まで拡張) ---
                         row = [
-                            custom_id,                  # A: ID (店舗ID+連番)
-                            "",                         # B: エリア (空)
+                            custom_id,                  # A: ID
+                            "",                         # B: エリア
                             f"{shop_name} {site_girl_name}", # C: 店舗名 名前
                             age,                        # D: 年齢
                             tall,                       # E: 身長
@@ -571,14 +567,14 @@ with tab3:
                             cup,                        # G: カップ数
                             waist,                      # H: ウエスト
                             hip,                        # I: ヒップ
-                            "",                         # J: 系統 (空)
+                            "",                         # J: 系統
                             catch,                      # K: キャッチコピー
                             girl_comment,               # L: 女の子コメント
                             shop_comment,               # M: 店舗コメント
-                            "",                         # N: 空
-                            "",                         # O: 空
-                            "",                         # P: 空
-                            image_path_in_sheet         # Q: メイン画像パス
+                            "",                         # N: (空)
+                            "",                         # O: (空)
+                            "",                         # P: (空)
+                            main_image_path_in_sheet    # Q: メイン画像
                         ]
                         cast_data_list.append(row)
                         progress_bar.progress((i + 1) / len(edit_links))
@@ -604,8 +600,8 @@ with tab3:
                             worksheet = gs_client.open_by_key(SPREADSHEET_ID).worksheet("キャスト情報")
                             
                             worksheet.append_rows(result["data"])
-                            st.success(f"✅ {len(result['data'])} 名の情報をシートに追加しました。")
-                            st.dataframe(pd.DataFrame(result["data"]))
+                            st.success(f"✅ {len(result['data'])} 名の情報を画像と共にシートに追加しました。")
+                            st.dataframe(pd.DataFrame(result["data"], columns=["ID", "エリア", "名前", "年齢", "身長", "バスト", "カップ", "ウエスト", "ヒップ", "系統", "キャッチ", "女コメント", "店コメント", "空1", "空2", "空3", "メイン画像"]))
                         else:
                             st.warning("キャスト情報が見つかりませんでした。")
                         status.update(label="同期完了", state="complete")
