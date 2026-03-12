@@ -694,62 +694,76 @@ with tab4:
         # --- tab4専用自動化ロジック ---
         async def run_derija_automation(cast_row, s_id, s_pass, sub_urls):
             async with async_playwright() as p:
+                # 人間らしく見せるためのUserAgent設定
                 browser = await p.chromium.launch(headless=True, args=['--no-sandbox'])
-                context = await browser.new_context(viewport={'width': 1280, 'height': 2000}, locale="ja-JP")
+                context = await browser.new_context(
+                    viewport={'width': 1280, 'height': 1200},
+                    user_agent="Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36",
+                    locale="ja-JP"
+                )
                 page = await context.new_page()
                 
                 try:
                     # 1. ログイン処理
-                    await page.goto("https://deli-fuzoku.jp/entry/", wait_until="networkidle") 
+                    await page.goto("https://deli-fuzoku.jp/entry/", wait_until="domcontentloaded") 
                     
-                    # 要素リストに基づいたログイン入力
+                    # 要素を待機して、1文字ずつ入力（人間らしさ）
                     await page.wait_for_selector("#form_username", timeout=10000)
-                    await page.fill("#form_username", s_id)
-                    await page.fill("#form_password", s_pass)
+                    await page.type("#form_username", s_id, delay=100)
+                    await page.type("#form_password", s_pass, delay=100)
                     
-                    # ログインボタン（#button）をクリック
+                    # ログインボタンをクリック
+                    await asyncio.sleep(1)
                     await page.click("#button")
                     
-                    # 2. ログイン後の遷移待ち
+                    # ログイン後の安定を待つ
                     await page.wait_for_load_state("networkidle")
 
-                    # 3. 新規登録画面へ移動
+                    # 2. 登録ページへ直接移動（トップへ戻される現象への対策）
+                    # ログインが成功していれば、このURLで登録画面が開ける
                     await page.goto("https://deli-fuzoku.jp/entry/girl_edit.php", wait_until="networkidle")
                     
-                    # 入力処理
-                    await page.fill("#form_girl_name", str(cast_row[2])) 
-                    await page.fill("#form_girl_age", str(cast_row[3]))  
-                    await page.fill("#form_girl_height", str(cast_row[4])) 
-                    await page.fill("#form_girl_sizeb", str(cast_row[5])) 
-                    await page.fill("#form_girl_sizew", str(cast_row[7])) 
-                    await page.fill("#form_girl_sizeh", str(cast_row[8])) 
+                    # 3. 入力処理（項目が出るまで待機）
+                    await page.wait_for_selector("#form_girl_name", timeout=15000)
+                    
+                    await page.type("#form_girl_name", str(cast_row[2]), delay=50) 
+                    await page.type("#form_girl_age", str(cast_row[3]), delay=50)  
+                    await page.type("#form_girl_height", str(cast_row[4]), delay=50) 
+                    await page.type("#form_girl_sizeb", str(cast_row[5]), delay=50) 
+                    await page.type("#form_girl_sizew", str(cast_row[7]), delay=50) 
+                    await page.type("#form_girl_sizeh", str(cast_row[8]), delay=50) 
                     
                     # カップ選択
                     cup_val = str(cast_row[6]).strip().upper()
                     if cup_val:
                         await page.locator("#form_girl_cup").select_option(label=cup_val)
 
-                    # コメント（M列：店舗コメント）
+                    # コメント（店舗コメント）
                     if len(cast_row) > 12:
-                        await page.fill("#form_girl_pr", str(cast_row[12]))
+                        await page.type("#form_girl_pr", str(cast_row[12]), delay=20)
 
-                    # タグ設定（共通タグ）
+                    # タグ設定（共通タグをポチポチする挙動）
                     common_tags = [0, 1, 5, 10, 15] 
                     for tag_idx in common_tags:
                         selector = f"#form_girl_tags_{tag_idx}"
                         if await page.locator(selector).count() > 0:
-                            await page.locator(selector).check(force=True)
+                            await page.locator(selector).check()
+                            await asyncio.sleep(0.3)
 
                     # 画像アップロード
-                    main_img_url = cast_row[16] # Q列
+                    main_img_url = cast_row[16]
                     if main_img_url:
                         tmp_path = f"derija_tmp_{s_id}.jpg"
                         if download_by_filename(main_img_url, tmp_path):
                             await page.locator("#form_file_girl_photo1").set_input_files(tmp_path)
+                            await asyncio.sleep(1)
                             if os.path.exists(tmp_path): os.remove(tmp_path)
 
-                    # 登録実行
+                    # 4. 登録実行
+                    await asyncio.sleep(1)
                     await page.click("#form_submit_btn")
+                    
+                    # 完了後の遷移を待つ
                     await page.wait_for_load_state("networkidle")
                     await asyncio.sleep(2)
                     return {"status": "success"}
@@ -777,7 +791,6 @@ with tab4:
                         with st.status(f"{c_name} 登録中...") as status:
                             res = asyncio.run(run_derija_automation(cast, shop['ID'], shop['raw_pass'], []))
                             if res["status"] == "success":
-                                # ステータス更新
                                 row_idx = next((i for i, r in enumerate(data_info) if r[0] == cast[0]), None)
                                 if row_idx: worksheet_cast.update_cell(row_idx + 1, 16, "登録済")
                                 status.update(label=f"✅ {c_name} 完了", state="complete")
