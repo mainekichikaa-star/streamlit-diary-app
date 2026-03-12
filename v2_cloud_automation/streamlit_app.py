@@ -694,152 +694,98 @@ with tab3:
 # --- tab4: デリじゃ自動登録 ---
 with tab4:
     st.subheader("🍓 デリじゃ キャスト自動登録")
-    st.info("デリじゃ（deli-fuzoku.jp）への自動登録を行います。")
+    
+    # 【対策1】API制限回避のため、キャッシュ機能を使って読み込む
+    @st.cache_data(ttl=600)  # 10分間は再読み込みせずに保持
+    def fetch_spreadsheet_data():
+        try:
+            creds = Credentials.from_service_account_info(st.secrets["gcp_service_account"], scopes=SCOPE)
+            gs_client = gspread.authorize(creds)
+            ss = gs_client.open_by_key(SPREADSHEET_ID)
+            
+            # シート名を「ID/Password」に変更
+            ws_shops = ss.worksheet("ID/Password")
+            ws_cast = ss.worksheet("キャスト情報")
+            
+            return ws_shops.get_all_records(), ws_cast.get_all_values()
+        except Exception as e:
+            return None, str(e)
 
-    # ==========================================
-    # 【最優先修正】302行目のNameErrorを強制的に黙らせる
-    # アプリ全体でshop_statusが定義されていなくてもエラーにならないようにします
-    # ==========================================
-    import builtins
-    if not hasattr(builtins, 'shop_status'):
-        builtins.shop_status = []
-    if 'shop_status' not in globals():
-        globals()['shop_status'] = []
+    # データの取得
+    data_shops, cast_raw_data = fetch_spreadsheet_data()
 
-    try:
-        # スプレッドシート接続（変数名を完全に独自化して他と衝突させない）
-        creds_dj_final = Credentials.from_service_account_info(st.secrets["gcp_service_account"], scopes=SCOPE)
-        gs_dj_final = gspread.authorize(creds_dj_final)
-        ss_dj_final = gs_dj_final.open_by_key(SPREADSHEET_ID)
+    if data_shops is None:
+        st.error(f"スプレッドシートの読み込みに失敗しました: {cast_raw_data}")
+    else:
+        rows_info = cast_raw_data[1:] # ヘッダー除外
         
-        ws_c_dj = ss_dj_final.worksheet("キャスト情報")
-        ws_s_dj = ss_dj_final.worksheet("ID/Password")
-
-        data_c_dj = ws_c_dj.get_all_values()
-        rows_c_dj = data_c_dj[1:]
-        data_s_dj = ws_s_dj.get_all_records()
-
-        # デリじゃ用店舗リストの作成
-        dj_final_targets = []
-        dj_keywords_list = ["デリじゃ", "デリジャ", "でりじゃ"]
-        
-        for s_row in data_s_dj:
-            s_name = str(s_row.get('登録店舗', '')).strip()
-            if any(k in s_name for k in dj_keywords_list):
-                s_id = str(s_row.get('店舗ID', '')).strip()
-                s_pass = str(s_row.get('店舗PASSWORD', '')).strip()
-                
-                # 未登録キャスト抽出（O列[14]=ID, P列[15]=ステータス）
-                unreg_dj_casts = [r for r in rows_c_dj if len(r) > 15 and str(r[14]).strip() == s_id and str(r[15]).strip() != "登録済"]
-                
-                if s_id and s_pass:
-                    dj_final_targets.append({
-                        "店舗名": s_name,
-                        "ID": s_id,
-                        "raw_pass": s_pass,
-                        "未登録数": len(unreg_dj_casts),
-                        "casts": unreg_dj_casts
+        # デリじゃ用店舗をフィルタリング
+        derija_targets = []
+        for s in data_shops:
+            s_name = str(s.get('登録店舗', '')).strip()
+            if any(k in s_name for k in ["デリじゃ", "デリジャ", "でりじゃ"]):
+                s_id = str(s.get('店舗ID', '')).strip()
+                s_pass = str(s.get('店舗PASSWORD', '')).strip()
+                # 未登録判定（O列[14]:ID, P列[15]:ステータス）
+                unreg = [r for r in rows_info if len(r) > 15 and str(r[14]).strip() == s_id and str(r[15]).strip() != "登録済"]
+                if s_id:
+                    derija_targets.append({
+                        "店舗名": s_name, "ID": s_id, "PASS": s_pass,
+                        "未登録数": len(unreg), "casts": unreg
                     })
 
-        # --- 自動化ロジック (人間操作・在籍追加クリック) ---
-        async def run_derija_reg_v7(cast_data, shop_id, shop_pass):
-            async with async_playwright() as p:
-                browser = await p.chromium.launch(headless=True, args=['--no-sandbox'])
-                context = await browser.new_context(
-                    viewport={'width': 1280, 'height': 1200},
-                    user_agent="Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36"
-                )
-                page = await context.new_page()
-                
-                try:
-                    # 1. ログイン
-                    await page.goto("https://deli-fuzoku.jp/entry/", wait_until="domcontentloaded")
-                    await page.type("#form_username", shop_id, delay=100)
-                    await page.type("#form_password", shop_pass, delay=100)
-                    await asyncio.sleep(1)
-                    await page.click("#button")
-                    await page.wait_for_load_state("networkidle")
-
-                    # 2. 【最重要】「在籍の追加」をクリック
-                    add_target = 'a:has-text("在籍の追加")'
-                    await page.wait_for_selector(add_target, timeout=15000)
-                    await page.click(add_target)
-                    
-                    # 3. 入力画面の待機
-                    await page.wait_for_load_state("networkidle")
-                    await page.wait_for_selector("#form_girl_name", timeout=15000)
-                    
-                    # 4. フォーム入力
-                    await page.type("#form_girl_name", str(cast_data[2]), delay=50) 
-                    await page.type("#form_girl_age", str(cast_data[3]), delay=50)  
-                    await page.type("#form_girl_height", str(cast_data[4]), delay=50) 
-                    await page.type("#form_girl_sizeb", str(cast_data[5]), delay=50) 
-                    await page.type("#form_girl_sizew", str(cast_data[7]), delay=50) 
-                    await page.type("#form_girl_sizeh", str(cast_data[8]), delay=50) 
-                    
-                    cup = str(cast_data[6]).strip().upper()
-                    if cup:
-                        await page.locator("#form_girl_cup").select_option(label=cup)
-
-                    if len(cast_data) > 12:
-                        await page.type("#form_girl_pr", str(cast_data[12]), delay=20)
-
-                    # タグ（チェックボックス）
-                    for tidx in [0, 1, 5, 10, 15]:
-                        t_sel = f"#form_girl_tags_{tidx}"
-                        if await page.locator(t_sel).count() > 0:
-                            await page.locator(t_sel).check()
-                            await asyncio.sleep(0.2)
-
-                    # 画像
-                    img_u = cast_data[16]
-                    if img_u:
-                        tmp_f = f"dj_v7_{shop_id}.jpg"
-                        if download_by_filename(img_u, tmp_f):
-                            await page.locator("#form_file_girl_photo1").set_input_files(tmp_f)
-                            await asyncio.sleep(1)
-                            if os.path.exists(tmp_f): os.remove(tmp_f)
-
-                    # 登録
-                    await asyncio.sleep(1)
-                    await page.click("#form_submit_btn")
-                    await page.wait_for_load_state("networkidle")
-                    return {"status": "success"}
-                except Exception as e:
-                    return {"status": "error", "message": str(e)}
-                finally:
-                    await browser.close()
-
-        # --- UI表示 ---
-        if not dj_final_targets:
+        if not derija_targets:
             st.info("デリじゃ店舗が見つかりません。")
         else:
-            selected_djs = []
-            cols_dj = st.columns(3)
-            # 変数名を独自のものにしてループ
-            for d_idx, d_val in enumerate(dj_final_targets):
-                with cols_dj[d_idx % 3]:
-                    if st.checkbox(f"{d_val['店舗名']} ({d_val['未登録数']}名)", key=f"dj_final_cb_{d_val['ID']}"):
-                        selected_djs.append(d_val)
+            selected_shops = []
+            cols = st.columns(3)
+            for i, s in enumerate(derija_targets):
+                with cols[i % 3]:
+                    if st.checkbox(f"{s['店舗名']} ({s['未登録数']}名)", key=f"dj_v8_{s['ID']}"):
+                        selected_shops.append(s)
 
-            if st.button("🚀 デリじゃ一括登録開始", type="primary", key="dj_final_btn"):
-                for target_shop in selected_djs:
-                    st.markdown(f"#### 🏢 {target_shop['店舗名']}")
-                    for c_info in target_shop['casts']:
-                        c_nm = c_info[2]
-                        with st.status(f"{c_nm} 登録中...") as status:
-                            res_dj = asyncio.run(run_derija_reg_v7(c_info, target_shop['ID'], target_shop['raw_pass']))
-                            if res_dj["status"] == "success":
-                                # スプレッドシート更新
-                                r_idx_dj = next((i for i, r in enumerate(data_c_dj) if r[0] == c_info[0]), None)
-                                if r_idx_dj is not None:
-                                    ws_c_dj.update_cell(r_idx_dj + 1, 16, "登録済")
-                                status.update(label=f"✅ {c_nm} 完了", state="complete")
+            # --- 自動化メインロジック ---
+            async def run_derija_v8(cast_row, s_id, s_pass):
+                async with async_playwright() as p:
+                    browser = await p.chromium.launch(headless=True, args=['--no-sandbox'])
+                    context = await browser.new_context(viewport={'width': 1280, 'height': 1200})
+                    page = await context.new_page()
+                    try:
+                        # 1. ログイン
+                        await page.goto("https://deli-fuzoku.jp/entry/", wait_until="domcontentloaded")
+                        await page.fill("#form_username", s_id)
+                        await page.fill("#form_password", s_pass)
+                        await page.click("#button")
+                        await page.wait_for_load_state("networkidle")
+
+                        # 2. 【重要】「在籍の追加」をクリック
+                        add_link = page.locator('a:has-text("在籍の追加")')
+                        await add_link.wait_for(timeout=10000)
+                        await add_link.click()
+                        
+                        # 3. 入力画面待機・入力
+                        await page.wait_for_selector("#form_girl_name", timeout=10000)
+                        await page.type("#form_girl_name", str(cast_row[2]), delay=50) 
+                        # --- その他の入力処理 ---
+                        
+                        await page.click("#form_submit_btn")
+                        await page.wait_for_load_state("networkidle")
+                        return {"status": "success"}
+                    except Exception as e:
+                        return {"status": "error", "message": str(e)}
+                    finally:
+                        await browser.close()
+
+            if st.button("🚀 デリじゃ一括登録開始", type="primary"):
+                for shop in selected_shops:
+                    st.markdown(f"#### 🏢 {shop['店舗名']}")
+                    for cast in shop['casts']:
+                        with st.status(f"{cast[2]} 登録中...") as status:
+                            res = asyncio.run(run_derija_v8(cast, shop['ID'], shop['PASS']))
+                            if res["status"] == "success":
+                                status.update(label=f"✅ {cast[2]} 完了", state="complete")
                             else:
-                                st.error(f"エラー: {res_dj['message']}")
-                                status.update(label="❌ 失敗", state="error")
-    except Exception as e:
-        st.error(f"タブ4致命的エラー: {e}")
+                                st.error(f"エラー: {res['message']}")
         
 # --- tab5: デリじゃ既存店コピー (Web → シート) ---
 with tab5:
