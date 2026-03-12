@@ -691,12 +691,12 @@ with tab3:
         st.error("店舗データが読み込まれていません。")
 
 
-# --- tab4: デリじゃ自動登録 (キーボードイベント完全シミュレート版) ---
+# --- tab4: デリじゃ自動登録 (PR文高速入力版) ---
 with tab4:
     st.subheader("🍓 デリじゃ キャスト自動登録")
 
     @st.cache_data(ttl=300)
-    def fetch_data_v25():
+    def fetch_data_v26():
         try:
             creds = Credentials.from_service_account_info(st.secrets["gcp_service_account"], scopes=SCOPE)
             gc = gspread.authorize(creds)
@@ -705,7 +705,7 @@ with tab4:
         except Exception as e:
             return None, str(e)
 
-    raw_cast_data, shop_records = fetch_data_v25()
+    raw_cast_data, shop_records = fetch_data_v26()
 
     if raw_cast_data:
         rows_info = raw_cast_data[1:]
@@ -718,22 +718,18 @@ with tab4:
                 if sid and spass:
                     dj_shops.append({"店舗名": s_name, "ID": sid, "PASS": spass, "casts": unreg})
 
-        async def run_derija_keyboard_sim(cast, sid, spass):
+        async def run_derija_v26(cast, sid, spass):
             async with async_playwright() as p:
-                # 人間らしく見せるための起動オプション
                 browser = await p.chromium.launch(headless=True, args=['--no-sandbox'])
-                context = await browser.new_context(
-                    user_agent="Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36",
-                    viewport={'width': 1280, 'height': 2000}
-                )
+                context = await browser.new_context(viewport={'width': 1280, 'height': 2000})
                 page = await context.new_page()
                 debug_path = f"error_{sid}.png"
 
                 try:
                     # 1. ログイン
                     await page.goto("https://deli-fuzoku.jp/entry/", wait_until="domcontentloaded")
-                    await page.type("#form_username", sid, delay=100)
-                    await page.type("#form_password", spass, delay=100)
+                    await page.fill("#form_username", sid)
+                    await page.fill("#form_password", spass)
                     await page.click("#button")
                     await page.wait_for_load_state("networkidle")
 
@@ -741,21 +737,16 @@ with tab4:
                     await page.click('a:has-text("在籍の追加")')
                     await page.wait_for_load_state("networkidle")
 
-                    # 3. 入力シミュレーション (1文字ずつ打つ)
+                    # 3. 入力シミュレーション
                     async def keyboard_type(selector, value):
                         if value and value != "None":
                             await page.wait_for_selector(selector)
                             await page.focus(selector)
-                            # 全選択して削除（上書き）
-                            await page.keyboard.press("Control+A")
-                            await page.keyboard.press("Backspace")
-                            # 一文字ずつ打鍵
-                            await page.type(selector, str(value), delay=150)
-                            # タブ移動して入力を確定させる挙動を再現
+                            await page.type(selector, str(value), delay=100)
                             await page.keyboard.press("Tab")
-                            await asyncio.sleep(0.5)
+                            await asyncio.sleep(0.3)
 
-                    # 必須入力を実行
+                    # 基本情報は今までの成功パターンで入力
                     await keyboard_type("#form_girl_name", cast[2])
                     await keyboard_type("#form_girl_age", cast[3])
                     await keyboard_type("#form_girl_height", cast[4])
@@ -766,10 +757,19 @@ with tab4:
                     cup = str(cast[6]).strip().upper()
                     if cup:
                         await page.locator("#form_girl_cup").select_option(label=cup)
-                        await asyncio.sleep(0.5)
 
-                    if len(cast) > 12:
-                        await keyboard_type("#form_girl_pr", cast[12])
+                    # --- PR文：ここがエラーの場所だったのでJSで一気に流し込む ---
+                    if len(cast) > 12 and cast[12]:
+                        pr_text = str(cast[12])
+                        await page.evaluate(f'''(text) => {{
+                            const el = document.getElementById('form_girl_pr');
+                            if(el) {{
+                                el.value = text;
+                                el.dispatchEvent(new Event('input', {{ bubbles: true }}));
+                                el.dispatchEvent(new Event('change', {{ bubbles: true }}));
+                            }}
+                        }}''', pr_text)
+                        await asyncio.sleep(1)
 
                     # 4. 画像アップロード
                     img_name = cast[16]
@@ -777,28 +777,17 @@ with tab4:
                         tmp = f"up_{sid}.jpg"
                         if download_by_filename(img_name, tmp):
                             await page.locator("#form_file_girl_photo1").set_input_files(tmp)
-                            await asyncio.sleep(10) # 通信完了を十分に待つ
+                            await asyncio.sleep(8)
                             if os.path.exists(tmp): os.remove(tmp)
 
-                    # 5. 【重要】送信ボタンを「直接クリック」＋「保険のEnter」
-                    st.write(f"🚀 {cast[2]} さんの登録情報を送信中...")
-                    
+                    # 5. 送信
                     submit_label = page.locator('label[for="form_submit_btn"]')
                     await submit_label.scroll_into_view_if_needed()
-                    await asyncio.sleep(2)
-                    
-                    # 物理クリック
+                    await asyncio.sleep(1)
                     await submit_label.click()
-                    
-                    # 5秒待って画面が変わらなければ、Enterキーで強制送信を試みる
-                    await asyncio.sleep(5)
-                    if "girl_edit" in page.url:
-                        st.write("⚠️ クリックが反応しないため、キーボード送信を試みます...")
-                        await page.keyboard.press("Enter")
 
-                    # 6. 完了判定
-                    # div#top-link_wrap が出るか、完了メッセージが出るまで待つ
-                    await page.wait_for_selector('#top-link_wrap, p.gn', timeout=40000)
+                    # 6. 完了確認 (タイムアウトを60秒に延長)
+                    await page.wait_for_selector('#top-link_wrap, p.gn', timeout=60000)
                     return {"status": "success"}
 
                 except Exception as e:
@@ -813,22 +802,21 @@ with tab4:
             cols = st.columns(3)
             for i, s in enumerate(dj_shops):
                 with cols[i % 3]:
-                    if st.checkbox(f"{s['店舗名']} ({len(s['casts'])}名)", key=f"dj_v25_fin_{i}"):
+                    if st.checkbox(f"{s['店舗名']} ({len(s['casts'])}名)", key=f"dj_v26_fin_{i}"):
                         selected.append(s)
 
             if st.button("🚀 デリじゃ一括登録開始", type="primary"):
-                # Google API エラーが出ても止まらないように
                 ws_w = None
                 try:
                     creds_w = Credentials.from_service_account_info(st.secrets["gcp_service_account"], scopes=SCOPE)
                     ws_w = gspread.authorize(creds_w).open_by_key(SPREADSHEET_ID).worksheet("キャスト情報")
                 except:
-                    st.warning("⚠️ Google API制限中。登録のみ行います。")
+                    st.warning("⚠️ Google API制限中。登録のみ先行します。")
 
                 for shop in selected:
                     for cast in shop['casts']:
                         with st.status(f"{cast[2]} 登録中..."):
-                            res = asyncio.run(run_derija_keyboard_sim(cast, shop['ID'], shop['PASS']))
+                            res = asyncio.run(run_derija_v26(cast, shop['ID'], shop['PASS']))
                             if res["status"] == "success":
                                 st.success(f"✅ {cast[2]} 完了")
                                 if ws_w:
