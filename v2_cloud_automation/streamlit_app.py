@@ -691,12 +691,12 @@ with tab3:
         st.error("店舗データが読み込まれていません。")
 
 
-# --- tab4: デリじゃ自動登録 (人間擬態・完全待機版) ---
+# --- tab4: デリじゃ自動登録 (実在確認・最終検閲版) ---
 with tab4:
     st.subheader("🍓 デリじゃ キャスト自動登録")
 
     @st.cache_data(ttl=300)
-    def fetch_data_v29():
+    def fetch_data_v30():
         try:
             creds = Credentials.from_service_account_info(st.secrets["gcp_service_account"], scopes=SCOPE)
             gc = gspread.authorize(creds)
@@ -704,7 +704,7 @@ with tab4:
             return ss.worksheet("キャスト情報").get_all_values(), ss.worksheet("シート3").get_all_records()
         except Exception as e: return None, str(e)
 
-    raw_cast_data, shop_records = fetch_data_v29()
+    raw_cast_data, shop_records = fetch_data_v30()
 
     if raw_cast_data:
         rows_info = raw_cast_data[1:]
@@ -716,102 +716,65 @@ with tab4:
                 unreg = [r for r in rows_info if len(r) > 15 and str(r[14]).strip() == sid and str(r[15]).strip() != "登録済"]
                 if sid and spass: dj_shops.append({"店舗名": s_name, "ID": sid, "PASS": spass, "casts": unreg})
 
-        async def run_derija_v29(cast, sid, spass):
+        async def run_derija_v30(cast, sid, spass):
             async with async_playwright() as p:
-                # 人間らしく見せるオプション
-                browser = await p.chromium.launch(headless=True, args=['--no-sandbox', '--disable-blink-features=AutomationControlled'])
+                browser = await p.chromium.launch(headless=True, args=['--no-sandbox'])
                 context = await browser.new_context(viewport={'width': 1280, 'height': 2000})
                 page = await context.new_page()
-                # webdriverフラグを消す
-                await page.add_init_script("Object.defineProperty(navigator, 'webdriver', {get: () => undefined})")
-                
+                target_name = str(cast[2]).strip()
                 debug_path = f"error_{sid}.png"
 
                 try:
-                    # 1. ログイン (少しゆっくり)
+                    # 1. ログイン
                     await page.goto("https://deli-fuzoku.jp/entry/", wait_until="domcontentloaded")
-                    await asyncio.sleep(2)
                     await page.fill("#form_username", sid)
-                    await asyncio.sleep(0.5)
                     await page.fill("#form_password", spass)
-                    await asyncio.sleep(1)
                     await page.click("#button")
                     await page.wait_for_load_state("networkidle")
 
-                    # 2. 在籍の追加ページへ
+                    # 2. 追加画面
                     await page.click('a:has-text("在籍の追加")')
                     await page.wait_for_load_state("networkidle")
-                    await asyncio.sleep(2)
 
-                    # 3. 入力 (JS注入+イベント発火で確実に)
-                    input_js = """(id, val) => {
-                        const el = document.getElementById(id);
-                        if(el) {
-                            el.value = val;
-                            el.dispatchEvent(new Event('input', { bubbles: true }));
-                            el.dispatchEvent(new Event('change', { bubbles: true }));
-                        }
-                    }"""
-                    
-                    fields = [
-                        ("form_girl_name", str(cast[2])), ("form_girl_age", str(cast[3])),
-                        ("form_girl_height", str(cast[4])), ("form_girl_sizeb", str(cast[5])),
-                        ("form_girl_sizew", str(cast[7])), ("form_girl_sizeh", str(cast[8]))
-                    ]
-                    for fid, fval in fields:
-                        await page.evaluate(input_js, {"id": fid, "val": fval})
-                        await asyncio.sleep(0.1)
+                    # 3. 入力
+                    await page.type("#form_girl_name", target_name, delay=100)
+                    await page.type("#form_girl_age", str(cast[3]), delay=50)
+                    await page.type("#form_girl_height", str(cast[4]), delay=50)
+                    # 他の項目はJSで高速化
+                    await page.evaluate(f"document.getElementById('form_girl_sizeb').value = '{cast[5]}'")
+                    await page.evaluate(f"document.getElementById('form_girl_sizew').value = '{cast[7]}'")
+                    await page.evaluate(f"document.getElementById('form_girl_sizeh').value = '{cast[8]}'")
+                    if len(cast) > 12:
+                        await page.evaluate(f"document.getElementById('form_girl_pr').value = `{cast[12]}`")
 
-                    cup = str(cast[6]).strip().upper()
-                    if cup: await page.locator("#form_girl_cup").select_option(label=cup)
-
-                    # PR文 (改行を整える)
-                    if len(cast) > 12 and cast[12]:
-                        pr_clean = str(cast[12]).replace('\r\n', '\n').replace('\r', '\n')
-                        await page.evaluate(input_js, {"id": "form_girl_pr", "val": pr_clean})
-
-                    # 4. 【最重要】画像アップロードと「人間らしい」大待機
+                    # 4. 画像
                     img_name = cast[16]
                     if img_name:
                         tmp = f"up_{sid}.jpg"
                         if download_by_filename(img_name, tmp):
                             await page.locator("#form_file_girl_photo1").set_input_files(tmp)
-                            st.write("📸 画像をアップロードしました。サーバー側の処理完了を待ちます（約30秒）...")
-                            # 人間が写真を選んで、一息つく時間をシミュレート（デリじゃの画像処理待ち）
-                            await asyncio.sleep(30) 
+                            st.write("📸 画像処理待ち(20秒)...")
+                            await asyncio.sleep(20)
                             if os.path.exists(tmp): os.remove(tmp)
-                    else:
-                        await asyncio.sleep(2) # 画像がなくても少し待つ
 
-                    # 5. 【決定打】送信 (JSでスクロール＆直接関数実行)
-                    st.write("🚀 登録を実行します...")
-                    
-                    # 送信ボタンの位置まで人間がスクロールするのをシミュレート
-                    submit_label = page.locator('label[for="form_submit_btn"]')
-                    await submit_label.scroll_into_view_if_needed()
-                    await asyncio.sleep(2)
-                    
-                    # サイト側の送信関数を直接叩く
+                    # 5. 送信
+                    st.write(f"🚀 {target_name} さんを登録実行...")
                     await page.evaluate("func_submit();")
+                    await asyncio.sleep(10)
 
-                    # 6. 判定プロセス (甘く設定)
-                    st.write("⏳ 完了画面への遷移を監視中...")
+                    # 6. 【最重要】「在籍一覧」に戻って、名前があるかガチで確認する
+                    st.write("🔍 登録が反映されたか一覧を確認しています...")
+                    await page.goto("https://deli-fuzoku.jp/entry/girl_list.php", wait_until="networkidle")
+                    await asyncio.sleep(3)
                     
-                    # 60秒かけて、URLが変わるか、完了IDが出るのを待つ
-                    for _ in range(30):
-                        # URLが「入力画面」から変われば成功とみなす（デリじゃは完了画面のURLが独特なため）
-                        if "girl_edit.php" not in page.url:
-                            return {"status": "success"}
-                        # 完了ID `#top-link_wrap` が出ても成功
-                        if await page.locator('#top-link_wrap').count() > 0:
-                            return {"status": "success"}
-                        # サイト側のエラーメッセージが出たら失敗
-                        errs = await page.locator('.error_mess, .mess').all_text_contents()
-                        if errs:
-                            raise Exception(f"サイト側エラー: {' '.join(errs)}")
-                        await asyncio.sleep(2)
-                    
-                    raise Exception("送信ボタン押下後、60秒経過しても画面が遷移しませんでした。")
+                    # ページ内に名前があるかチェック
+                    content = await page.content()
+                    if target_name in content:
+                        return {"status": "success"}
+                    else:
+                        # 名前がなければ失敗。スクショを撮る。
+                        await page.screenshot(path=debug_path, full_page=True)
+                        raise Exception(f"送信は完了しましたが、一覧に {target_name} さんが見当たりません。")
 
                 except Exception as e:
                     await page.screenshot(path=debug_path, full_page=True)
@@ -819,13 +782,13 @@ with tab4:
                 finally:
                     await browser.close()
 
-        # UI
+        # UI部分は変更なし
         selected = []
         if dj_shops:
             cols = st.columns(3)
             for i, s in enumerate(dj_shops):
                 with cols[i % 3]:
-                    if st.checkbox(f"{s['店舗名']} ({len(s['casts'])}名)", key=f"dj_v29_cb_{i}"):
+                    if st.checkbox(f"{s['店舗名']} ({len(s['casts'])}名)", key=f"dj_v30_cb_{i}"):
                         selected.append(s)
 
             if st.button("🚀 デリじゃ一括登録開始", type="primary"):
@@ -833,14 +796,14 @@ with tab4:
                 try:
                     creds_w = Credentials.from_service_account_info(st.secrets["gcp_service_account"], scopes=SCOPE)
                     ws_w = gspread.authorize(creds_w).open_by_key(SPREADSHEET_ID).worksheet("キャスト情報")
-                except: st.warning("⚠️ API制限中。登録のみ実行。")
+                except: st.warning("⚠️ API制限中。")
 
                 for shop in selected:
                     for cast in shop['casts']:
                         with st.status(f"{cast[2]} 登録中..."):
-                            res = asyncio.run(run_derija_v29(cast, shop['ID'], shop['PASS']))
+                            res = asyncio.run(run_derija_v30(cast, shop['ID'], shop['PASS']))
                             if res["status"] == "success":
-                                st.success(f"✅ {cast[2]} 完了")
+                                st.success(f"✅ {cast[2]} 登録確認済み！")
                                 if ws_w:
                                     try:
                                         row_idx = next((i for i, r in enumerate(raw_cast_data) if r[0] == cast[0]), None)
@@ -848,8 +811,7 @@ with tab4:
                                     except: pass
                             else:
                                 st.error(f"❌ {cast[2]} 失敗: {res['message']}")
-                                if "screenshot" in res and os.path.exists(res["screenshot"]):
-                                    st.image(res["screenshot"])
+                                if "screenshot" in res: st.image(res["screenshot"])
         
 # --- tab5: デリじゃ既存店コピー (Web → シート) ---
 with tab5:
