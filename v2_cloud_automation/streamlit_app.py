@@ -696,157 +696,140 @@ with tab4:
     st.subheader("🍓 デリじゃ キャスト自動登録")
     st.info("デリじゃ（deli-fuzoku.jp）への自動登録を行います。")
 
-    # API制限(429)対策：キャッシュを利用して読み込み頻度を下げる
-    @st.cache_data(ttl=300)
-    def fetch_data_cached():
+    # API制限対策：1回の接続で全データを取得し、再利用する
+    @st.cache_data(ttl=300) # 5分間はGoogleにアクセスせず使い回す
+    def get_all_data_safely():
         try:
             creds = Credentials.from_service_account_info(st.secrets["gcp_service_account"], scopes=SCOPE)
-            gs_client = gspread.authorize(creds)
-            ss = gs_client.open_by_key(SPREADSHEET_ID)
-            ws_cast = ss.worksheet("キャスト情報")
-            ws_shops = ss.worksheet("ID/Password") # 最新のシート名に合わせました
-            return ws_cast.get_all_values(), ws_shops.get_all_records()
+            gc = gspread.authorize(creds)
+            ss = gc.open_by_key(SPREADSHEET_ID)
+            
+            # シート読み込みを1回にまとめる
+            ws_c = ss.worksheet("キャスト情報")
+            ws_s = ss.worksheet("ID/Password")
+            
+            return ws_c.get_all_values(), ws_s.get_all_records()
         except Exception as e:
             return None, str(e)
 
-    cast_values, shop_records = fetch_data_cached()
+    # データの取得
+    raw_cast_data, shop_records = get_all_data_safely()
 
-    if cast_values is None:
-        st.error(f"データの読み込みに失敗しました: {shop_records}")
+    if raw_cast_data is None:
+        st.error(f"Google API制限中またはエラーです。少し待ってから再試行してください: {shop_records}")
     else:
-        rows_info = cast_values[1:]
+        header_info = raw_cast_data[0]
+        rows_info = raw_cast_data[1:]
         
-        # デリじゃ用店舗のフィルタリング
-        derija_shops = []
-        for shop in shop_records:
-            s_name = str(shop.get('登録店舗', '')).strip()
+        # デリじゃ店舗の抽出
+        dj_shops = []
+        for s in shop_records:
+            s_name = str(s.get('登録店舗', '')).strip()
             if any(k in s_name for k in ["デリじゃ", "デリジャ", "でりじゃ"]):
-                s_id = str(shop.get('店舗ID', '')).strip()
-                s_pass = str(shop.get('店舗PASSWORD', '')).strip()
-                unregistered = [r for r in rows_info if len(r) > 15 and str(r[14]).strip() == s_id and str(r[15]).strip() != "登録済"]
+                s_id = str(s.get('店舗ID', '')).strip()
+                s_pass = str(s.get('店舗PASSWORD', '')).strip()
+                # 未登録判定
+                unreg = [r for r in rows_info if len(r) > 15 and str(r[14]).strip() == s_id and str(r[15]).strip() != "登録済"]
                 if s_id and s_pass:
-                    derija_shops.append({
-                        "店舗名": s_name, "ID": s_id, "raw_pass": s_pass,
-                        "未登録数": len(unregistered), "casts": unregistered
-                    })
+                    dj_shops.append({"店舗名": s_name, "ID": s_id, "PASS": s_pass, "casts": unreg})
 
-        # --- 人間らしい操作を再現した自動化ロジック ---
-        async def run_derija_human_like(cast_row, s_id, s_pass):
+        # --- 人間操作シミュレーション ---
+        async def run_human_dj_reg(cast, sid, spass):
             async with async_playwright() as p:
-                # 画面を少し大きめに設定し、人間が使っているように見せる
                 browser = await p.chromium.launch(headless=True, args=['--no-sandbox'])
                 context = await browser.new_context(
                     viewport={'width': 1280, 'height': 1600},
                     user_agent="Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36"
                 )
                 page = await context.new_page()
-                
                 try:
-                    # 1. ログインページへ
+                    # 1. ログイン（人間らしくゆっくり入力）
                     await page.goto("https://deli-fuzoku.jp/entry/", wait_until="networkidle")
-                    
-                    # 人間が入力するように少しディレイを入れる
-                    await page.type("#form_username", s_id, delay=100)
-                    await page.type("#form_password", s_pass, delay=100)
+                    await page.type("#form_username", sid, delay=100)
+                    await page.type("#form_password", spass, delay=100)
                     await asyncio.sleep(0.5)
                     await page.click("#button")
-                    
-                    # ログイン後の安定待ち
                     await page.wait_for_load_state("networkidle")
 
-                    # 2. 【指示通り】メニューから「在籍の追加」という文字を探してクリック
-                    # 直接URLに飛ばず、画面上のリンクを踏むことで「人間らしさ」を出す
-                    add_button = page.get_by_role("link", name="在籍の追加")
-                    await add_button.wait_for(timeout=10000)
-                    await add_button.click()
-                    
-                    # 3. 入力画面の表示待ち
+                    # 2. メニューから「在籍の追加」をクリック（文字で探す）
+                    add_link = page.locator('a:has-text("在籍の追加")')
+                    await add_link.wait_for(timeout=10000)
+                    await add_link.click()
                     await page.wait_for_load_state("networkidle")
+
+                    # 3. フォーム入力
                     await page.wait_for_selector("#form_girl_name", timeout=10000)
-                    
-                    # 4. フォームへの打ち込み
-                    await page.type("#form_girl_name", str(cast_row[2]), delay=50) 
-                    await page.type("#form_girl_age", str(cast_row[3]), delay=50)  
-                    await page.type("#form_girl_height", str(cast_row[4]), delay=50) 
-                    await page.type("#form_girl_sizeb", str(cast_row[5]), delay=50) 
-                    await page.type("#form_girl_sizew", str(cast_row[7]), delay=50) 
-                    await page.type("#form_girl_sizeh", str(cast_row[8]), delay=50) 
+                    await page.type("#form_girl_name", str(cast[2]), delay=50) # 名前
+                    await page.type("#form_girl_age", str(cast[3]), delay=50)  # 年齢
+                    await page.type("#form_girl_height", str(cast[4]), delay=50)# 身長
+                    # スリーサイズ
+                    await page.type("#form_girl_sizeb", str(cast[5]), delay=50)
+                    await page.type("#form_girl_sizew", str(cast[7]), delay=50)
+                    await page.type("#form_girl_sizeh", str(cast[8]), delay=50)
                     
                     # カップ選択
-                    cup_val = str(cast_row[6]).strip().upper()
-                    if cup_val:
-                        await page.locator("#form_girl_cup").select_option(label=cup_val)
+                    cup = str(cast[6]).strip().upper()
+                    if cup: await page.locator("#form_girl_cup").select_option(label=cup)
 
-                    # PR文（M列：店舗コメント）
-                    if len(cast_row) > 12:
-                        await page.type("#form_girl_pr", str(cast_row[12]), delay=20)
+                    # PR文（M列）
+                    if len(cast) > 12:
+                        await page.type("#form_girl_pr", str(cast[12]), delay=20)
 
-                    # タグ（共通タグ：新人、写真あり等）
-                    for tag_idx in [0, 1, 5, 10, 15]:
-                        selector = f"#form_girl_tags_{tag_idx}"
-                        if await page.locator(selector).count() > 0:
-                            await page.locator(selector).check(force=True)
+                    # 4. 画像
+                    img_url = cast[16] # Q列
+                    if img_url:
+                        tmp = f"up_{sid}.jpg"
+                        if download_by_filename(img_url, tmp):
+                            await page.locator("#form_file_girl_photo1").set_input_files(tmp)
+                            await asyncio.sleep(1)
+                            if os.path.exists(tmp): os.remove(tmp)
 
-                    # 5. 画像アップロード
-                    main_img_url = cast_row[16] # Q列
-                    if main_img_url:
-                        tmp_path = f"dj_upload_{s_id}.jpg"
-                        if download_by_filename(main_img_url, tmp_path):
-                            await page.locator("#form_file_girl_photo1").set_input_files(tmp_path)
-                            await asyncio.sleep(1) # アップロード完了待ち
-                            if os.path.exists(tmp_path): os.remove(tmp_path)
-
-                    # 6. 【最重要】「登録する」ボタンの処理
-                    # ボタンまでスクロールして、人間が見ている状態にする
-                    submit_btn = page.locator("#form_submit_btn")
-                    await submit_btn.scroll_into_view_if_needed()
+                    # 5. 【修正】登録ボタン（見えるまでスクロールしてJSで確実に押す）
+                    btn = page.locator("#form_submit_btn")
+                    await btn.scroll_into_view_if_needed()
                     await asyncio.sleep(1)
-
-                    # ボタンが「見える状態」でなくても強制的に押す(force=True)
-                    # それでもダメならJSで直接発火させる
+                    # PlaywrightのクリックとJSのクリックを両方試みる
                     try:
-                        await submit_btn.click(force=True, timeout=5000)
+                        await btn.click(force=True, timeout=5000)
                     except:
                         await page.evaluate('document.getElementById("form_submit_btn").click()')
                     
                     await page.wait_for_load_state("networkidle")
-                    await asyncio.sleep(2)
+                    await asyncio.sleep(1)
                     return {"status": "success"}
                 except Exception as e:
                     return {"status": "error", "message": str(e)}
                 finally:
                     await browser.close()
 
-        # UI表示
-        if not derija_shops:
-            st.info("対象店舗が見つかりません。")
+        # UI
+        if not dj_shops:
+            st.info("対象店舗なし")
         else:
-            selected_derija_shops = []
+            selected = []
             cols = st.columns(3)
-            for i, s in enumerate(derija_shops):
+            for i, s in enumerate(dj_shops):
                 with cols[i % 3]:
-                    if st.checkbox(f"{s['店舗名']} ({s['未登録数']}名)", key=f"dj_check_{i}"):
-                        selected_derija_shops.append(s)
+                    if st.checkbox(f"{s['店舗名']} ({len(s['casts'])}名)", key=f"dj_final_{i}"):
+                        selected.append(s)
 
             if st.button("🚀 デリじゃ一括登録開始", type="primary"):
-                # スプレッドシートの書き込み用に再度接続（書き込みはキャッシュ不可）
+                # API制限対策：書き込み用接続も1回だけに抑える
                 creds_w = Credentials.from_service_account_info(st.secrets["gcp_service_account"], scopes=SCOPE)
-                ws_w = gspread.authorize(creds_w).open_by_key(SPREADSHEET_ID).worksheet("キャスト情報")
+                gc_w = gspread.authorize(creds_w)
+                ws_w = gc_w.open_by_key(SPREADSHEET_ID).worksheet("キャスト情報")
 
-                for shop in selected_derija_shops:
-                    st.markdown(f"#### 🏢 {shop['店舗名']}")
+                for shop in selected:
                     for cast in shop['casts']:
-                        c_name = cast[2]
-                        with st.status(f"{c_name} 登録中...") as status:
-                            res = asyncio.run(run_derija_human_like(cast, shop['ID'], shop['raw_pass']))
+                        with st.status(f"{cast[2]} 登録中..."):
+                            res = asyncio.run(run_human_dj_reg(cast, shop['ID'], shop['PASS']))
                             if res["status"] == "success":
-                                # スプレッドシートの「登録済」更新
-                                row_idx = next((i for i, r in enumerate(cast_values) if r[0] == cast[0]), None)
-                                if row_idx: ws_w.update_cell(row_idx + 1, 16, "登録済")
-                                status.update(label=f"✅ {c_name} 完了", state="complete")
+                                # 更新
+                                idx = next((i for i, r in enumerate(raw_cast_data) if r[0] == cast[0]), None)
+                                if idx: ws_w.update_cell(idx + 1, 16, "登録済")
+                                st.success(f"✅ {cast[2]} 完了")
                             else:
                                 st.error(f"エラー: {res['message']}")
-                                status.update(label="❌ 失敗", state="error")
         
 # --- tab5: デリじゃ既存店コピー (Web → シート) ---
 with tab5:
