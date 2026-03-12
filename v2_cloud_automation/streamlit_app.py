@@ -206,7 +206,7 @@ try:
     spreadsheet = gs_client.open_by_key(SPREADSHEET_ID)
     
     worksheet_cast = spreadsheet.worksheet("キャスト情報")
-    worksheet_shops = spreadsheet.worksheet("シート3")
+    worksheet_shops = spreadsheet.worksheet("ID/Password")
     
     data_info = worksheet_cast.get_all_values()
     rows_info = data_info[1:]
@@ -242,7 +242,7 @@ with tab1:
         
         worksheet_cast = spreadsheet.worksheet("キャスト情報")
         worksheet_images = spreadsheet.worksheet("キャスト画像")
-        worksheet_shops = spreadsheet.worksheet("シート3")
+        worksheet_shops = spreadsheet.worksheet("ID/Password")
 
         data_info = worksheet_cast.get_all_values()
         headers_info = data_info[0]
@@ -251,19 +251,19 @@ with tab1:
         data_images = worksheet_images.get_all_values()
         rows_images = data_images[1:]
         
-        # シート3をレコード形式で取得
+        # ID/Passwordをレコード形式で取得
         data_shops = worksheet_shops.get_all_records()
         
         # 店舗ごとの未登録数をカウント
         shop_status = []
         for shop in data_shops:
-            # シート3の各列を取得
+            # ID/Passwordの各列を取得
             s_name = str(shop.get('登録店舗')).strip()
             s_id = str(shop.get('店舗ID')).strip()
             s_pass = str(shop.get('店舗PASSWORD')).strip()
             
             # --- 判定ロジック ---
-            # キャスト情報のO列(index 14)と、シート3の「店舗ID」を照合
+            # キャスト情報のO列(index 14)と、ID/Passwordの「店舗ID」を照合
             unregistered_casts = []
             for r in rows_info:
                 if len(r) > 14:
@@ -272,7 +272,7 @@ with tab1:
                     # P列(15): 登録ステータス（「登録済」以外、または空白を対象）
                     status_field = str(r[15]).strip() if len(r) > 15 else ""
                     
-                    # キャスト側のO列とシート3の店舗IDが一致し、かつ未登録の場合
+                    # キャスト側のO列とID/Passwordの店舗IDが一致し、かつ未登録の場合
                     if cast_shop_id == s_id and status_field != "登録済":
                         unregistered_casts.append(r)
             
@@ -713,7 +713,7 @@ with tab4:
         ss_dj_final = gs_dj_final.open_by_key(SPREADSHEET_ID)
         
         ws_c_dj = ss_dj_final.worksheet("キャスト情報")
-        ws_s_dj = ss_dj_final.worksheet("シート3")
+        ws_s_dj = ss_dj_final.worksheet("ID/Password")
 
         data_c_dj = ws_c_dj.get_all_values()
         rows_c_dj = data_c_dj[1:]
@@ -847,11 +847,11 @@ with tab5:
     st.info("デリじゃ管理画面からキャスト情報を取得し、スプレッドシートへ追記します。")
 
     try:
-        # シート3から「デリじゃ」店舗のみを抽出
+        # ID/Passwordから「デリじゃ」店舗のみを抽出
         creds = Credentials.from_service_account_info(st.secrets["gcp_service_account"], scopes=SCOPE)
         gs_client = gspread.authorize(creds)
         spreadsheet = gs_client.open_by_key(SPREADSHEET_ID)
-        worksheet_shops = spreadsheet.worksheet("シート3")
+        worksheet_shops = spreadsheet.worksheet("ID/Password")
         data_shops = worksheet_shops.get_all_records()
 
         derija_keywords = ["デリじゃ", "デリジャ", "でりじゃ"]
@@ -964,6 +964,6 @@ with tab5:
                         st.error(f"失敗: {res.get('message', 'データなし')}")
                         status.update(label="エラー", state="error")
         else:
-            st.warning("シート3にデリじゃ店舗が見つかりません。")
+            st.warning("ID/Passwordにデリじゃ店舗が見つかりません。")
     except Exception as e:
         st.error(f"エラー: {e}")
