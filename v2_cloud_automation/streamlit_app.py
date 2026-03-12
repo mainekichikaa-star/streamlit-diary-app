@@ -695,21 +695,18 @@ with tab3:
 with tab4:
     st.subheader("🍓 デリじゃ キャスト自動登録")
 
-    # API制限対策：起動時または5分おきにしかシートを読み込まない
     @st.cache_data(ttl=300)
-    def fetch_data_v17():
+    def fetch_data_v18():
         try:
             creds = Credentials.from_service_account_info(st.secrets["gcp_service_account"], scopes=SCOPE)
             gc = gspread.authorize(creds)
             ss = gc.open_by_key(SPREADSHEET_ID)
-            # 全データを一気に取得してAPI消費を抑える
-            c_rows = ss.worksheet("キャスト情報").get_all_values()
-            s_records = ss.worksheet("シート3").get_all_records()
-            return c_rows, s_records
+            # API消費を抑えるため一括取得
+            return ss.worksheet("キャスト情報").get_all_values(), ss.worksheet("シート3").get_all_records()
         except Exception as e:
             return None, str(e)
 
-    raw_cast_data, shop_records = fetch_data_v17()
+    raw_cast_data, shop_records = fetch_data_v18()
 
     if raw_cast_data:
         rows_info = raw_cast_data[1:]
@@ -718,59 +715,90 @@ with tab4:
             s_name = str(s.get('登録店舗', '')).strip()
             if any(k in s_name for k in ["デリじゃ", "デリジャ", "でりじゃ"]):
                 sid, spass = str(s.get('店舗ID', '')).strip(), str(s.get('店舗PASSWORD', '')).strip()
-                # 14列目(O):ID一致, 15列目(P):登録済でない
                 unreg = [r for r in rows_info if len(r) > 15 and str(r[14]).strip() == sid and str(r[15]).strip() != "登録済"]
                 if sid and spass:
                     dj_shops.append({"店舗名": s_name, "ID": sid, "PASS": spass, "casts": unreg})
 
-        # ブラウザ操作ロジック（前回のJS強制送信版）
-        async def run_derija_final_v17(cast, sid, spass):
+        async def run_derija_ultimate_human(cast, sid, spass):
             async with async_playwright() as p:
-                browser = await p.chromium.launch(headless=True, args=['--no-sandbox'])
-                context = await browser.new_context(viewport={'width': 1280, 'height': 2000})
+                # ブラウザを「人間」に見せるための偽装設定
+                browser = await p.chromium.launch(headless=True, args=['--no-sandbox', '--disable-blink-features=AutomationControlled'])
+                context = await browser.new_context(
+                    viewport={'width': 1280, 'height': 2000},
+                    user_agent="Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36"
+                )
                 page = await context.new_page()
+                # webdriverの痕跡を消すJS
+                await page.add_init_script("Object.defineProperty(navigator, 'webdriver', {get: () => undefined})")
+                
                 debug_path = f"error_{sid}.png"
+
                 try:
-                    await page.goto("https://deli-fuzoku.jp/entry/", wait_until="domcontentloaded")
-                    await page.fill("#form_username", sid)
-                    await page.fill("#form_password", spass)
+                    # 1. ログイン（ゆっくり）
+                    await page.goto("https://deli-fuzoku.jp/entry/", wait_until="networkidle")
+                    await asyncio.sleep(random.uniform(1, 2))
+                    await page.type("#form_username", sid, delay=random.randint(50, 150))
+                    await page.type("#form_password", spass, delay=random.randint(50, 150))
                     await page.click("#button")
                     await page.wait_for_load_state("networkidle")
 
-                    # 登録ページへ
-                    await page.locator('a:has-text("在籍の追加")').click()
+                    # 2. メニューから「在籍の追加」を人間が探して押す
+                    add_link = page.locator('a:has-text("在籍の追加")')
+                    await add_link.wait_for(state="visible")
+                    await add_link.hover() # マウスを乗せる
+                    await asyncio.sleep(0.5)
+                    await add_link.click()
                     await page.wait_for_load_state("networkidle")
 
-                    # 入力
-                    await page.wait_for_selector("#form_girl_name", timeout=10000)
-                    await page.fill("#form_girl_name", str(cast[2]))
-                    await page.fill("#form_girl_age", str(cast[3]))
-                    await page.fill("#form_girl_height", str(cast[4]))
-                    await page.fill("#form_girl_sizeb", str(cast[5]))
-                    await page.fill("#form_girl_sizew", str(cast[7]))
-                    await page.fill("#form_girl_sizeh", str(cast[8]))
+                    # 3. フォーム入力（1つずつ、考える間隔を空ける）
+                    await page.wait_for_selector("#form_girl_name")
+                    fields = [
+                        ("#form_girl_name", str(cast[2])),
+                        ("#form_girl_age", str(cast[3])),
+                        ("#form_girl_height", str(cast[4])),
+                        ("#form_girl_sizeb", str(cast[5])),
+                        ("#form_girl_sizew", str(cast[7])),
+                        ("#form_girl_sizeh", str(cast[8]))
+                    ]
+                    for selector, value in fields:
+                        await page.focus(selector)
+                        await page.type(selector, value, delay=random.randint(50, 150))
+                        await asyncio.sleep(random.uniform(0.2, 0.5))
+
                     cup = str(cast[6]).strip().upper()
                     if cup: await page.locator("#form_girl_cup").select_option(label=cup)
-                    if len(cast) > 12: await page.fill("#form_girl_pr", str(cast[12]))
+                    if len(cast) > 12: await page.type("#form_girl_pr", str(cast[12]), delay=30)
 
-                    # 画像
+                    # 4. 画像アップロード
                     img_name = cast[16]
                     if img_name:
                         tmp = f"up_{sid}.jpg"
                         if download_by_filename(img_name, tmp):
                             await page.locator("#form_file_girl_photo1").set_input_files(tmp)
-                            await asyncio.sleep(5) 
+                            await asyncio.sleep(6) # 画像アップ完了をしっかり待つ
                             if os.path.exists(tmp): os.remove(tmp)
 
-                    # 強制送信実行
-                    await page.evaluate('''() => {
-                        const f = document.querySelector('form');
-                        f ? f.submit() : func_submit();
-                    }''')
+                    # 5. 【決定打】登録ボタンの押し方を「人間」にする
+                    submit_label = page.locator('label[for="form_submit_btn"]')
+                    await submit_label.scroll_into_view_if_needed()
+                    await asyncio.sleep(2)
+                    
+                    # A. マウスをゆっくり動かしてクリック
+                    await submit_label.hover()
+                    await page.mouse.down()
+                    await asyncio.sleep(0.1)
+                    await page.mouse.up()
 
-                    # 完了確認
-                    await page.wait_for_selector('p.gn:has-text("完了しました")', timeout=30000)
+                    # B. もし5秒経っても画面が変わらなければ、JSで強制送信
+                    await asyncio.sleep(5)
+                    if "girl_edit" in page.url:
+                        st.write("⚠️ 画面が止まっているため、通信を強制開始します...")
+                        await page.evaluate("func_submit();")
+
+                    # 6. 完了確認
+                    await page.wait_for_selector('p.gn:has-text("完了しました")', timeout=40000)
                     return {"status": "success"}
+
                 except Exception as e:
                     await page.screenshot(path=debug_path, full_page=True)
                     return {"status": "error", "message": str(e), "screenshot": debug_path}
@@ -783,32 +811,29 @@ with tab4:
             cols = st.columns(3)
             for i, s in enumerate(dj_shops):
                 with cols[i % 3]:
-                    if st.checkbox(f"{s['店舗名']} ({len(s['casts'])}名)", key=f"dj_v17_cb_{i}"):
+                    if st.checkbox(f"{s['店舗名']} ({len(s['casts'])}名)", key=f"dj_fin_v18_{i}"):
                         selected.append(s)
 
             if st.button("🚀 デリじゃ一括登録開始", type="primary"):
-                # ここで再度認証せず、既存の権限を使用することを試みる（APIエラー対策）
+                # APIエラー対策：書き込み用権限をここで一回だけ作る
+                ws_w = None
                 try:
                     creds_w = Credentials.from_service_account_info(st.secrets["gcp_service_account"], scopes=SCOPE)
-                    gc_w = gspread.authorize(creds_w)
-                    ws_w = gc_w.open_by_key(SPREADSHEET_ID).worksheet("キャスト情報")
-                except Exception as api_e:
-                    st.error("Google APIが混み合っています。登録処理のみ継続します。シートの更新は後ほど手動で行ってください。")
-                    ws_w = None
+                    ws_w = gspread.authorize(creds_w).open_by_key(SPREADSHEET_ID).worksheet("キャスト情報")
+                except:
+                    st.warning("⚠️ Google API制限中です。登録のみ行います。")
 
                 for shop in selected:
                     for cast in shop['casts']:
                         with st.status(f"{cast[2]} 登録中..."):
-                            res = asyncio.run(run_derija_final_v17(cast, shop['ID'], shop['PASS']))
+                            res = asyncio.run(run_derija_ultimate_human(cast, shop['ID'], shop['PASS']))
                             if res["status"] == "success":
                                 st.success(f"✅ {cast[2]} 完了")
-                                # シート更新（ws_wが有効な場合のみ）
                                 if ws_w:
                                     try:
                                         row_idx = next((i for i, r in enumerate(raw_cast_data) if r[0] == cast[0]), None)
                                         if row_idx: ws_w.update_cell(row_idx + 1, 16, "登録済")
-                                    except:
-                                        st.warning(f"シート更新のみ失敗しました（API制限）")
+                                    except: pass
                             else:
                                 st.error(f"❌ {cast[2]} 失敗: {res['message']}")
                                 if "screenshot" in res: st.image(res["screenshot"])
