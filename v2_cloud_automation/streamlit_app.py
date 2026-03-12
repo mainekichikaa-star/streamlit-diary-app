@@ -180,7 +180,13 @@ async def run_automation(cast_row_list, shop_id, shop_pass, sub_image_paths):
 st.set_page_config(page_title="自動登録システム", layout="wide")
 st.title("自動登録システム")
 
-tab1, tab2, tab3, tab4 = st.tabs(["🚀 駅ちかキャスト自動登録", "🚉 駅ちかネット予約自動登録", "📋 駅ちか既存店コピー, "🚀 デリじゃキャスト自動登録"])
+# 「駅ちか既存店コピー」の後の " を閉じました
+tab1, tab2, tab3, tab4 = st.tabs([
+    "🚀 駅ちかキャスト自動登録", 
+    "🚉 駅ちかネット予約自動登録", 
+    "📋 駅ちか既存店コピー", 
+    "🚀 デリじゃキャスト自動登録"
+])
 
 with tab1:
     st.subheader("店舗別・未登録キャスト状況")
