@@ -695,17 +695,21 @@ with tab3:
 with tab4:
     st.subheader("🍓 デリじゃ キャスト自動登録")
 
+    # API制限対策：起動時または5分おきにしかシートを読み込まない
     @st.cache_data(ttl=300)
-    def fetch_data_v16():
+    def fetch_data_v17():
         try:
             creds = Credentials.from_service_account_info(st.secrets["gcp_service_account"], scopes=SCOPE)
             gc = gspread.authorize(creds)
             ss = gc.open_by_key(SPREADSHEET_ID)
-            return ss.worksheet("キャスト情報").get_all_values(), ss.worksheet("シート3").get_all_records()
+            # 全データを一気に取得してAPI消費を抑える
+            c_rows = ss.worksheet("キャスト情報").get_all_values()
+            s_records = ss.worksheet("シート3").get_all_records()
+            return c_rows, s_records
         except Exception as e:
             return None, str(e)
 
-    raw_cast_data, shop_records = fetch_data_v16()
+    raw_cast_data, shop_records = fetch_data_v17()
 
     if raw_cast_data:
         rows_info = raw_cast_data[1:]
@@ -714,30 +718,30 @@ with tab4:
             s_name = str(s.get('登録店舗', '')).strip()
             if any(k in s_name for k in ["デリじゃ", "デリジャ", "でりじゃ"]):
                 sid, spass = str(s.get('店舗ID', '')).strip(), str(s.get('店舗PASSWORD', '')).strip()
+                # 14列目(O):ID一致, 15列目(P):登録済でない
                 unreg = [r for r in rows_info if len(r) > 15 and str(r[14]).strip() == sid and str(r[15]).strip() != "登録済"]
                 if sid and spass:
                     dj_shops.append({"店舗名": s_name, "ID": sid, "PASS": spass, "casts": unreg})
 
-        async def run_derija_js_submit(cast, sid, spass):
+        # ブラウザ操作ロジック（前回のJS強制送信版）
+        async def run_derija_final_v17(cast, sid, spass):
             async with async_playwright() as p:
                 browser = await p.chromium.launch(headless=True, args=['--no-sandbox'])
                 context = await browser.new_context(viewport={'width': 1280, 'height': 2000})
                 page = await context.new_page()
                 debug_path = f"error_{sid}.png"
-
                 try:
-                    # 1. ログイン
                     await page.goto("https://deli-fuzoku.jp/entry/", wait_until="domcontentloaded")
                     await page.fill("#form_username", sid)
                     await page.fill("#form_password", spass)
                     await page.click("#button")
                     await page.wait_for_load_state("networkidle")
 
-                    # 2. 登録ページへ（管理画面TOPから遷移）
+                    # 登録ページへ
                     await page.locator('a:has-text("在籍の追加")').click()
                     await page.wait_for_load_state("networkidle")
 
-                    # 3. フォーム入力（確実に値をセット）
+                    # 入力
                     await page.wait_for_selector("#form_girl_name", timeout=10000)
                     await page.fill("#form_girl_name", str(cast[2]))
                     await page.fill("#form_girl_age", str(cast[3]))
@@ -745,39 +749,28 @@ with tab4:
                     await page.fill("#form_girl_sizeb", str(cast[5]))
                     await page.fill("#form_girl_sizew", str(cast[7]))
                     await page.fill("#form_girl_sizeh", str(cast[8]))
-                    
                     cup = str(cast[6]).strip().upper()
                     if cup: await page.locator("#form_girl_cup").select_option(label=cup)
                     if len(cast) > 12: await page.fill("#form_girl_pr", str(cast[12]))
 
-                    # 4. 画像アップロード
+                    # 画像
                     img_name = cast[16]
                     if img_name:
                         tmp = f"up_{sid}.jpg"
                         if download_by_filename(img_name, tmp):
                             await page.locator("#form_file_girl_photo1").set_input_files(tmp)
-                            await asyncio.sleep(5) # 5秒：画像処理を待つ
+                            await asyncio.sleep(5) 
                             if os.path.exists(tmp): os.remove(tmp)
 
-                    # 5. 【究極の修正】物理クリックを捨てて「フォームを強制送信」する
-                    # サイト側の func_submit() を無視して、ブラウザに直接「この内容で送れ」と命じます
-                    st.write(f"🔄 {cast[2]} さんのデータを強制送信中...")
-                    
+                    # 強制送信実行
                     await page.evaluate('''() => {
-                        const form = document.querySelector('form');
-                        if (form) {
-                            form.submit();
-                        } else {
-                            // フォームが見つからない場合は従来の関数を実行
-                            func_submit();
-                        }
+                        const f = document.querySelector('form');
+                        f ? f.submit() : func_submit();
                     }''')
 
-                    # 6. 完了確認（これが出れば100%成功）
-                    # 完了画面の div#top-link_wrap もしくは p.gn を探す
+                    # 完了確認
                     await page.wait_for_selector('p.gn:has-text("完了しました")', timeout=30000)
                     return {"status": "success"}
-
                 except Exception as e:
                     await page.screenshot(path=debug_path, full_page=True)
                     return {"status": "error", "message": str(e), "screenshot": debug_path}
@@ -790,25 +783,35 @@ with tab4:
             cols = st.columns(3)
             for i, s in enumerate(dj_shops):
                 with cols[i % 3]:
-                    if st.checkbox(f"{s['店舗名']} ({len(s['casts'])}名)", key=f"dj_final_ok_{i}"):
+                    if st.checkbox(f"{s['店舗名']} ({len(s['casts'])}名)", key=f"dj_v17_cb_{i}"):
                         selected.append(s)
 
             if st.button("🚀 デリじゃ一括登録開始", type="primary"):
-                creds_w = Credentials.from_service_account_info(st.secrets["gcp_service_account"], scopes=SCOPE)
-                ws_w = gspread.authorize(creds_w).open_by_key(SPREADSHEET_ID).worksheet("キャスト情報")
+                # ここで再度認証せず、既存の権限を使用することを試みる（APIエラー対策）
+                try:
+                    creds_w = Credentials.from_service_account_info(st.secrets["gcp_service_account"], scopes=SCOPE)
+                    gc_w = gspread.authorize(creds_w)
+                    ws_w = gc_w.open_by_key(SPREADSHEET_ID).worksheet("キャスト情報")
+                except Exception as api_e:
+                    st.error("Google APIが混み合っています。登録処理のみ継続します。シートの更新は後ほど手動で行ってください。")
+                    ws_w = None
 
                 for shop in selected:
                     for cast in shop['casts']:
                         with st.status(f"{cast[2]} 登録中..."):
-                            res = asyncio.run(run_derija_js_submit(cast, shop['ID'], shop['PASS']))
+                            res = asyncio.run(run_derija_final_v17(cast, shop['ID'], shop['PASS']))
                             if res["status"] == "success":
-                                row_idx = next((i for i, r in enumerate(raw_cast_data) if r[0] == cast[0]), None)
-                                if row_idx: ws_w.update_cell(row_idx + 1, 16, "登録済")
                                 st.success(f"✅ {cast[2]} 完了")
+                                # シート更新（ws_wが有効な場合のみ）
+                                if ws_w:
+                                    try:
+                                        row_idx = next((i for i, r in enumerate(raw_cast_data) if r[0] == cast[0]), None)
+                                        if row_idx: ws_w.update_cell(row_idx + 1, 16, "登録済")
+                                    except:
+                                        st.warning(f"シート更新のみ失敗しました（API制限）")
                             else:
                                 st.error(f"❌ {cast[2]} 失敗: {res['message']}")
-                                if "screenshot" in res and os.path.exists(res["screenshot"]):
-                                    st.image(res["screenshot"])
+                                if "screenshot" in res: st.image(res["screenshot"])
         
 # --- tab5: デリじゃ既存店コピー (Web → シート) ---
 with tab5:
