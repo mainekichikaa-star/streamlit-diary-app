@@ -655,19 +655,19 @@ with tab4:
     st.info("デリじゃ（deli-fuzoku.jp）への自動登録を行います。")
 
     try:
-        # スプレッドシートからのデータ取得（変更なし）
+        # スプレッドシートからのデータ取得
         creds = Credentials.from_service_account_info(st.secrets["gcp_service_account"], scopes=SCOPE)
         gs_client = gspread.authorize(creds)
         spreadsheet = gs_client.open_by_key(SPREADSHEET_ID)
         
         worksheet_cast = spreadsheet.worksheet("キャスト情報")
-        worksheet_images = spreadsheet.worksheet("キャスト画像")
         worksheet_shops = spreadsheet.worksheet("シート3")
 
         data_info = worksheet_cast.get_all_values()
         rows_info = data_info[1:]
         data_shops = worksheet_shops.get_all_records()
 
+        # デリじゃ用店舗のフィルタリング
         derija_keywords = ["デリじゃ", "デリジャ", "でりじゃ"]
         derija_shops = []
         for shop in data_shops:
@@ -675,15 +675,21 @@ with tab4:
             if any(k in s_name for k in derija_keywords):
                 s_id = str(shop.get('店舗ID', '')).strip()
                 s_pass = str(shop.get('店舗PASSWORD', '')).strip()
+                
+                # 未登録キャストの判定（O列が店舗ID、P列が登録済でないもの）
                 unregistered = [r for r in rows_info if len(r) > 15 and str(r[14]).strip() == s_id and str(r[15]).strip() != "登録済"]
+                
                 if s_id and s_pass:
                     derija_shops.append({
-                        "店舗名": s_name, "ID": s_id, "raw_pass": s_pass,
-                        "未登録数": len(unregistered), "casts": unregistered
+                        "店舗名": s_name,
+                        "ID": s_id,
+                        "raw_pass": s_pass,
+                        "未登録数": len(unregistered),
+                        "casts": unregistered
                     })
 
         # --- tab4専用自動化ロジック (人間操作シミュレーション版) ---
-        async def run_derija_automation(cast_row, s_id, s_pass, sub_urls):
+        async def run_derija_automation(cast_row, s_id, s_pass):
             async with async_playwright() as p:
                 browser = await p.chromium.launch(headless=True, args=['--no-sandbox'])
                 context = await browser.new_context(
@@ -702,14 +708,13 @@ with tab4:
                     await asyncio.sleep(1)
                     await page.click("#button")
                     
-                    # ログイン後の安定を待つ
+                    # 2. ログイン後の安定を待ち、「在籍の追加」をクリック
                     await page.wait_for_load_state("networkidle")
-
-                    # 2. 修正ポイント：「在籍の追加」をクリックして画面遷移
-                    # 提供されたHTML構造に基づき、リンクテキストで探してクリック
-                    add_girl_link = page.locator('a:has-text("在籍の追加")')
-                    await page.wait_for_selector('a:has-text("在籍の追加")', timeout=15000)
-                    await add_girl_link.click()
+                    
+                    # リンクテキストで確実にクリック
+                    add_link_selector = 'a:has-text("在籍の追加")'
+                    await page.wait_for_selector(add_link_selector, timeout=15000)
+                    await page.click(add_link_selector)
                     
                     # 3. 入力画面の表示を待機
                     await page.wait_for_load_state("networkidle")
@@ -728,7 +733,7 @@ with tab4:
                     if cup_val:
                         await page.locator("#form_girl_cup").select_option(label=cup_val)
 
-                    # コメント（店舗コメントを反映）
+                    # コメント（店舗コメントを反映：M列）
                     if len(cast_row) > 12:
                         await page.type("#form_girl_pr", str(cast_row[12]), delay=20)
 
@@ -741,7 +746,7 @@ with tab4:
                             await asyncio.sleep(0.3)
 
                     # 画像アップロード
-                    main_img_url = cast_row[16]
+                    main_img_url = cast_row[16] # Q列
                     if main_img_url:
                         tmp_path = f"derija_tmp_{s_id}.jpg"
                         if download_by_filename(main_img_url, tmp_path):
@@ -761,7 +766,7 @@ with tab4:
                 finally:
                     await browser.close()
 
-        # UI表示 (変更なし)
+        # --- UI表示 ---
         if not derija_shops:
             st.info("対象の店舗が見つかりません。")
         else:
@@ -769,19 +774,23 @@ with tab4:
             cols = st.columns(3)
             for i, s in enumerate(derija_shops):
                 with cols[i % 3]:
-                    if st.checkbox(f"{s['店舗名']} ({s['未登録数']}名)", key=f"derija_sel_{i}"):
+                    # keyをユニークにしてNameErrorやDuplicateキーを避ける
+                    if st.checkbox(f"{s['店舗名']} ({s['未登録数']}名)", key=f"derija_check_{s['ID']}_{i}"):
                         selected_derija_shops.append(s)
 
-            if st.button("🚀 デリじゃ一括登録開始", type="primary"):
+            if st.button("🚀 デリじゃ一括登録開始", type="primary", key="derija_start_btn"):
                 for shop in selected_derija_shops:
                     st.markdown(f"#### 🏢 {shop['店舗名']}")
                     for cast in shop['casts']:
                         c_name = cast[2]
                         with st.status(f"{c_name} 登録中...") as status:
-                            res = asyncio.run(run_derija_automation(cast, shop['ID'], shop['raw_pass'], []))
+                            # 実行
+                            res = asyncio.run(run_derija_automation(cast, shop['ID'], shop['raw_pass']))
                             if res["status"] == "success":
-                                row_idx = next((i for i, r in enumerate(data_info) if r[0] == cast[0]), None)
-                                if row_idx: worksheet_cast.update_cell(row_idx + 1, 16, "登録済")
+                                # スプレッドシート更新（P列を登録済にする）
+                                row_idx = next((idx for idx, r in enumerate(data_info) if r[0] == cast[0]), None)
+                                if row_idx is not None:
+                                    worksheet_cast.update_cell(row_idx + 1, 16, "登録済")
                                 status.update(label=f"✅ {c_name} 完了", state="complete")
                             else:
                                 st.error(f"エラー: {res['message']}")
@@ -789,7 +798,7 @@ with tab4:
 
     except Exception as e:
         st.error(f"システムエラー: {e}")
-
+        
 # --- tab5: デリじゃ既存店コピー (Web → シート) ---
 with tab5:
     st.subheader("📥 デリじゃ キャスト情報の同期")
