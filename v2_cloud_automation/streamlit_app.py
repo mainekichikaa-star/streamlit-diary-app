@@ -206,7 +206,7 @@ try:
     spreadsheet = gs_client.open_by_key(SPREADSHEET_ID)
     
     worksheet_cast = spreadsheet.worksheet("キャスト情報")
-    worksheet_shops = spreadsheet.worksheet("ID/Password")
+    worksheet_shops = spreadsheet.worksheet("シート3")
     
     data_info = worksheet_cast.get_all_values()
     rows_info = data_info[1:]
@@ -242,7 +242,7 @@ with tab1:
         
         worksheet_cast = spreadsheet.worksheet("キャスト情報")
         worksheet_images = spreadsheet.worksheet("キャスト画像")
-        worksheet_shops = spreadsheet.worksheet("ID/Password")
+        worksheet_shops = spreadsheet.worksheet("シート3")
 
         data_info = worksheet_cast.get_all_values()
         headers_info = data_info[0]
@@ -263,7 +263,7 @@ with tab1:
             s_pass = str(shop.get('店舗PASSWORD')).strip()
             
             # --- 判定ロジック ---
-            # キャスト情報のO列(index 14)と、ID/Passwordの「店舗ID」を照合
+            # キャスト情報のO列(index 14)と、シート3の「店舗ID」を照合
             unregistered_casts = []
             for r in rows_info:
                 if len(r) > 14:
@@ -272,7 +272,7 @@ with tab1:
                     # P列(15): 登録ステータス（「登録済」以外、または空白を対象）
                     status_field = str(r[15]).strip() if len(r) > 15 else ""
                     
-                    # キャスト側のO列とID/Passwordの店舗IDが一致し、かつ未登録の場合
+                    # キャスト側のO列とシート3の店舗IDが一致し、かつ未登録の場合
                     if cast_shop_id == s_id and status_field != "登録済":
                         unregistered_casts.append(r)
             
@@ -708,7 +708,7 @@ with tab4:
             
             # シート読み込みを1回にまとめてリクエスト数を減らす
             ws_cast = ss.worksheet("キャスト情報")
-            ws_shops = ss.worksheet("ID/Password") # 最新のシート名
+            ws_shops = ss.worksheet("シート3") # 最新のシート名
             
             return ws_cast.get_all_values(), ws_shops.get_all_records()
         except Exception as e:
@@ -983,6 +983,6 @@ with tab5:
                         st.error(f"失敗: {res.get('message', 'データなし')}")
                         status.update(label="エラー", state="error")
         else:
-            st.warning("ID/Passwordにデリじゃ店舗が見つかりません。")
+            st.warning("シート3にデリじゃ店舗が見つかりません。")
     except Exception as e:
         st.error(f"エラー: {e}")
