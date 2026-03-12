@@ -251,13 +251,13 @@ with tab1:
         data_images = worksheet_images.get_all_values()
         rows_images = data_images[1:]
         
-        # ID/Passwordをレコード形式で取得
+        #シート3をレコード形式で取得
         data_shops = worksheet_shops.get_all_records()
         
         # 店舗ごとの未登録数をカウント
         shop_status = []
         for shop in data_shops:
-            # ID/Passwordの各列を取得
+            #シート3の各列を取得
             s_name = str(shop.get('登録店舗')).strip()
             s_id = str(shop.get('店舗ID')).strip()
             s_pass = str(shop.get('店舗PASSWORD')).strip()
@@ -866,7 +866,7 @@ with tab5:
     st.info("デリじゃ管理画面からキャスト情報を取得し、スプレッドシートへ追記します。")
 
     try:
-        # ID/Passwordから「デリじゃ」店舗のみを抽出
+        #シート3から「デリじゃ」店舗のみを抽出
         creds = Credentials.from_service_account_info(st.secrets["gcp_service_account"], scopes=SCOPE)
         gs_client = gspread.authorize(creds)
         spreadsheet = gs_client.open_by_key(SPREADSHEET_ID)
