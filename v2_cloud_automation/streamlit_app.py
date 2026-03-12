@@ -679,7 +679,7 @@ with tab4:
                 s_id = str(shop.get('店舗ID', '')).strip()
                 s_pass = str(shop.get('店舗PASSWORD', '')).strip()
                 
-                # 未登録キャストの判定（O列が店舗IDと一致し、P列が登録済でないもの）
+                # 未登録キャストの判定
                 unregistered = [r for r in rows_info if len(r) > 15 and str(r[14]).strip() == s_id and str(r[15]).strip() != "登録済"]
                 
                 if s_id and s_pass:
@@ -699,40 +699,41 @@ with tab4:
                 page = await context.new_page()
                 
                 try:
-                    # ログイン処理
+                    # 1. ログイン処理
                     await page.goto("https://deli-fuzoku.jp/entry/", wait_until="networkidle") 
                     
-                    # ログインフォームのセレクタを修正
-                    # ID入力欄 (image_2ba3e3.pngの要素を確認し、nameまたはIDで指定)
-                    await page.wait_for_selector('input[name="login_id"]', timeout=10000)
-                    await page.fill('input[name="login_id"]', s_id)
-                    await page.fill('input[name="password"]', s_pass)
-                    await page.click('input[value="ログイン"]')
+                    # 要素リストに基づいたログイン入力
+                    await page.wait_for_selector("#form_username", timeout=10000)
+                    await page.fill("#form_username", s_id)
+                    await page.fill("#form_password", s_pass)
                     
-                    # ログイン後の遷移待ち
+                    # ログインボタン（#button）をクリック
+                    await page.click("#button")
+                    
+                    # 2. ログイン後の遷移待ち
                     await page.wait_for_load_state("networkidle")
 
-                    # 新規登録画面へ（直接URLへ移動）
+                    # 3. 新規登録画面へ移動
                     await page.goto("https://deli-fuzoku.jp/entry/girl_edit.php", wait_until="networkidle")
                     
                     # 入力処理
-                    await page.fill("#form_girl_name", str(cast_row[2])) # C: 名前
-                    await page.fill("#form_girl_age", str(cast_row[3]))  # D: 年齢
-                    await page.fill("#form_girl_height", str(cast_row[4])) # E: 身長
-                    await page.fill("#form_girl_sizeb", str(cast_row[5])) # F: バスト
-                    await page.fill("#form_girl_sizew", str(cast_row[7])) # H: ウエスト
-                    await page.fill("#form_girl_sizeh", str(cast_row[8])) # I: ヒップ
+                    await page.fill("#form_girl_name", str(cast_row[2])) 
+                    await page.fill("#form_girl_age", str(cast_row[3]))  
+                    await page.fill("#form_girl_height", str(cast_row[4])) 
+                    await page.fill("#form_girl_sizeb", str(cast_row[5])) 
+                    await page.fill("#form_girl_sizew", str(cast_row[7])) 
+                    await page.fill("#form_girl_sizeh", str(cast_row[8])) 
                     
                     # カップ選択
-                    cup_val = str(cast_row[6]).strip().upper() # G: カップ
+                    cup_val = str(cast_row[6]).strip().upper()
                     if cup_val:
                         await page.locator("#form_girl_cup").select_option(label=cup_val)
 
-                    # コメント（M列：店舗コメントを反映）
+                    # コメント（M列：店舗コメント）
                     if len(cast_row) > 12:
                         await page.fill("#form_girl_pr", str(cast_row[12]))
 
-                    # タグ設定（主要タグのインデックス指定）
+                    # タグ設定（共通タグ）
                     common_tags = [0, 1, 5, 10, 15] 
                     for tag_idx in common_tags:
                         selector = f"#form_girl_tags_{tag_idx}"
@@ -786,7 +787,6 @@ with tab4:
 
     except Exception as e:
         st.error(f"システムエラー: {e}")
-
 
 # --- tab5: デリじゃ既存店コピー (Web → シート) ---
 with tab5:
