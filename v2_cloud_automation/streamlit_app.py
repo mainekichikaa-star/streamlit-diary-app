@@ -180,7 +180,7 @@ async def run_automation(cast_row_list, shop_id, shop_pass, sub_image_paths):
 st.set_page_config(page_title="自動登録システム", layout="wide")
 st.title("自動登録システム")
 
-tab1, tab2, tab3 = st.tabs(["🚀 駅ちかキャスト自動登録", "🚉 駅ちかネット予約自動登録", "📋 既存店コピー"])
+tab1, tab2, tab3, tab4, tab5 = st.tabs(["🚀 駅ちかキャスト自動登録", "🚉 駅ちかネット予約自動登録", "📋 駅ちか既存店コピー, "🚀 デリじゃキャスト自動登録", "📋 デリじゃ既存店コピー])
 
 with tab1:
     st.subheader("店舗別・未登録キャスト状況")
@@ -470,10 +470,6 @@ with tab2:
                     else:
                         st.error(f"❌ {shop['店舗名']} エラー: {res['message']}")
                         status.update(label="❌ 同期失敗", state="error")
-                        
-import random
-import string
-import requests
 
 with tab3:
     st.subheader("📥 既存店キャスト情報の同期 (Web → シート)")
@@ -640,5 +636,137 @@ with tab3:
                         status.update(label="エラー終了", state="error")
                 finally:
                     loop.close()
+
+    
     else:
         st.error("店舗データが読み込まれていません。")
+
+
+# --- tab4: デリじゃ自動登録 ---
+with st.tabs(["🚀 駅ちかキャスト自動登録", "🚉 駅ちかネット予約自動登録", "📋 既存店コピー", "🍓 デリじゃ登録"])[3]:
+    st.subheader("🍓 デリじゃ キャスト自動登録")
+    st.info("デリじゃ（deli-fuzoku.jp）への自動登録を行います。")
+
+    try:
+        # シート3から「デリじゃ」店舗を抽出
+        creds = Credentials.from_service_account_info(st.secrets["gcp_service_account"], scopes=SCOPE)
+        gs_client = gspread.authorize(creds)
+        spreadsheet = gs_client.open_by_key(SPREADSHEET_ID)
+        
+        worksheet_cast = spreadsheet.worksheet("キャスト情報")
+        worksheet_images = spreadsheet.worksheet("キャスト画像")
+        worksheet_shops = spreadsheet.worksheet("シート3")
+
+        data_info = worksheet_cast.get_all_values()
+        rows_info = data_info[1:]
+        data_images = worksheet_images.get_all_values()
+        rows_images = data_images[1:]
+        data_shops = worksheet_shops.get_all_records()
+
+        # デリじゃ用店舗のフィルタリング
+        derija_keywords = ["デリじゃ", "デリジャ", "でりじゃ"]
+        derija_shops = []
+        for shop in data_shops:
+            s_name = str(shop.get('登録店舗', '')).strip()
+            if any(k in s_name for k in derija_keywords):
+                s_id = str(shop.get('店舗ID', '')).strip()
+                s_pass = str(shop.get('店舗PASSWORD', '')).strip()
+                
+                # 未登録キャストの判定（O列が店舗IDと一致し、P列が登録済でないもの）
+                unregistered = [r for r in rows_info if len(r) > 15 and str(r[14]).strip() == s_id and str(r[15]).strip() != "登録済"]
+                
+                if s_id and s_pass:
+                    derija_shops.append({
+                        "店舗名": s_name,
+                        "ID": s_id,
+                        "raw_pass": s_pass,
+                        "未登録数": len(unregistered),
+                        "casts": unregistered
+                    })
+
+        # --- tab4専用自動化ロジック ---
+        async def run_derija_automation(cast_row, s_id, s_pass, sub_urls):
+            async with async_playwright() as p:
+                browser = await p.chromium.launch(headless=True, args=['--no-sandbox'])
+                context = await browser.new_context(viewport={'width': 1280, 'height': 2000}, locale="ja-JP")
+                page = await context.new_page()
+                
+                try:
+                    # ログイン処理
+                    await page.goto("https://deli-fuzoku.jp/entry/") # デリじゃログイン/エントリー
+                    await page.fill('input[name="loginID"]', s_id)
+                    await page.fill('input[name="password"]', s_pass)
+                    await page.click('input[value="ログイン"]')
+                    
+                    # 新規登録画面へ（ログイン後のURLに遷移）
+                    # ※要素リストに基づき、直接入力フィールドを操作
+                    await page.fill("#form_girl_name", str(cast_row[2])) # C: 名前
+                    await page.fill("#form_girl_age", str(cast_row[3]))  # D: 年齢
+                    await page.fill("#form_girl_height", str(cast_row[4])) # E: 身長
+                    await page.fill("#form_girl_sizeb", str(cast_row[5])) # F: バスト
+                    await page.fill("#form_girl_sizew", str(cast_row[7])) # H: ウエスト
+                    await page.fill("#form_girl_sizeh", str(cast_row[8])) # I: ヒップ
+                    
+                    # カップ選択
+                    cup_val = str(cast_row[6]).strip().upper() # G: カップ
+                    if cup_val:
+                        await page.locator("#form_girl_cup").select_option(label=cup_val)
+
+                    # コメント（M列：店舗コメントを反映）
+                    if len(cast_row) > 12:
+                        await page.fill("#form_girl_pr", str(cast_row[12]))
+
+                    # タグ設定（tab1の主要タグをデリじゃのインデックスにマッピング例）
+                    # 共通でチェックを入れたいタグのインデックスを指定
+                    common_tags = [0, 1, 5, 10, 15] # 現場に合わせて調整
+                    for tag_idx in common_tags:
+                        selector = f"#form_girl_tags_{tag_idx}"
+                        if await page.locator(selector).count() > 0:
+                            await page.locator(selector).check(force=True)
+
+                    # 画像アップロード（メイン画像のみ例示）
+                    main_img_url = cast_row[16] # Q列
+                    if main_img_url:
+                        tmp_path = "derija_main.jpg"
+                        if download_by_filename(main_img_url, tmp_path):
+                            await page.locator("#form_file_girl_photo1").set_input_files(tmp_path)
+                            if os.path.exists(tmp_path): os.remove(tmp_path)
+
+                    # 登録実行
+                    await page.click("#form_submit_btn")
+                    await asyncio.sleep(2)
+                    return {"status": "success"}
+                except Exception as e:
+                    return {"status": "error", "message": str(e)}
+                finally:
+                    await browser.close()
+
+        # UI表示
+        if not derija_shops:
+            st.info("対象の店舗が見つかりません。")
+        else:
+            selected_derija_shops = []
+            cols = st.columns(3)
+            for i, s in enumerate(derija_shops):
+                with cols[i % 3]:
+                    if st.checkbox(f"{s['店舗名']} ({s['未登録数']}名)", key=f"derija_sel_{i}"):
+                        selected_derija_shops.append(s)
+
+            if st.button("🚀 デリじゃ一括登録開始", type="primary"):
+                for shop in selected_derija_shops:
+                    st.markdown(f"#### 🏢 {shop['店舗名']}")
+                    for cast in shop['casts']:
+                        c_name = cast[2]
+                        with st.status(f"{c_name} 登録中...") as status:
+                            res = asyncio.run(run_derija_automation(cast, shop['ID'], shop['raw_pass'], []))
+                            if res["status"] == "success":
+                                # ステータス更新
+                                row_idx = next((i for i, r in enumerate(data_info) if r[0] == cast[0]), None)
+                                if row_idx: worksheet_cast.update_cell(row_idx + 1, 16, "登録済")
+                                status.update(label=f"✅ {c_name} 完了", state="complete")
+                            else:
+                                st.error(f"エラー: {res['message']}")
+                                status.update(label="❌ 失敗", state="error")
+
+    except Exception as e:
+        st.error(f"システムエラー: {e}")
