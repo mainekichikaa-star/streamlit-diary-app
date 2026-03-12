@@ -700,13 +700,22 @@ with tab4:
                 
                 try:
                     # ログイン処理
-                    await page.goto("https://deli-fuzoku.jp/entry/") # デリじゃログイン/エントリー
-                    await page.fill('input[name="loginID"]', s_id)
+                    await page.goto("https://deli-fuzoku.jp/entry/", wait_until="networkidle") 
+                    
+                    # ログインフォームのセレクタを修正
+                    # ID入力欄 (image_2ba3e3.pngの要素を確認し、nameまたはIDで指定)
+                    await page.wait_for_selector('input[name="login_id"]', timeout=10000)
+                    await page.fill('input[name="login_id"]', s_id)
                     await page.fill('input[name="password"]', s_pass)
                     await page.click('input[value="ログイン"]')
                     
-                    # 新規登録画面へ（ログイン後のURLに遷移）
-                    # ※要素リストに基づき、直接入力フィールドを操作
+                    # ログイン後の遷移待ち
+                    await page.wait_for_load_state("networkidle")
+
+                    # 新規登録画面へ（直接URLへ移動）
+                    await page.goto("https://deli-fuzoku.jp/entry/girl_edit.php", wait_until="networkidle")
+                    
+                    # 入力処理
                     await page.fill("#form_girl_name", str(cast_row[2])) # C: 名前
                     await page.fill("#form_girl_age", str(cast_row[3]))  # D: 年齢
                     await page.fill("#form_girl_height", str(cast_row[4])) # E: 身長
@@ -723,24 +732,24 @@ with tab4:
                     if len(cast_row) > 12:
                         await page.fill("#form_girl_pr", str(cast_row[12]))
 
-                    # タグ設定（tab1の主要タグをデリじゃのインデックスにマッピング例）
-                    # 共通でチェックを入れたいタグのインデックスを指定
-                    common_tags = [0, 1, 5, 10, 15] # 現場に合わせて調整
+                    # タグ設定（主要タグのインデックス指定）
+                    common_tags = [0, 1, 5, 10, 15] 
                     for tag_idx in common_tags:
                         selector = f"#form_girl_tags_{tag_idx}"
                         if await page.locator(selector).count() > 0:
                             await page.locator(selector).check(force=True)
 
-                    # 画像アップロード（メイン画像のみ例示）
+                    # 画像アップロード
                     main_img_url = cast_row[16] # Q列
                     if main_img_url:
-                        tmp_path = "derija_main.jpg"
+                        tmp_path = f"derija_tmp_{s_id}.jpg"
                         if download_by_filename(main_img_url, tmp_path):
                             await page.locator("#form_file_girl_photo1").set_input_files(tmp_path)
                             if os.path.exists(tmp_path): os.remove(tmp_path)
 
                     # 登録実行
                     await page.click("#form_submit_btn")
+                    await page.wait_for_load_state("networkidle")
                     await asyncio.sleep(2)
                     return {"status": "success"}
                 except Exception as e:
