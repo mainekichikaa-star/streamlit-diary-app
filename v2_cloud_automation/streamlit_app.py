@@ -694,10 +694,9 @@ with tab3:
 # --- tab4: デリじゃ自動登録 ---
 with tab4:
     st.subheader("🍓 デリじゃ キャスト自動登録")
-    st.info("デリじゃ（deli-fuzoku.jp）への自動登録を行います。")
 
     @st.cache_data(ttl=300)
-    def fetch_data_v15():
+    def fetch_data_v16():
         try:
             creds = Credentials.from_service_account_info(st.secrets["gcp_service_account"], scopes=SCOPE)
             gc = gspread.authorize(creds)
@@ -706,7 +705,7 @@ with tab4:
         except Exception as e:
             return None, str(e)
 
-    raw_cast_data, shop_records = fetch_data_v15()
+    raw_cast_data, shop_records = fetch_data_v16()
 
     if raw_cast_data:
         rows_info = raw_cast_data[1:]
@@ -719,66 +718,63 @@ with tab4:
                 if sid and spass:
                     dj_shops.append({"店舗名": s_name, "ID": sid, "PASS": spass, "casts": unreg})
 
-        async def run_derija_force_submit(cast, sid, spass):
+        async def run_derija_js_submit(cast, sid, spass):
             async with async_playwright() as p:
                 browser = await p.chromium.launch(headless=True, args=['--no-sandbox'])
                 context = await browser.new_context(viewport={'width': 1280, 'height': 2000})
                 page = await context.new_page()
-                # ファイル名は一意にする
-                debug_path = os.path.join(os.getcwd(), f"error_{sid}.png")
+                debug_path = f"error_{sid}.png"
 
                 try:
                     # 1. ログイン
                     await page.goto("https://deli-fuzoku.jp/entry/", wait_until="domcontentloaded")
-                    await page.type("#form_username", sid, delay=100)
-                    await page.type("#form_password", spass, delay=100)
+                    await page.fill("#form_username", sid)
+                    await page.fill("#form_password", spass)
                     await page.click("#button")
                     await page.wait_for_load_state("networkidle")
 
-                    # 2. 登録ページへ（管理画面から「在籍の追加」をクリック）
-                    add_btn = page.locator('a:has-text("在籍の追加")')
-                    await add_btn.wait_for(state="visible", timeout=10000)
-                    await add_btn.click()
+                    # 2. 登録ページへ（管理画面TOPから遷移）
+                    await page.locator('a:has-text("在籍の追加")').click()
                     await page.wait_for_load_state("networkidle")
 
-                    # 3. 入力
-                    await page.wait_for_selector("#form_girl_name", timeout=15000)
-                    await page.type("#form_girl_name", str(cast[2]), delay=100)
-                    await page.type("#form_girl_age", str(cast[3]), delay=100)
-                    await page.type("#form_girl_height", str(cast[4]), delay=100)
-                    await page.type("#form_girl_sizeb", str(cast[5]), delay=100)
-                    await page.type("#form_girl_sizew", str(cast[7]), delay=100)
-                    await page.type("#form_girl_sizeh", str(cast[8]), delay=100)
+                    # 3. フォーム入力（確実に値をセット）
+                    await page.wait_for_selector("#form_girl_name", timeout=10000)
+                    await page.fill("#form_girl_name", str(cast[2]))
+                    await page.fill("#form_girl_age", str(cast[3]))
+                    await page.fill("#form_girl_height", str(cast[4]))
+                    await page.fill("#form_girl_sizeb", str(cast[5]))
+                    await page.fill("#form_girl_sizew", str(cast[7]))
+                    await page.fill("#form_girl_sizeh", str(cast[8]))
+                    
                     cup = str(cast[6]).strip().upper()
                     if cup: await page.locator("#form_girl_cup").select_option(label=cup)
-                    if len(cast) > 12: await page.type("#form_girl_pr", str(cast[12]), delay=50)
+                    if len(cast) > 12: await page.fill("#form_girl_pr", str(cast[12]))
 
-                    # 4. 画像
+                    # 4. 画像アップロード
                     img_name = cast[16]
                     if img_name:
                         tmp = f"up_{sid}.jpg"
                         if download_by_filename(img_name, tmp):
                             await page.locator("#form_file_girl_photo1").set_input_files(tmp)
-                            await asyncio.sleep(4) # 人間がアップロードを確認して一息つく時間
+                            await asyncio.sleep(5) # 5秒：画像処理を待つ
                             if os.path.exists(tmp): os.remove(tmp)
 
-                    # 5. 【決定的な修正】登録実行
-                    await page.evaluate("window.scrollTo(0, document.body.scrollHeight)")
-                    await asyncio.sleep(2)
+                    # 5. 【究極の修正】物理クリックを捨てて「フォームを強制送信」する
+                    # サイト側の func_submit() を無視して、ブラウザに直接「この内容で送れ」と命じます
+                    st.write(f"🔄 {cast[2]} さんのデータを強制送信中...")
                     
-                    # A. まずラベルを物理クリック
-                    submit_label = page.locator('label[for="form_submit_btn"]')
-                    await submit_label.hover()
-                    await submit_label.click()
-                    
-                    # B. 3秒待っても完了画面に行かなければ JavaScriptで強制送信
-                    await asyncio.sleep(3)
-                    if "girl_edit" in page.url:
-                        st.write("⚠️ 通常クリックで反応がないため、強制送信を実行します...")
-                        await page.evaluate("func_submit();")
+                    await page.evaluate('''() => {
+                        const form = document.querySelector('form');
+                        if (form) {
+                            form.submit();
+                        } else {
+                            // フォームが見つからない場合は従来の関数を実行
+                            func_submit();
+                        }
+                    }''')
 
-                    # 6. 完了確認
-                    # タイムアウトを30秒に延ばし、画像保存を確実に
+                    # 6. 完了確認（これが出れば100%成功）
+                    # 完了画面の div#top-link_wrap もしくは p.gn を探す
                     await page.wait_for_selector('p.gn:has-text("完了しました")', timeout=30000)
                     return {"status": "success"}
 
@@ -788,13 +784,13 @@ with tab4:
                 finally:
                     await browser.close()
 
-        # UI部分
+        # UI
         selected = []
         if dj_shops:
             cols = st.columns(3)
             for i, s in enumerate(dj_shops):
                 with cols[i % 3]:
-                    if st.checkbox(f"{s['店舗名']} ({len(s['casts'])}名)", key=f"dj_v15_{i}"):
+                    if st.checkbox(f"{s['店舗名']} ({len(s['casts'])}名)", key=f"dj_final_ok_{i}"):
                         selected.append(s)
 
             if st.button("🚀 デリじゃ一括登録開始", type="primary"):
@@ -803,17 +799,16 @@ with tab4:
 
                 for shop in selected:
                     for cast in shop['casts']:
-                        with st.status(f"{cast[2]} 登録中...") as status:
-                            res = asyncio.run(run_derija_force_submit(cast, shop['ID'], shop['PASS']))
+                        with st.status(f"{cast[2]} 登録中..."):
+                            res = asyncio.run(run_derija_js_submit(cast, shop['ID'], shop['PASS']))
                             if res["status"] == "success":
                                 row_idx = next((i for i, r in enumerate(raw_cast_data) if r[0] == cast[0]), None)
                                 if row_idx: ws_w.update_cell(row_idx + 1, 16, "登録済")
-                                status.update(label=f"✅ {cast[2]} 完了", state="complete")
+                                st.success(f"✅ {cast[2]} 完了")
                             else:
                                 st.error(f"❌ {cast[2]} 失敗: {res['message']}")
                                 if "screenshot" in res and os.path.exists(res["screenshot"]):
                                     st.image(res["screenshot"])
-                                status.update(label="エラー", state="error")
         
 # --- tab5: デリじゃ既存店コピー (Web → シート) ---
 with tab5:
