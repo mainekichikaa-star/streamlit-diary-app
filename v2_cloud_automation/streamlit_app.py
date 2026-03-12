@@ -698,18 +698,18 @@ with tab4:
 
     # API制限対策：キャッシュ
     @st.cache_data(ttl=300)
-    def fetch_data_v11():
+    def fetch_data_v12():
         try:
             creds = Credentials.from_service_account_info(st.secrets["gcp_service_account"], scopes=SCOPE)
             gc = gspread.authorize(creds)
             ss = gc.open_by_key(SPREADSHEET_ID)
             ws_c = ss.worksheet("キャスト情報")
-            ws_s = ss.worksheet("シート3") # ご指示通り「シート3」
+            ws_s = ss.worksheet("シート3")
             return ws_c.get_all_values(), ws_s.get_all_records()
         except Exception as e:
             return None, str(e)
 
-    raw_cast_data, shop_records = fetch_data_v11()
+    raw_cast_data, shop_records = fetch_data_v12()
 
     if raw_cast_data is None:
         st.error(f"データ取得エラー: {shop_records}")
@@ -725,8 +725,8 @@ with tab4:
                 if sid and spass:
                     dj_shops.append({"店舗名": s_name, "ID": sid, "PASS": spass, "casts": unreg})
 
-        # --- 人間らしい「ログイン→登録→完了確認」ロジック ---
-        async def run_derija_human_flow(cast, sid, spass):
+        # --- 人間操作ロジック（Labelクリック修正版） ---
+        async def run_derija_label_click(cast, sid, spass):
             async with async_playwright() as p:
                 browser = await p.chromium.launch(headless=True, args=['--no-sandbox'])
                 context = await browser.new_context(viewport={'width': 1280, 'height': 2000})
@@ -734,36 +734,22 @@ with tab4:
                 debug_img = f"debug_{sid}.png"
                 
                 try:
-                    # 1. ログインページへ（人間のように待つ）
+                    # 1. ログイン
                     await page.goto("https://deli-fuzoku.jp/entry/", wait_until="domcontentloaded")
-                    await page.wait_for_selector("#form_username", timeout=10000)
-                    
-                    # 人間が打ち込むように入力
-                    await page.type("#form_username", sid, delay=100)
-                    await page.type("#form_password", spass, delay=100)
-                    await asyncio.sleep(1)
+                    await page.fill("#form_username", sid)
+                    await page.fill("#form_password", spass)
+                    await asyncio.sleep(0.5)
                     await page.click("#button")
-                    
-                    # ログイン後のページ確認
                     await page.wait_for_load_state("networkidle")
-                    if page.url == "https://deli-fuzoku.jp/" or "login" in page.url:
-                        # ログインに失敗して一般トップページに飛ばされている場合
-                        await page.screenshot(path=debug_img)
-                        return {"status": "error", "message": "ログインに失敗しました（ID/PASS間違い、またはトップへ戻されました）", "screenshot": debug_img}
 
-                    # 2. 管理画面から「在籍の追加」をクリック（文字リンクを人間が探すように）
-                    # 完了画面から戻った際も、このリンクを探すのが一番安全です
-                    add_link = page.locator('a:has-text("在籍の追加")')
-                    await add_link.wait_for(timeout=10000)
-                    await add_link.click()
+                    # 2. 直接登録ページへ（遷移ミスを防ぐ）
+                    await page.goto("https://deli-fuzoku.jp/entry/girl_edit.php", wait_until="networkidle")
                     
-                    # 3. 入力画面
-                    await page.wait_for_selector("#form_girl_name", timeout=15000)
+                    # 3. 入力処理
+                    await page.wait_for_selector("#form_girl_name", timeout=10000)
                     await page.type("#form_girl_name", str(cast[2]), delay=50)
                     await page.type("#form_girl_age", str(cast[3]), delay=50)
                     await page.type("#form_girl_height", str(cast[4]), delay=50)
-                    
-                    # スリーサイズ
                     await page.type("#form_girl_sizeb", str(cast[5]), delay=30)
                     await page.type("#form_girl_sizew", str(cast[7]), delay=30)
                     await page.type("#form_girl_sizeh", str(cast[8]), delay=30)
@@ -778,25 +764,28 @@ with tab4:
                         tmp = f"up_{sid}.jpg"
                         if download_by_filename(img_name, tmp):
                             await page.locator("#form_file_girl_photo1").set_input_files(tmp)
-                            await asyncio.sleep(2) 
+                            await asyncio.sleep(2)
                             if os.path.exists(tmp): os.remove(tmp)
 
-                    # 5. 登録実行（スクロールしてJSクリック）
-                    submit_btn = page.locator("#form_submit_btn")
-                    await page.evaluate("window.scrollTo(0, document.body.scrollHeight)")
+                    # 5. 【重要修正】「登録する」というラベルを直接クリックする
+                    # inputタグ(#form_submit_btn)ではなく、人間が見ている「登録する」文字をクリック
+                    submit_label = page.locator('label[for="form_submit_btn"]')
+                    await submit_label.scroll_into_view_if_needed()
                     await asyncio.sleep(1)
-                    await page.evaluate('document.getElementById("form_submit_btn").click()')
+                    
+                    # ラベルをクリック（これで func_submit() が動く）
+                    await submit_label.click(force=True)
 
-                    # 6. 【最重要】完了画面の文字「追加が完了しました」が出るまで粘る
+                    # もしクリックが効かない場合の予備（直接JSで関数を実行）
                     try:
-                        # 完了通知の要素が出るまで待機
-                        await page.wait_for_selector('p.gn:has-text("完了しました")', timeout=20000)
-                        await page.screenshot(path=debug_img)
-                        return {"status": "success"}
+                        await page.wait_for_selector('p.gn:has-text("完了しました")', timeout=10000)
                     except:
-                        # 完了しなかった場合
-                        await page.screenshot(path=debug_img)
-                        return {"status": "error", "message": "完了表示が出ませんでした。入力エラーの可能性があります。", "screenshot": debug_img}
+                        await page.evaluate("func_submit();") # 直接JavaScript関数を叩く
+                    
+                    # 6. 完了確認
+                    await page.wait_for_selector('p.gn:has-text("完了しました")', timeout=15000)
+                    await page.screenshot(path=debug_img)
+                    return {"status": "success"}
 
                 except Exception as e:
                     await page.screenshot(path=debug_img)
@@ -812,22 +801,19 @@ with tab4:
             cols = st.columns(3)
             for i, s in enumerate(dj_shops):
                 with cols[i % 3]:
-                    if st.checkbox(f"{s['店舗名']} ({len(s['casts'])}名)", key=f"dj_v11_{i}"):
+                    if st.checkbox(f"{s['店舗名']} ({len(s['casts'])}名)", key=f"dj_v12_{i}"):
                         selected.append(s)
 
             if st.button("🚀 デリじゃ一括登録開始", type="primary"):
-                # 書き込み用
                 creds_w = Credentials.from_service_account_info(st.secrets["gcp_service_account"], scopes=SCOPE)
                 ws_w = gspread.authorize(creds_w).open_by_key(SPREADSHEET_ID).worksheet("キャスト情報")
 
                 for shop in selected:
-                    st.markdown(f"#### 🏢 {shop['店舗名']}")
                     for cast in shop['casts']:
                         with st.status(f"{cast[2]} 登録中...") as status:
-                            res = asyncio.run(run_derija_human_flow(cast, shop['ID'], shop['PASS']))
+                            res = asyncio.run(run_derija_label_click(cast, shop['ID'], shop['PASS']))
                             
                             if res["status"] == "success":
-                                # 更新
                                 row_idx = next((i for i, r in enumerate(raw_cast_data) if r[0] == cast[0]), None)
                                 if row_idx:
                                     ws_w.update_cell(row_idx + 1, 16, "登録済")
@@ -836,7 +822,7 @@ with tab4:
                             else:
                                 st.error(f"❌ {cast[2]} 失敗: {res['message']}")
                                 if "screenshot" in res:
-                                    st.image(res["screenshot"], caption="エラー発生時の画面")
+                                    st.image(res["screenshot"], caption="エラー画面")
                                 status.update(label="エラー", state="error")
         
 # --- tab5: デリじゃ既存店コピー (Web → シート) ---
