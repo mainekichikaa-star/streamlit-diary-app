@@ -655,7 +655,7 @@ with tab4:
     st.info("デリじゃ（deli-fuzoku.jp）への自動登録を行います。")
 
     try:
-        # シート3から「デリじゃ」店舗を抽出
+        # スプレッドシートからのデータ取得（変更なし）
         creds = Credentials.from_service_account_info(st.secrets["gcp_service_account"], scopes=SCOPE)
         gs_client = gspread.authorize(creds)
         spreadsheet = gs_client.open_by_key(SPREADSHEET_ID)
@@ -666,11 +666,8 @@ with tab4:
 
         data_info = worksheet_cast.get_all_values()
         rows_info = data_info[1:]
-        data_images = worksheet_images.get_all_values()
-        rows_images = data_images[1:]
         data_shops = worksheet_shops.get_all_records()
 
-        # デリじゃ用店舗のフィルタリング
         derija_keywords = ["デリじゃ", "デリジャ", "でりじゃ"]
         derija_shops = []
         for shop in data_shops:
@@ -678,23 +675,16 @@ with tab4:
             if any(k in s_name for k in derija_keywords):
                 s_id = str(shop.get('店舗ID', '')).strip()
                 s_pass = str(shop.get('店舗PASSWORD', '')).strip()
-                
-                # 未登録キャストの判定
                 unregistered = [r for r in rows_info if len(r) > 15 and str(r[14]).strip() == s_id and str(r[15]).strip() != "登録済"]
-                
                 if s_id and s_pass:
                     derija_shops.append({
-                        "店舗名": s_name,
-                        "ID": s_id,
-                        "raw_pass": s_pass,
-                        "未登録数": len(unregistered),
-                        "casts": unregistered
+                        "店舗名": s_name, "ID": s_id, "raw_pass": s_pass,
+                        "未登録数": len(unregistered), "casts": unregistered
                     })
 
-        # --- tab4専用自動化ロジック ---
+        # --- tab4専用自動化ロジック (人間操作シミュレーション版) ---
         async def run_derija_automation(cast_row, s_id, s_pass, sub_urls):
             async with async_playwright() as p:
-                # 人間らしく見せるためのUserAgent設定
                 browser = await p.chromium.launch(headless=True, args=['--no-sandbox'])
                 context = await browser.new_context(
                     viewport={'width': 1280, 'height': 1200},
@@ -705,27 +695,27 @@ with tab4:
                 
                 try:
                     # 1. ログイン処理
-                    await page.goto("https://deli-fuzoku.jp/entry/", wait_until="domcontentloaded") 
-                    
-                    # 要素を待機して、1文字ずつ入力（人間らしさ）
-                    await page.wait_for_selector("#form_username", timeout=10000)
+                    await page.goto("https://deli-fuzoku.jp/entry/", wait_until="domcontentloaded")
+                    await page.wait_for_selector("#form_username")
                     await page.type("#form_username", s_id, delay=100)
                     await page.type("#form_password", s_pass, delay=100)
-                    
-                    # ログインボタンをクリック
                     await asyncio.sleep(1)
                     await page.click("#button")
                     
                     # ログイン後の安定を待つ
                     await page.wait_for_load_state("networkidle")
 
-                    # 2. 登録ページへ直接移動（トップへ戻される現象への対策）
-                    # ログインが成功していれば、このURLで登録画面が開ける
-                    await page.goto("https://deli-fuzoku.jp/entry/girl_edit.php", wait_until="networkidle")
+                    # 2. 修正ポイント：「在籍の追加」をクリックして画面遷移
+                    # 提供されたHTML構造に基づき、リンクテキストで探してクリック
+                    add_girl_link = page.locator('a:has-text("在籍の追加")')
+                    await page.wait_for_selector('a:has-text("在籍の追加")', timeout=15000)
+                    await add_girl_link.click()
                     
-                    # 3. 入力処理（項目が出るまで待機）
+                    # 3. 入力画面の表示を待機
+                    await page.wait_for_load_state("networkidle")
                     await page.wait_for_selector("#form_girl_name", timeout=15000)
                     
+                    # 入力処理 (typeで人間らしく)
                     await page.type("#form_girl_name", str(cast_row[2]), delay=50) 
                     await page.type("#form_girl_age", str(cast_row[3]), delay=50)  
                     await page.type("#form_girl_height", str(cast_row[4]), delay=50) 
@@ -738,11 +728,11 @@ with tab4:
                     if cup_val:
                         await page.locator("#form_girl_cup").select_option(label=cup_val)
 
-                    # コメント（店舗コメント）
+                    # コメント（店舗コメントを反映）
                     if len(cast_row) > 12:
                         await page.type("#form_girl_pr", str(cast_row[12]), delay=20)
 
-                    # タグ設定（共通タグをポチポチする挙動）
+                    # タグ設定（共通タグ）
                     common_tags = [0, 1, 5, 10, 15] 
                     for tag_idx in common_tags:
                         selector = f"#form_girl_tags_{tag_idx}"
@@ -763,7 +753,6 @@ with tab4:
                     await asyncio.sleep(1)
                     await page.click("#form_submit_btn")
                     
-                    # 完了後の遷移を待つ
                     await page.wait_for_load_state("networkidle")
                     await asyncio.sleep(2)
                     return {"status": "success"}
@@ -772,7 +761,7 @@ with tab4:
                 finally:
                     await browser.close()
 
-        # UI表示
+        # UI表示 (変更なし)
         if not derija_shops:
             st.info("対象の店舗が見つかりません。")
         else:
