@@ -22,6 +22,14 @@ SCOPE = [
     'https://www.googleapis.com/auth/drive'
 ]
 
+# ==========================================
+# 【修正1】変数をアプリ起動時に必ず初期化する
+# これにより 302行目の NameError が物理的に発生しなくなります
+# ==========================================
+if 'shop_status' not in st.session_state:
+    st.session_state['shop_status'] = []
+shop_status = st.session_state['shop_status']
+
 LOCAL_PW_PATH = os.path.join(os.getcwd(), "pw-browsers")
 os.environ["PLAYWRIGHT_BROWSERS_PATH"] = LOCAL_PW_PATH
 
@@ -188,6 +196,40 @@ tab1, tab2, tab3, tab4, tab5 = st.tabs([
     "🚀 デリじゃキャスト自動登録", 
     "📋 デリじゃ既存店コピー"
 ])
+
+# ==========================================
+# 【修正2】スプレッドシートの読み込みを全タブ共通で行う
+# ==========================================
+try:
+    creds = Credentials.from_service_account_info(st.secrets["gcp_service_account"], scopes=SCOPE)
+    gs_client = gspread.authorize(creds)
+    spreadsheet = gs_client.open_by_key(SPREADSHEET_ID)
+    
+    worksheet_cast = spreadsheet.worksheet("キャスト情報")
+    worksheet_shops = spreadsheet.worksheet("シート3")
+    
+    data_info = worksheet_cast.get_all_values()
+    rows_info = data_info[1:]
+    data_shops = worksheet_shops.get_all_records()
+    
+    # shop_status を作成（駅ちか・デリじゃ両方対応）
+    temp_shops = []
+    for s in data_shops:
+        s_id = str(s.get('店舗ID', '')).strip()
+        s_pass = str(s.get('店舗PASSWORD', '')).strip()
+        if s_id and s_pass:
+            unreg = [r for r in rows_info if len(r) > 15 and str(r[14]).strip() == s_id and str(r[15]).strip() != "登録済"]
+            temp_shops.append({
+                "店舗名": str(s.get('登録店舗', '')).strip(),
+                "ID": s_id,
+                "raw_pass": s_pass,
+                "未登録数": len(unreg),
+                "casts": unreg
+            })
+    shop_status = temp_shops
+    st.session_state['shop_status'] = shop_status
+except Exception as e:
+    st.error(f"初期化エラー: {e}")
 
 with tab1:
     st.subheader("店舗別・未登録キャスト状況")
