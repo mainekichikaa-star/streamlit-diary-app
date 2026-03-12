@@ -691,21 +691,20 @@ with tab3:
         st.error("店舗データが読み込まれていません。")
 
 
-# --- tab4: デリじゃ自動登録 (強制送信・判定緩和版) ---
+# --- tab4: デリじゃ自動登録 (バリデーション突破版) ---
 with tab4:
     st.subheader("🍓 デリじゃ キャスト自動登録")
 
     @st.cache_data(ttl=300)
-    def fetch_data_v27():
+    def fetch_data_v28():
         try:
             creds = Credentials.from_service_account_info(st.secrets["gcp_service_account"], scopes=SCOPE)
             gc = gspread.authorize(creds)
             ss = gc.open_by_key(SPREADSHEET_ID)
             return ss.worksheet("キャスト情報").get_all_values(), ss.worksheet("シート3").get_all_records()
-        except Exception as e:
-            return None, str(e)
+        except Exception as e: return None, str(e)
 
-    raw_cast_data, shop_records = fetch_data_v27()
+    raw_cast_data, shop_records = fetch_data_v28()
 
     if raw_cast_data:
         rows_info = raw_cast_data[1:]
@@ -715,10 +714,9 @@ with tab4:
             if any(k in s_name for k in ["デリじゃ", "デリジャ", "でりじゃ"]):
                 sid, spass = str(s.get('店舗ID', '')).strip(), str(s.get('店舗PASSWORD', '')).strip()
                 unreg = [r for r in rows_info if len(r) > 15 and str(r[14]).strip() == sid and str(r[15]).strip() != "登録済"]
-                if sid and spass:
-                    dj_shops.append({"店舗名": s_name, "ID": sid, "PASS": spass, "casts": unreg})
+                if sid and spass: dj_shops.append({"店舗名": s_name, "ID": sid, "PASS": spass, "casts": unreg})
 
-        async def run_derija_v27(cast, sid, spass):
+        async def run_derija_v28(cast, sid, spass):
             async with async_playwright() as p:
                 browser = await p.chromium.launch(headless=True, args=['--no-sandbox'])
                 context = await browser.new_context(viewport={'width': 1280, 'height': 2000})
@@ -726,73 +724,84 @@ with tab4:
                 debug_path = f"error_{sid}.png"
 
                 try:
+                    # ログイン
                     await page.goto("https://deli-fuzoku.jp/entry/", wait_until="domcontentloaded")
                     await page.fill("#form_username", sid)
                     await page.fill("#form_password", spass)
                     await page.click("#button")
                     await page.wait_for_load_state("networkidle")
 
+                    # 追加ページ
                     await page.click('a:has-text("在籍の追加")')
                     await page.wait_for_load_state("networkidle")
 
-                    # 入力 (PR以外はtype)
-                    async def k_type(sel, val):
-                        if val and val != "None":
-                            await page.wait_for_selector(sel)
-                            await page.type(sel, str(val), delay=50)
-
-                    await k_type("#form_girl_name", cast[2])
-                    await k_type("#form_girl_age", cast[3])
-                    await k_type("#form_girl_height", cast[4])
-                    await k_type("#form_girl_sizeb", cast[5])
-                    await k_type("#form_girl_sizew", cast[7])
-                    await k_type("#form_girl_sizeh", cast[8])
+                    # 1. 基本入力 (日記コード風のJS注入)
+                    input_script = """(id, val) => {
+                        const el = document.getElementById(id);
+                        if(el) {
+                            el.value = val;
+                            el.dispatchEvent(new Event('input', { bubbles: true }));
+                            el.dispatchEvent(new Event('change', { bubbles: true }));
+                        }
+                    }"""
                     
+                    fields = [
+                        ("form_girl_name", str(cast[2])), ("form_girl_age", str(cast[3])),
+                        ("form_girl_height", str(cast[4])), ("form_girl_sizeb", str(cast[5])),
+                        ("form_girl_sizew", str(cast[7])), ("form_girl_sizeh", str(cast[8]))
+                    ]
+                    for fid, fval in fields:
+                        await page.evaluate(input_script, [fid, fval])
+
                     cup = str(cast[6]).strip().upper()
                     if cup: await page.locator("#form_girl_cup").select_option(label=cup)
 
-                    # PR文 (JSで高速注入)
+                    # 2. PR文 (長文エラー対策：改行を整えて注入)
                     if len(cast) > 12 and cast[12]:
-                        await page.evaluate(f"document.getElementById('form_girl_pr').value = `{cast[12]}`")
+                        pr_clean = str(cast[12]).replace('\r\n', '\n').replace('\r', '\n')
+                        await page.evaluate(input_script, ["form_girl_pr", pr_clean])
 
-                    # 画像
+                    # 3. 画像 (アップロード後の待機を強化)
                     img_name = cast[16]
                     if img_name:
                         tmp = f"up_{sid}.jpg"
                         if download_by_filename(img_name, tmp):
                             await page.locator("#form_file_girl_photo1").set_input_files(tmp)
-                            await asyncio.sleep(8)
+                            st.write("📸 画像アップロード中...")
+                            await asyncio.sleep(10) # 確実に10秒待つ
                             if os.path.exists(tmp): os.remove(tmp)
 
-                    # --- 送信プロセス (ここを強化) ---
-                    st.write(f"📡 {cast[2]} さんの登録を実行中...")
-                    submit_sel = 'label[for="form_submit_btn"]'
-                    await page.wait_for_selector(submit_sel)
-                    await page.click(submit_sel)
+                    # 4. 送信 (日記コードの「スクロールしてクリック」を完全再現)
+                    st.write("🚀 送信ボタンを実行します...")
+                    submit_btn = page.locator('label[for="form_submit_btn"]')
+                    # ボタンまでスクロール
+                    await page.evaluate("el => el.scrollIntoView({block: 'center'})", await submit_btn.element_handle())
+                    await asyncio.sleep(2)
                     
-                    # 5秒待機して画面が変わらなければ強制発火
-                    await asyncio.sleep(5)
-                    if "girl_edit" in page.url:
-                        await page.evaluate('''() => {
-                            if(typeof func_submit === "function") {
-                                func_submit();
-                            } else {
-                                document.querySelector('form').submit();
-                            }
-                        }''')
+                    # 物理クリックではなくJS経由で確実に発火
+                    await page.evaluate("el => el.click()", await submit_btn.element_handle())
 
-                    # 判定緩和：URLが変わるか、完了IDが出るのを待つ
-                    # 60秒待機するが、途中でURLが変われば即終了
-                    for _ in range(30):
+                    # 5. 判定プロセス
+                    # 完了が出るか、エラーが出るか、画面が変わるのを待つ
+                    for _ in range(20):
+                        # 成功判定
+                        if await page.locator('#top-link_wrap, p.gn').count() > 0:
+                            return {"status": "success"}
+                        # 失敗（エラーメッセージ）判定
+                        error_mess = await page.locator('.error_mess, .mess').all_text_contents()
+                        if error_mess:
+                            raise Exception(f"サイト側エラー: {' '.join(error_mess)}")
+                        
+                        await asyncio.sleep(2)
+
+                    # 画面が変わっていない場合は最終手段
+                    if "girl_edit" in page.url:
+                        await page.evaluate("func_submit();")
+                        await asyncio.sleep(5)
                         if "girl_edit" not in page.url or await page.locator('#top-link_wrap').count() > 0:
                             return {"status": "success"}
-                        await asyncio.sleep(2)
                     
-                    # 最終チェック
-                    if await page.locator('#top-link_wrap, p.gn').count() > 0:
-                        return {"status": "success"}
-                    else:
-                        raise Exception("送信後の画面遷移が確認できませんでした。")
+                    raise Exception("送信後に画面が変わりませんでした。入力内容（特に画像）を確認してください。")
 
                 except Exception as e:
                     await page.screenshot(path=debug_path, full_page=True)
@@ -806,7 +815,7 @@ with tab4:
             cols = st.columns(3)
             for i, s in enumerate(dj_shops):
                 with cols[i % 3]:
-                    if st.checkbox(f"{s['店舗名']} ({len(s['casts'])}名)", key=f"dj_v27_fin_{i}"):
+                    if st.checkbox(f"{s['店舗名']} ({len(s['casts'])}名)", key=f"dj_v28_cb_{i}"):
                         selected.append(s)
 
             if st.button("🚀 デリじゃ一括登録開始", type="primary"):
@@ -814,15 +823,14 @@ with tab4:
                 try:
                     creds_w = Credentials.from_service_account_info(st.secrets["gcp_service_account"], scopes=SCOPE)
                     ws_w = gspread.authorize(creds_w).open_by_key(SPREADSHEET_ID).worksheet("キャスト情報")
-                except:
-                    st.warning("⚠️ API制限中。登録のみ実行。")
+                except: st.warning("⚠️ API制限中。登録のみ実行。")
 
                 for shop in selected:
                     for cast in shop['casts']:
                         with st.status(f"{cast[2]} 登録中..."):
-                            res = asyncio.run(run_derija_v27(cast, shop['ID'], shop['PASS']))
+                            res = asyncio.run(run_derija_v28(cast, shop['ID'], shop['PASS']))
                             if res["status"] == "success":
-                                st.success(f"✅ {cast[2]} 完了 (反映待ち)")
+                                st.success(f"✅ {cast[2]} 完了")
                                 if ws_w:
                                     try:
                                         row_idx = next((i for i, r in enumerate(raw_cast_data) if r[0] == cast[0]), None)
