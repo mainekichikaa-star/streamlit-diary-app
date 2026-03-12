@@ -691,13 +691,12 @@ with tab3:
         st.error("店舗データが読み込まれていません。")
 
 
-# --- tab4: デリじゃ自動登録 (障害物除去・強制執行版) ---
+# --- tab4: デリじゃ自動登録 (執念の再試行・ダブルクリック版) ---
 with tab4:
     st.subheader("🍓 デリじゃ キャスト自動登録")
 
-    # データ読み込み部分は変更なし
     @st.cache_data(ttl=300)
-    def fetch_data_v34():
+    def fetch_data_v35():
         try:
             creds = Credentials.from_service_account_info(st.secrets["gcp_service_account"], scopes=SCOPE)
             gc = gspread.authorize(creds)
@@ -705,7 +704,7 @@ with tab4:
             return ss.worksheet("キャスト情報").get_all_values(), ss.worksheet("シート3").get_all_records()
         except Exception as e: return None, str(e)
 
-    raw_cast_data, shop_records = fetch_data_v34()
+    raw_cast_data, shop_records = fetch_data_v35()
 
     if raw_cast_data:
         rows_info = raw_cast_data[1:]
@@ -717,86 +716,68 @@ with tab4:
                 unreg = [r for r in rows_info if len(r) > 14 and str(r[14]).strip() == sid and str(r[15]).strip() != "登録済"]
                 if sid and spass: dj_shops.append({"店舗名": s_name, "ID": sid, "PASS": spass, "casts": unreg})
 
-        async def run_derija_v34(cast, sid, spass):
+        async def run_derija_v35(cast, sid, spass):
             async with async_playwright() as p:
-                browser = await p.chromium.launch(headless=True, args=['--no-sandbox', '--disable-blink-features=AutomationControlled'])
+                browser = await p.chromium.launch(headless=True, args=['--no-sandbox'])
                 context = await browser.new_context(viewport={'width': 1280, 'height': 2500})
                 page = await context.new_page()
+                
+                # ダイアログ（確認画面）が出たら自動でOKを押す
+                page.on("dialog", lambda dialog: dialog.accept())
+                
                 target_name = str(cast[2]).strip()
-                debug_path = f"force_action_{sid}.png"
+                debug_path = f"retry_action_{sid}.png"
 
                 try:
-                    # 1. ログイン
                     await page.goto("https://deli-fuzoku.jp/entry/", wait_until="domcontentloaded")
                     await page.fill("#form_username", sid)
                     await page.fill("#form_password", spass)
                     await page.click("#button")
                     await page.wait_for_load_state("networkidle")
 
-                    # 2. 追加画面
                     await page.click('a:has-text("在籍の追加")')
                     await page.wait_for_load_state("networkidle")
 
-                    # 3. 【障害物除去】もし画面を覆う要素があれば消す
-                    await page.evaluate('''() => {
-                        const overlays = document.querySelectorAll('div[style*="z-index"], .loading, #js-overlay');
-                        overlays.forEach(el => el.style.display = 'none');
-                    }''')
-
-                    # 4. 【強制入力】見えていなくてもJSで値をセットし、そのあとフォーカスする
-                    async def force_human_input(selector, value):
-                        if value and value != "None":
-                            # JSで直接流し込み（これが一番確実）
-                            await page.evaluate(f'document.querySelector("{selector}").value = "{value}"')
-                            # そのあと、人間らしく見えるようにスクロールを試みる（失敗しても続行）
-                            try:
-                                el = page.locator(selector)
-                                await el.scroll_into_view_if_needed(timeout=2000)
-                                await el.focus()
-                            except: pass
-                            await asyncio.sleep(0.3)
-
-                    await force_human_input("#form_girl_name", target_name)
-                    await force_human_input("#form_girl_age", cast[3])
-                    await force_human_input("#form_girl_height", cast[4])
+                    # 入力（JSで確実に流し込む）
+                    await page.evaluate(f'document.getElementById("form_girl_name").value = "{target_name}"')
+                    await page.evaluate(f'document.getElementById("form_girl_age").value = "{cast[3]}"')
+                    await page.evaluate(f'document.getElementById("form_girl_height").value = "{cast[4]}"')
                     
-                    # 5. 画像
+                    # 画像
                     img_name = cast[16]
                     if img_name:
                         tmp = f"up_{sid}.jpg"
                         if download_by_filename(img_name, tmp):
                             await page.locator("#form_file_girl_photo1").set_input_files(tmp)
-                            st.write("📸 画像アップロード完了。少し長めに待ちます(25秒)...")
-                            await asyncio.sleep(25)
+                            st.write("📸 画像処理中...（20秒待機）")
+                            await asyncio.sleep(20)
                             if os.path.exists(tmp): os.remove(tmp)
 
-                    # 6. 【決定打】送信ボタンを「無理やり」押す
-                    st.write("🚀 登録ボタンを強制クリックします...")
-                    submit_btn = page.locator('label[for="form_submit_btn"]')
-                    
-                    # ボタンが見えなくても、JSで直接クリックイベントを発生させる
-                    await page.evaluate('''() => {
-                        const btn = document.querySelector('label[for="form_submit_btn"]');
-                        if(btn) {
-                            btn.scrollIntoView({block: 'center'});
-                            btn.click();
-                        } else {
-                            // 関数があれば直接実行
-                            if(typeof func_submit === "function") func_submit();
-                        }
-                    }''')
+                    # 決定ボタンへのアクション
+                    st.write("🚀 登録ボタンを連打・再試行します...")
+                    submit_sel = 'label[for="form_submit_btn"]'
+                    btn = page.locator(submit_sel)
+                    await btn.scroll_into_view_if_needed()
+                    await asyncio.sleep(1)
 
-                    # 7. 判定
-                    st.write("⏳ 反映を確認中...")
-                    for _ in range(15):
-                        if "girl_list.php" in page.url or await page.locator('#top-link_wrap').count() > 0:
-                            # 一覧に戻ったら名前があるか確認
-                            await page.goto("https://deli-fuzoku.jp/entry/girl_list.php", wait_until="networkidle")
-                            if target_name in await page.content():
-                                return {"status": "success"}
-                        await asyncio.sleep(2)
-                    
-                    raise Exception("送信後の画面遷移または一覧への反映が確認できませんでした。")
+                    # 1回目：物理クリック
+                    await btn.click(force=True)
+                    await asyncio.sleep(5) # 遷移を待つ
+
+                    # 2回目：もし画面が変わっていなければ、Enterキーで押し込む
+                    if "girl_list.php" not in page.url and await page.locator('#top-link_wrap').count() == 0:
+                        st.write("⚠️ 画面が動かないため、Enterキーで再送します...")
+                        await btn.focus()
+                        await page.keyboard.press("Enter")
+                        await asyncio.sleep(10)
+
+                    # 最終確認
+                    st.write("🔍 反映を確認中...")
+                    await page.goto("https://deli-fuzoku.jp/entry/girl_list.php", wait_until="networkidle")
+                    if target_name in await page.content():
+                        return {"status": "success"}
+                    else:
+                        raise Exception("送信を繰り返しましたが反映されませんでした。入力不備の可能性があります。")
 
                 except Exception as e:
                     await page.screenshot(path=debug_path, full_page=True)
@@ -804,13 +785,13 @@ with tab4:
                 finally:
                     await browser.close()
 
-        # UI部分は変更なし
+        # UI
         selected = []
         if dj_shops:
             cols = st.columns(3)
             for i, s in enumerate(dj_shops):
                 with cols[i % 3]:
-                    if st.checkbox(f"{s['店舗名']} ({len(s['casts'])}名)", key=f"dj_v34_cb_{i}"):
+                    if st.checkbox(f"{s['店舗名']} ({len(s['casts'])}名)", key=f"dj_v35_cb_{i}"):
                         selected.append(s)
 
             if st.button("🚀 デリじゃ一括登録開始", type="primary"):
@@ -823,7 +804,7 @@ with tab4:
                 for shop in selected:
                     for cast in shop['casts']:
                         with st.status(f"{cast[2]} 登録中..."):
-                            res = asyncio.run(run_derija_v34(cast, shop['ID'], shop['PASS']))
+                            res = asyncio.run(run_derija_v35(cast, shop['ID'], shop['PASS']))
                             if res["status"] == "success":
                                 st.success(f"✅ {cast[2]} 完了！")
                                 if ws_w:
@@ -833,8 +814,7 @@ with tab4:
                                     except: pass
                             else:
                                 st.error(f"❌ {cast[2]} 失敗: {res['message']}")
-                                if "screenshot" in res:
-                                    st.image(res["screenshot"])
+                                if "screenshot" in res: st.image(res["screenshot"])
         
 # --- tab5: デリじゃ既存店コピー (Web → シート) ---
 with tab5:
