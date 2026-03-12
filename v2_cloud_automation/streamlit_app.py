@@ -691,13 +691,13 @@ with tab3:
         st.error("店舗データが読み込まれていません。")
 
 
-# --- tab4: デリじゃ自動登録 (送信直後撮影・原因特定版) ---
+# --- tab4: デリじゃ自動登録 (物理クリック・直前バリデーション版) ---
 with tab4:
     st.subheader("🍓 デリじゃ キャスト自動登録")
 
-    # データ読み込み（ここは共通）
+    # データ読み込み部分は変更なし
     @st.cache_data(ttl=300)
-    def fetch_data_v31():
+    def fetch_data_v32():
         try:
             creds = Credentials.from_service_account_info(st.secrets["gcp_service_account"], scopes=SCOPE)
             gc = gspread.authorize(creds)
@@ -705,7 +705,7 @@ with tab4:
             return ss.worksheet("キャスト情報").get_all_values(), ss.worksheet("シート3").get_all_records()
         except Exception as e: return None, str(e)
 
-    raw_cast_data, shop_records = fetch_data_v31()
+    raw_cast_data, shop_records = fetch_data_v32()
 
     if raw_cast_data:
         rows_info = raw_cast_data[1:]
@@ -717,15 +717,13 @@ with tab4:
                 unreg = [r for r in rows_info if len(r) > 14 and str(r[14]).strip() == sid and str(r[15]).strip() != "登録済"]
                 if sid and spass: dj_shops.append({"店舗名": s_name, "ID": sid, "PASS": spass, "casts": unreg})
 
-        async def run_derija_v31(cast, sid, spass):
+        async def run_derija_v32(cast, sid, spass):
             async with async_playwright() as p:
                 browser = await p.chromium.launch(headless=True, args=['--no-sandbox'])
                 context = await browser.new_context(viewport={'width': 1280, 'height': 2000})
                 page = await context.new_page()
                 target_name = str(cast[2]).strip()
-                # スクショ保存名
-                submit_shot = f"submit_action_{sid}.png"
-                after_shot = f"after_submit_{sid}.png"
+                debug_path = f"last_action_{sid}.png"
 
                 try:
                     # 1. ログイン
@@ -735,21 +733,26 @@ with tab4:
                     await page.click("#button")
                     await page.wait_for_load_state("networkidle")
 
-                    # 2. 追加画面へ
+                    # 2. 追加画面
                     await page.click('a:has-text("在籍の追加")')
                     await page.wait_for_load_state("networkidle")
 
-                    # 3. 入力 (念のため少しゆっくり打ち込み)
-                    await page.type("#form_girl_name", target_name, delay=100)
-                    await page.type("#form_girl_age", str(cast[3]), delay=100)
-                    await page.type("#form_girl_height", str(cast[4]), delay=100)
+                    # 3. 入力
+                    async def safe_fill(sel, val):
+                        await page.wait_for_selector(sel)
+                        await page.fill(sel, str(val))
+                        await page.dispatchEvent(sel, 'change')
+
+                    await safe_fill("#form_girl_name", target_name)
+                    await safe_fill("#form_girl_age", cast[3])
+                    await safe_fill("#form_girl_height", cast[4])
                     await page.evaluate(f"document.getElementById('form_girl_sizeb').value = '{cast[5]}'")
                     await page.evaluate(f"document.getElementById('form_girl_sizew').value = '{cast[7]}'")
                     await page.evaluate(f"document.getElementById('form_girl_sizeh').value = '{cast[8]}'")
                     
                     if len(cast) > 12:
-                        pr_text = str(cast[12]).replace('"', '\\"').replace('\n', '\\n')
-                        await page.evaluate(f'document.getElementById("form_girl_pr").value = "{pr_text}"')
+                        pr_text = str(cast[12]).replace('\r\n', '\n').replace('\r', '\n')
+                        await page.evaluate(f"document.getElementById('form_girl_pr').value = `{pr_text}`")
 
                     # 4. 画像アップロード
                     img_name = cast[16]
@@ -757,44 +760,42 @@ with tab4:
                         tmp = f"up_{sid}.jpg"
                         if download_by_filename(img_name, tmp):
                             await page.locator("#form_file_girl_photo1").set_input_files(tmp)
-                            st.write("📸 画像アップロード完了。処理待ち(15秒)...")
-                            await asyncio.sleep(15)
+                            st.write("📸 画像アップロード中... 20秒待機します")
+                            await asyncio.sleep(20)
                             if os.path.exists(tmp): os.remove(tmp)
 
-                    # 5. 【重要】送信と直後の撮影
-                    st.write("🚀 送信ボタンをクリックします...")
-                    # クリック直前の状態を撮る
-                    await page.screenshot(path=submit_shot, full_page=True)
+                    # 5. 【修正】送信ボタンの「物理クリック」
+                    st.write("🚀 登録ボタンを物理クリックします...")
                     
-                    # 送信実行
-                    await page.evaluate("func_submit();")
+                    # 送信直前に名前が入っているか最終確認
+                    current_name = await page.input_value("#form_girl_name")
+                    if not current_name or current_name.strip() == "":
+                        await page.fill("#form_girl_name", target_name)
                     
-                    # 2秒だけ待って、「送信直後」の画面を確実に撮る
-                    await asyncio.sleep(2)
-                    await page.screenshot(path=after_shot, full_page=True)
+                    submit_btn = page.locator('label[for="form_submit_btn"]')
+                    await submit_btn.scroll_into_view_if_needed()
+                    await asyncio.sleep(1)
                     
-                    # 6. 判定とURLチェック
-                    st.write(f"📡 送信後のURL: {page.url}")
-                    
-                    if "Error" in await page.title() or "404" in await page.content():
-                        raise Exception("サーバーエラー(404/500)が発生しました。画像サイズか文字数に問題がある可能性があります。")
+                    # 座標を指定して確実にクリック
+                    await submit_btn.click(force=True)
 
-                    # 完了IDを探す
+                    # 6. 判定 (URLが変わるのを待つ)
+                    st.write("⏳ 完了画面への遷移を待機中...")
                     try:
-                        await page.wait_for_selector('#top-link_wrap, p.gn', timeout=15000)
+                        # 完了要素かURL変化を最大30秒待つ
+                        await page.wait_for_selector('#top-link_wrap, p.gn', timeout=30000)
                         return {"status": "success"}
                     except:
-                        # 最終確認：一覧に戻って名前があるか
-                        st.write("🔍 念のため在籍一覧を最終確認します...")
+                        # 失敗した場合、再度一覧を確認
                         await page.goto("https://deli-fuzoku.jp/entry/girl_list.php", wait_until="networkidle")
                         if target_name in await page.content():
                             return {"status": "success"}
                         else:
-                            raise Exception("完了画面が出ず、一覧にも名前がありませんでした。送信が拒否された可能性があります。")
+                            raise Exception("送信ボタン押下後、一覧に名前が反映されませんでした。")
 
                 except Exception as e:
-                    # エラー時のスクショは after_shot を優先表示
-                    return {"status": "error", "message": str(e), "shots": [submit_shot, after_shot]}
+                    await page.screenshot(path=debug_path, full_page=True)
+                    return {"status": "error", "message": str(e), "screenshot": debug_path}
                 finally:
                     await browser.close()
 
@@ -804,7 +805,7 @@ with tab4:
             cols = st.columns(3)
             for i, s in enumerate(dj_shops):
                 with cols[i % 3]:
-                    if st.checkbox(f"{s['店舗名']} ({len(s['casts'])}名)", key=f"dj_v31_cb_{i}"):
+                    if st.checkbox(f"{s['店舗名']} ({len(s['casts'])}名)", key=f"dj_v32_cb_{i}"):
                         selected.append(s)
 
             if st.button("🚀 デリじゃ一括登録開始", type="primary"):
@@ -817,7 +818,7 @@ with tab4:
                 for shop in selected:
                     for cast in shop['casts']:
                         with st.status(f"{cast[2]} 登録中..."):
-                            res = asyncio.run(run_derija_v31(cast, shop['ID'], shop['PASS']))
+                            res = asyncio.run(run_derija_v32(cast, shop['ID'], shop['PASS']))
                             if res["status"] == "success":
                                 st.success(f"✅ {cast[2]} 完了！")
                                 if ws_w:
@@ -827,10 +828,8 @@ with tab4:
                                     except: pass
                             else:
                                 st.error(f"❌ {cast[2]} 失敗: {res['message']}")
-                                if "shots" in res:
-                                    for shot in res["shots"]:
-                                        if os.path.exists(shot):
-                                            st.image(shot, caption=shot)
+                                if "screenshot" in res:
+                                    st.image(res["screenshot"])
         
 # --- tab5: デリじゃ既存店コピー (Web → シート) ---
 with tab5:
