@@ -691,12 +691,12 @@ with tab3:
         st.error("店舗データが読み込まれていません。")
 
 
-# --- tab4: デリじゃ自動登録 (JSインジェクション最終版) ---
+# --- tab4: デリじゃ自動登録 (確定イベント強化版) ---
 with tab4:
     st.subheader("🍓 デリじゃ キャスト自動登録")
 
     @st.cache_data(ttl=300)
-    def fetch_data_v23():
+    def fetch_data_v24():
         try:
             creds = Credentials.from_service_account_info(st.secrets["gcp_service_account"], scopes=SCOPE)
             gc = gspread.authorize(creds)
@@ -705,7 +705,7 @@ with tab4:
         except Exception as e:
             return None, str(e)
 
-    raw_cast_data, shop_records = fetch_data_v23()
+    raw_cast_data, shop_records = fetch_data_v24()
 
     if raw_cast_data:
         rows_info = raw_cast_data[1:]
@@ -718,7 +718,7 @@ with tab4:
                 if sid and spass:
                     dj_shops.append({"店舗名": s_name, "ID": sid, "PASS": spass, "casts": unreg})
 
-        async def run_derija_injection(cast, sid, spass):
+        async def run_derija_final_validation(cast, sid, spass):
             async with async_playwright() as p:
                 browser = await p.chromium.launch(headless=True, args=['--no-sandbox'])
                 context = await browser.new_context(viewport={'width': 1280, 'height': 2000})
@@ -735,42 +735,34 @@ with tab4:
 
                     # 2. 登録画面へ
                     await page.locator('a:has-text("在籍の追加")').click()
-                    await page.wait_for_load_state("domcontentloaded")
-                    await asyncio.sleep(2)
+                    await page.wait_for_load_state("networkidle")
 
-                    # 3. 入力 (日記コードの dispatchEvent ロジックを全適用)
-                    input_js = """
-                    (args) => {
-                        const el = document.getElementById(args.id);
-                        if(el) {
-                            el.value = args.val;
-                            el.dispatchEvent(new Event('input', { bubbles: true }));
-                            el.dispatchEvent(new Event('change', { bubbles: true }));
-                            el.dispatchEvent(new Event('blur', { bubbles: true }));
-                            return true;
-                        }
-                        return false;
-                    }
-                    """
+                    # 3. 入力 (一文字ずつ打ち込み + 確定イベント)
+                    async def human_type(selector, value):
+                        if value and value != "None":
+                            await page.wait_for_selector(selector)
+                            await page.click(selector)
+                            # 既存の値を消してから、一文字ずつ打つ
+                            await page.fill(selector, "")
+                            await page.type(selector, str(value), delay=100)
+                            # Enterキーで確定イベントを発生させる
+                            await page.press(selector, "Enter")
+                            await asyncio.sleep(0.5)
+
+                    # 必須項目を重点的に入力
+                    await human_type("#form_girl_name", cast[2])
+                    await human_type("#form_girl_age", cast[3])
+                    await human_type("#form_girl_height", cast[4])
+                    await human_type("#form_girl_sizeb", cast[5])
+                    await human_type("#form_girl_sizew", cast[7])
+                    await human_type("#form_girl_sizeh", cast[8])
                     
-                    fields = [
-                        ("form_girl_name", str(cast[2])),
-                        ("form_girl_age", str(cast[3])),
-                        ("form_girl_height", str(cast[4])),
-                        ("form_girl_sizeb", str(cast[5])),
-                        ("form_girl_sizew", str(cast[7])),
-                        ("form_girl_sizeh", str(cast[8])),
-                        ("form_girl_pr", str(cast[12]) if len(cast) > 12 else "")
-                    ]
-
-                    for fid, fval in fields:
-                        await page.evaluate(input_js, {"id": fid, "val": fval})
-                        await asyncio.sleep(0.3)
-
-                    # カップ選択
                     cup = str(cast[6]).strip().upper()
                     if cup:
-                        await page.evaluate(f"document.getElementById('form_girl_cup').value = '{cup}'")
+                        await page.locator("#form_girl_cup").select_option(label=cup)
+                    
+                    if len(cast) > 12:
+                        await human_type("#form_girl_pr", cast[12])
 
                     # 4. 画像アップロード
                     img_name = cast[16]
@@ -781,29 +773,31 @@ with tab4:
                             await asyncio.sleep(8)
                             if os.path.exists(tmp): os.remove(tmp)
 
-                    # 5. 送信 (JSクリック & 強制Submitの合わせ技)
-                    st.write(f"📡 {cast[2]} さんのデータを送信しています...")
+                    # 5. 送信前の「名前チェック」と送信
+                    # 名前が消えていたらJSで無理やり再注入
+                    name_check = await page.input_value("#form_girl_name")
+                    if not name_check:
+                        await page.evaluate(f"document.getElementById('form_girl_name').value = '{cast[2]}'")
                     
-                    # まずはラベルをJSでクリック
-                    await page.evaluate('''() => {
-                        const btn = document.querySelector('label[for="form_submit_btn"]');
-                        if(btn) btn.click();
-                    }''')
-                    
-                    # 4秒待って遷移しなければ、直接関数とsubmitを叩く
-                    await asyncio.sleep(4)
-                    if "girl_edit" in page.url:
-                        await page.evaluate('''() => {
-                            if(typeof func_submit === "function") {
-                                func_submit();
-                            } else {
-                                document.querySelector('form').submit();
-                            }
-                        }''')
+                    # 登録実行 (物理座標クリック)
+                    submit_label = page.locator('label[for="form_submit_btn"]')
+                    await submit_label.scroll_into_view_if_needed()
+                    await asyncio.sleep(1)
+                    await submit_label.click()
 
-                    # 6. 完了確認
-                    await page.wait_for_selector('p.gn:has-text("完了しました")', timeout=40000)
-                    return {"status": "success"}
+                    # 6. 完了確認 (HTML構造に合わせ div#top-link_wrap も監視)
+                    try:
+                        # どちらかの要素が出るまで待つ
+                        await page.wait_for_selector('#top-link_wrap, p.gn', timeout=40000)
+                        return {"status": "success"}
+                    except:
+                        # タイムアウトした場合、再度JSで強制送信
+                        if "girl_edit" in page.url:
+                            await page.evaluate("func_submit();")
+                            await page.wait_for_selector('#top-link_wrap, p.gn', timeout=20000)
+                            return {"status": "success"}
+                        else:
+                            raise Exception("送信後の完了画面を確認できませんでした。")
 
                 except Exception as e:
                     await page.screenshot(path=debug_path, full_page=True)
@@ -817,22 +811,22 @@ with tab4:
             cols = st.columns(3)
             for i, s in enumerate(dj_shops):
                 with cols[i % 3]:
-                    if st.checkbox(f"{s['店舗名']} ({len(s['casts'])}名)", key=f"dj_v23_final_{i}"):
+                    if st.checkbox(f"{s['店舗名']} ({len(s['casts'])}名)", key=f"dj_v24_{i}"):
                         selected.append(s)
 
             if st.button("🚀 デリじゃ一括登録開始", type="primary"):
-                # Google API エラー対策
+                # API制限対策：書き込み権限の取得（失敗しても続行）
                 ws_w = None
                 try:
                     creds_w = Credentials.from_service_account_info(st.secrets["gcp_service_account"], scopes=SCOPE)
                     ws_w = gspread.authorize(creds_w).open_by_key(SPREADSHEET_ID).worksheet("キャスト情報")
                 except:
-                    st.warning("⚠️ Google API制限中ですが登録は続行します。反映のみ手動でお願いします。")
+                    st.warning("⚠️ Google API制限中ですが登録は続行します。")
 
                 for shop in selected:
                     for cast in shop['casts']:
                         with st.status(f"{cast[2]} 登録中..."):
-                            res = asyncio.run(run_derija_injection(cast, shop['ID'], shop['PASS']))
+                            res = asyncio.run(run_derija_final_validation(cast, shop['ID'], shop['PASS']))
                             if res["status"] == "success":
                                 st.success(f"✅ {cast[2]} 完了")
                                 if ws_w:
