@@ -691,12 +691,12 @@ with tab3:
         st.error("店舗データが読み込まれていません。")
 
 
-# --- tab4: デリじゃ自動登録 (超安定・再試行版) ---
+# --- tab4: デリじゃ自動登録 (物理操作再現版) ---
 with tab4:
     st.subheader("🍓 デリじゃ キャスト自動登録")
 
     @st.cache_data(ttl=300)
-    def fetch_data_v20():
+    def fetch_data_v21():
         try:
             creds = Credentials.from_service_account_info(st.secrets["gcp_service_account"], scopes=SCOPE)
             gc = gspread.authorize(creds)
@@ -705,7 +705,7 @@ with tab4:
         except Exception as e:
             return None, str(e)
 
-    raw_cast_data, shop_records = fetch_data_v20()
+    raw_cast_data, shop_records = fetch_data_v21()
 
     if raw_cast_data:
         rows_info = raw_cast_data[1:]
@@ -718,7 +718,7 @@ with tab4:
                 if sid and spass:
                     dj_shops.append({"店舗名": s_name, "ID": sid, "PASS": spass, "casts": unreg})
 
-        async def run_derija_safe_entry(cast, sid, spass):
+        async def run_derija_physical_click(cast, sid, spass):
             async with async_playwright() as p:
                 browser = await p.chromium.launch(headless=True, args=['--no-sandbox'])
                 context = await browser.new_context(viewport={'width': 1280, 'height': 2000})
@@ -726,87 +726,69 @@ with tab4:
                 debug_path = f"error_{sid}.png"
 
                 try:
-                    # 1. ログイン
+                    # 1. ログイン（ここは安定しているはず）
                     await page.goto("https://deli-fuzoku.jp/entry/", wait_until="domcontentloaded")
-                    await page.fill("#form_username", sid)
-                    await page.fill("#form_password", spass)
+                    await page.type("#form_username", sid, delay=100)
+                    await page.type("#form_password", spass, delay=100)
                     await page.click("#button")
                     await page.wait_for_load_state("networkidle")
 
                     # 2. 登録ページへ
                     await page.locator('a:has-text("在籍の追加")').click()
-                    await page.wait_for_load_state("domcontentloaded")
+                    await page.wait_for_load_state("networkidle")
                     await asyncio.sleep(2)
 
-                    # 3. 【重要】JSでの値注入（エラー対策付き）
-                    # 1項目ずつ、要素が存在するか確認しながら入れる
-                    async def safe_fill_js(target_id, value):
-                        if not value or value == "None": value = ""
-                        js_code = """
-                            (args) => {
-                                const el = document.getElementById(args.id);
-                                if (el) {
-                                    el.value = args.val;
-                                    el.dispatchEvent(new Event('input', { bubbles: true }));
-                                    el.dispatchEvent(new Event('change', { bubbles: true }));
-                                    return true;
-                                }
-                                return false;
-                            }
-                        """
-                        try:
-                            # 要素が見えるまで待つ
-                            await page.wait_for_selector(f"#{target_id}", timeout=5000)
-                            success = await page.evaluate(js_code, {"id": target_id, "val": value})
-                            return success
-                        except:
-                            return False
+                    # 3. 入力処理（1項目ずつ「打っては待つ」を徹底）
+                    async def type_and_wait(selector, value):
+                        if value and value != "None":
+                            await page.wait_for_selector(selector)
+                            await page.focus(selector)
+                            await page.type(selector, str(value), delay=150)
+                            await asyncio.sleep(1) # 入力を確定させるための「間」
 
-                    # 各項目を入力
-                    fields = [
-                        ("form_girl_name", str(cast[2])),
-                        ("form_girl_age", str(cast[3])),
-                        ("form_girl_height", str(cast[4])),
-                        ("form_girl_sizeb", str(cast[5])),
-                        ("form_girl_sizew", str(cast[7])),
-                        ("form_girl_sizeh", str(cast[8])),
-                        ("form_girl_pr", str(cast[12]) if len(cast) > 12 else "")
-                    ]
-
-                    for fid, fval in fields:
-                        res = await safe_fill_js(fid, fval)
-                        if not res:
-                            # 1回失敗したら2秒待って再試行（コンテキスト破壊対策）
-                            await asyncio.sleep(2)
-                            await safe_fill_js(fid, fval)
-                        await asyncio.sleep(0.2)
-
-                    # カップ
+                    await type_and_wait("#form_girl_name", cast[2])
+                    await type_and_wait("#form_girl_age", cast[3])
+                    await type_and_wait("#form_girl_height", cast[4])
+                    await type_and_wait("#form_girl_sizeb", cast[5])
+                    await type_and_wait("#form_girl_sizew", cast[7])
+                    await type_and_wait("#form_girl_sizeh", cast[8])
+                    
                     cup = str(cast[6]).strip().upper()
                     if cup:
-                        await page.evaluate(f"document.getElementById('form_girl_cup').value = '{cup}'")
+                        await page.locator("#form_girl_cup").select_option(label=cup)
+                        await asyncio.sleep(1)
+                    
+                    if len(cast) > 12:
+                        await type_and_wait("#form_girl_pr", cast[12])
 
-                    # 4. 画像
+                    # 4. 画像アップロード
                     img_name = cast[16]
                     if img_name:
                         tmp = f"up_{sid}.jpg"
                         if download_by_filename(img_name, tmp):
                             await page.locator("#form_file_girl_photo1").set_input_files(tmp)
-                            await asyncio.sleep(8) # 余裕を持って待機
+                            await asyncio.sleep(10) # アップロードとサムネイル生成をじっくり待つ
                             if os.path.exists(tmp): os.remove(tmp)
 
-                    # 5. 送信 (ここもJSで確実に)
-                    await page.evaluate("window.scrollTo(0, document.body.scrollHeight)")
-                    await asyncio.sleep(1)
+                    # 5. 【究極】物理的な「座標」を狙ってクリック
+                    # 要素を取得してその中心座標を叩く（JSに頼らない）
+                    submit_label = page.locator('label[for="form_submit_btn"]')
+                    await submit_label.scroll_into_view_if_needed()
+                    await asyncio.sleep(2)
                     
-                    # 送信直前に再度名前が入っているか念押し
-                    await safe_fill_js("form_girl_name", str(cast[2]))
+                    # 座標を取得してクリック（人間が指で押すのと同じ）
+                    box = await submit_label.bounding_box()
+                    if box:
+                        await page.mouse.click(box['x'] + box['width'] / 2, box['y'] + box['height'] / 2)
                     
-                    # 登録実行
-                    await page.evaluate("func_submit();")
+                    # 万が一反応がない場合のみ、保険でJS送信
+                    await asyncio.sleep(5)
+                    if "girl_edit" in page.url:
+                        st.write("⚠️ 画面が遷移しないため、強制送信を試みます...")
+                        await page.evaluate("func_submit();")
 
-                    # 6. 完了確認
-                    await page.wait_for_selector('p.gn:has-text("完了しました")', timeout=30000)
+                    # 6. 完了確認（これが出れば100%成功）
+                    await page.wait_for_selector('p.gn:has-text("完了しました")', timeout=40000)
                     return {"status": "success"}
 
                 except Exception as e:
@@ -821,7 +803,7 @@ with tab4:
             cols = st.columns(3)
             for i, s in enumerate(dj_shops):
                 with cols[i % 3]:
-                    if st.checkbox(f"{s['店舗名']} ({len(s['casts'])}名)", key=f"dj_safe_v20_{i}"):
+                    if st.checkbox(f"{s['店舗名']} ({len(s['casts'])}名)", key=f"dj_v21_final_{i}"):
                         selected.append(s)
 
             if st.button("🚀 デリじゃ一括登録開始", type="primary"):
@@ -831,7 +813,7 @@ with tab4:
                 for shop in selected:
                     for cast in shop['casts']:
                         with st.status(f"{cast[2]} 登録中..."):
-                            res = asyncio.run(run_derija_safe_entry(cast, shop['ID'], shop['PASS']))
+                            res = asyncio.run(run_derija_physical_click(cast, shop['ID'], shop['PASS']))
                             if res["status"] == "success":
                                 row_idx = next((i for i, r in enumerate(raw_cast_data) if r[0] == cast[0]), None)
                                 if row_idx: ws_w.update_cell(row_idx + 1, 16, "登録済")
