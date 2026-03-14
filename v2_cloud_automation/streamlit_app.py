@@ -691,7 +691,7 @@ with tab3:
         st.error("店舗データが読み込まれていません。")
 
 
-# --- tab4: デリじゃ自動登録 (日記コード流・完全再現版) ---
+# --- tab4: デリじゃ自動登録 (マウスエミュレーション版) ---
 with tab4:
     st.subheader("🍓 デリじゃ キャスト自動登録 (安定版)")
 
@@ -736,25 +736,22 @@ with tab4:
                 debug_path = f"final_debug_{sid}.png"
 
                 try:
-                    # 1. ログイン (日記コード同様、入力後即ログイン)
+                    # 1. ログイン
                     await page.goto("https://deli-fuzoku.jp/entry/", wait_until="domcontentloaded")
                     await page.fill("#form_username", sid)
                     await page.fill("#form_password", spass)
-                    await asyncio.sleep(1)
                     await page.click("button.loginBtn")
                     await page.wait_for_load_state("networkidle")
 
-                    # 2. メニューリンクのクリック (日記コードの time.sleep(random.uniform(1.5, 2.5)) を再現)
-                    await asyncio.sleep(random.uniform(1.5, 2.5))
-                    add_link = page.locator('a:has-text("在籍の追加")')
-                    await add_link.scroll_into_view_if_needed()
-                    # 日記コード流: execute_script("arguments[0].click();", menu_link)
-                    await page.evaluate('(el) => el.click()', await add_link.element_handle())
-                    
-                    # 3. フォーム待機と入力 (日記コード流の dispatchEvent)
-                    await page.wait_for_selector("#form_girl_name", state="attached", timeout=60000)
+                    # 2. メニューから「在籍の追加」を物理的に踏む
                     await asyncio.sleep(2)
-
+                    add_link = page.get_by_role("link", name="在籍の追加")
+                    await add_link.scroll_into_view_if_needed()
+                    await add_link.click()
+                    
+                    # 3. フォーム待機と入力 (日記コード同様、dispatchEventを徹底)
+                    await page.wait_for_selector("#form_girl_name", state="visible", timeout=60000)
+                    
                     await page.evaluate(f'''() => {{
                         const setData = (id, val) => {{
                             const el = document.getElementById(id);
@@ -770,71 +767,55 @@ with tab4:
                         setData("form_girl_sizew", "{cast[7]}");
                         setData("form_girl_sizeh", "{cast[8]}");
                         const pr = document.getElementById("form_girl_pr");
-                        if(pr) {{
-                            pr.value = `{cast[12]}`;
-                            pr.dispatchEvent(new Event('input', {{ bubbles: true }}));
-                        }}
+                        if(pr) {{ pr.value = `{cast[12]}`; pr.dispatchEvent(new Event('input', {{ bubbles: true }})); }}
                     }}''')
 
-                    # 4. 画像アップロード (日記コード流: file_input.send_keys の後の time.sleep(7) を再現)
+                    # 4. 画像アップロード (日記コード流: send_keys + sleep 7)
                     img_name = cast[16]
                     if img_name:
                         tmp = f"up_{sid}.jpg"
                         if download_by_filename(img_name, tmp):
                             await page.locator("#form_file_girl_photo1").set_input_files(tmp)
-                            st.write("📸 画像アップロード中（7秒待機）...")
+                            st.write("📸 画像処理待ち（7秒）...")
                             await asyncio.sleep(7) 
                             if os.path.exists(tmp): os.remove(tmp)
 
-                    # 5. 送信 (日記コード流: scrollIntoView してから random待機、そしてクリック)
-                    st.write("🚀 登録ボタン実行中...")
-                    await page.evaluate('''() => {
-                        const submit_btn = document.getElementById('form_register_btn') || 
-                                         document.querySelector('label[for="form_submit_btn"]');
-                        if(submit_btn) {
-                            submit_btn.scrollIntoView({block: 'center'});
-                        }
-                    }''')
+                    # 5. 送信 (日記コードの execute_script と Selenium の click を再現)
+                    # labelをクリック対象とし、マウス座標でクリックすることでJS制限を回避
+                    st.write("🚀 登録ボタンをマウスエミュレーションで実行中...")
+                    submit_label = page.locator('label[for="form_submit_btn"]')
+                    await submit_label.scroll_into_view_if_needed()
+                    await asyncio.sleep(2)
                     
-                    # 日記コードの time.sleep(random.uniform(1.0, 3.0))
-                    await asyncio.sleep(random.uniform(1.5, 3.0))
-                    
-                    # 物理クリックとナビゲーション待ちを分離 (Page.contentエラー回避)
-                    await page.evaluate('''() => {
-                        const submit_btn = document.getElementById('form_register_btn') || 
-                                         document.querySelector('label[for="form_submit_btn"]');
-                        if(submit_btn) {
-                            submit_btn.click();
-                        } else if(typeof func_submit === 'function') {
-                            func_submit();
-                        }
-                    }''')
+                    # 重要：クリックと同時にナビゲーションを待機（真っ白対策）
+                    try:
+                        async with page.expect_navigation(timeout=60000):
+                            # click() 時に force=True を使い、hidden要素の重なりを無視して強制クリック
+                            await submit_label.click(force=True, delay=500)
+                    except:
+                        # 遷移が遅い場合は直接関数を叩く（日記コードのバックアップ策）
+                        await page.evaluate('() => { if(typeof func_submit === "function") func_submit(); }')
 
-                    # 6. 完了判定 (日記コード流: URLからeditが消えるのを粘り強く待つ)
+                    # 6. 完了判定 (URLが edit から変わるのを待つ)
                     success = False
-                    for i in range(20):
+                    for _ in range(25):
                         await asyncio.sleep(3)
-                        # URLが変わったか、あるいは「完了」の文字が出たか
                         if "edit" not in page.url or "girl_list.php" in page.url:
                             success = True
                             break
-                        
-                        # ページが遷移中の場合はcontent取得をスキップして待つ
+                        # ページ内の「完了」文字をチェック（エラーが出てもループ続行）
                         try:
-                            content = await page.content()
-                            if "完了" in content or "登録済" in content:
+                            if "完了" in await page.content():
                                 success = True
                                 break
-                        except:
-                            pass
+                        except: pass
                     
                     if success:
-                        # 最終確認
                         await page.goto("https://deli-fuzoku.jp/entry/girl_list.php", wait_until="networkidle")
                         if target_name in await page.content():
                             return {"status": "success"}
 
-                    raise Exception("送信後の完了確認ができませんでした（タイムアウト）。")
+                    raise Exception("送信ボタン後の画面遷移を確認できませんでした。")
 
                 except Exception as e:
                     await page.screenshot(path=debug_path, full_page=True)
@@ -842,7 +823,7 @@ with tab4:
                 finally:
                     await browser.close()
 
-        # UI
+        # UI 部分
         selected = []
         if dj_shops:
             cols = st.columns(3)
