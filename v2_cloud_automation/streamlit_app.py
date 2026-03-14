@@ -691,7 +691,7 @@ with tab3:
         st.error("店舗データが読み込まれていません。")
 
 
-# --- tab4: デリじゃ自動登録 (遷移同期・安定版) ---
+# --- tab4: デリじゃ自動登録 (日記コード流・完全再現版) ---
 with tab4:
     st.subheader("🍓 デリじゃ キャスト自動登録 (安定版)")
 
@@ -729,34 +729,32 @@ with tab4:
                     args=['--no-sandbox', '--disable-setuid-sandbox', '--disable-dev-shm-usage']
                 )
                 context = await browser.new_context(
-                    user_agent="Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36",
-                    viewport={'width': 1280, 'height': 2500}
+                    user_agent="Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36"
                 )
                 page = await context.new_page()
                 target_name = str(cast[2]).strip()
                 debug_path = f"final_debug_{sid}.png"
 
                 try:
-                    # 1. ログイン
+                    # 1. ログイン (日記コード同様、入力後即ログイン)
                     await page.goto("https://deli-fuzoku.jp/entry/", wait_until="domcontentloaded")
                     await page.fill("#form_username", sid)
                     await page.fill("#form_password", spass)
-                    await page.click("button.loginBtn, #button")
+                    await asyncio.sleep(1)
+                    await page.click("button.loginBtn")
                     await page.wait_for_load_state("networkidle")
 
-                    # 2. 在籍の追加へ
-                    add_link_handle = await page.evaluate_handle('''() => {
-                        return Array.from(document.querySelectorAll('a')).find(a => a.textContent.includes('在籍の追加'));
-                    }''')
-                    if add_link_handle.as_element():
-                        await page.evaluate('(el) => { el.scrollIntoView({block: "center"}); el.click(); }', add_link_handle)
-                    else:
-                        raise Exception("「在籍の追加」リンクが見つかりません。")
+                    # 2. メニューリンクのクリック (日記コードの time.sleep(random.uniform(1.5, 2.5)) を再現)
+                    await asyncio.sleep(random.uniform(1.5, 2.5))
+                    add_link = page.locator('a:has-text("在籍の追加")')
+                    await add_link.scroll_into_view_if_needed()
+                    # 日記コード流: execute_script("arguments[0].click();", menu_link)
+                    await page.evaluate('(el) => el.click()', await add_link.element_handle())
                     
+                    # 3. フォーム待機と入力 (日記コード流の dispatchEvent)
                     await page.wait_for_selector("#form_girl_name", state="attached", timeout=60000)
                     await asyncio.sleep(2)
 
-                    # 3. 入力
                     await page.evaluate(f'''() => {{
                         const setData = (id, val) => {{
                             const el = document.getElementById(id);
@@ -771,68 +769,72 @@ with tab4:
                         setData("form_girl_sizeb", "{cast[5]}");
                         setData("form_girl_sizew", "{cast[7]}");
                         setData("form_girl_sizeh", "{cast[8]}");
+                        const pr = document.getElementById("form_girl_pr");
+                        if(pr) {{
+                            pr.value = `{cast[12]}`;
+                            pr.dispatchEvent(new Event('input', {{ bubbles: true }}));
+                        }}
                     }}''')
 
-                    # 4. 画像アップロード
+                    # 4. 画像アップロード (日記コード流: file_input.send_keys の後の time.sleep(7) を再現)
                     img_name = cast[16]
                     if img_name:
                         tmp = f"up_{sid}.jpg"
                         if download_by_filename(img_name, tmp):
                             await page.locator("#form_file_girl_photo1").set_input_files(tmp)
+                            st.write("📸 画像アップロード中（7秒待機）...")
                             await asyncio.sleep(7) 
                             if os.path.exists(tmp): os.remove(tmp)
 
-                    # 5. 送信 (日記コードの「送信前待機」と「物理クリック」を重視)
+                    # 5. 送信 (日記コード流: scrollIntoView してから random待機、そしてクリック)
+                    st.write("🚀 登録ボタン実行中...")
                     await page.evaluate('''() => {
-                        const label = document.querySelector('label[for="form_submit_btn"]');
-                        if(label) {
-                            label.scrollIntoView({block: 'center'});
+                        const submit_btn = document.getElementById('form_register_btn') || 
+                                         document.querySelector('label[for="form_submit_btn"]');
+                        if(submit_btn) {
+                            submit_btn.scrollIntoView({block: 'center'});
                         }
                     }''')
-                    await asyncio.sleep(2) # スクロール後の安定待ち
+                    
+                    # 日記コードの time.sleep(random.uniform(1.0, 3.0))
+                    await asyncio.sleep(random.uniform(1.5, 3.0))
+                    
+                    # 物理クリックとナビゲーション待ちを分離 (Page.contentエラー回避)
+                    await page.evaluate('''() => {
+                        const submit_btn = document.getElementById('form_register_btn') || 
+                                         document.querySelector('label[for="form_submit_btn"]');
+                        if(submit_btn) {
+                            submit_btn.click();
+                        } else if(typeof func_submit === 'function') {
+                            func_submit();
+                        }
+                    }''')
 
-                    # 送信と同時にナビゲーションを待つ設定 (Page.contentエラー対策)
-                    try:
-                        async with page.expect_navigation(timeout=60000):
-                            await page.evaluate('''() => {
-                                const btn = document.querySelector('label[for="form_submit_btn"]') || document.getElementById('button');
-                                if(btn) btn.click();
-                                else if(typeof func_submit === 'function') func_submit();
-                            }''')
-                    except:
-                        # タイムアウトしても次に進む（判定ロジックでカバーするため）
-                        pass
-
-                    # 6. 反映確認 (日記コードの判定ロジックをPlaywright流に最適化)
+                    # 6. 完了判定 (日記コード流: URLからeditが消えるのを粘り強く待つ)
                     success = False
-                    for _ in range(20):
+                    for i in range(20):
                         await asyncio.sleep(3)
-                        # ナビゲーション中なら待つ
-                        if page.is_closed(): break
-                        
-                        curr_url = page.url
-                        # edit画面から抜け出せたかチェック
-                        if "girl_list.php" in curr_url or "edit" not in curr_url:
+                        # URLが変わったか、あるいは「完了」の文字が出たか
+                        if "edit" not in page.url or "girl_list.php" in page.url:
                             success = True
                             break
                         
-                        # エラーメッセージが出ていないかチェック
+                        # ページが遷移中の場合はcontent取得をスキップして待つ
                         try:
-                            # 遷移が落ち着いてからcontentを取得
                             content = await page.content()
-                            if "完了" in content or "登録しました" in content:
+                            if "完了" in content or "登録済" in content:
                                 success = True
                                 break
                         except:
-                            continue # 遷移中なら次ループへ
-
+                            pass
+                    
                     if success:
                         # 最終確認
                         await page.goto("https://deli-fuzoku.jp/entry/girl_list.php", wait_until="networkidle")
                         if target_name in await page.content():
                             return {"status": "success"}
 
-                    raise Exception("送信後の完了判定に失敗しました。")
+                    raise Exception("送信後の完了確認ができませんでした（タイムアウト）。")
 
                 except Exception as e:
                     await page.screenshot(path=debug_path, full_page=True)
