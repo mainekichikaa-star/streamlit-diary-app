@@ -691,7 +691,7 @@ with tab3:
         st.error("店舗データが読み込まれていません。")
 
 
-# --- tab4: デリじゃ自動登録 (タブ内完結・修正版) ---
+# --- tab4: デリじゃ自動登録 (ボタンクリック・遷移検知強化版) ---
 with tab4:
     st.subheader("🍓 デリじゃ キャスト自動登録 (安定版)")
 
@@ -717,30 +717,17 @@ with tab4:
                 if sid and spass: dj_shops.append({"店舗名": s_name, "ID": sid, "PASS": spass, "casts": unreg})
 
         async def run_derija_v36(cast, sid, spass):
-            # --- 【修正】ブラウザ未インストール対策を関数内に内包 ---
             import subprocess
             import sys
             try:
-                # 実行環境にブラウザがあるか確認し、なければインストールを試みる
                 subprocess.run([sys.executable, "-m", "playwright", "install", "chromium"], check=True)
-            except:
-                pass
+            except: pass
 
             async with async_playwright() as p:
-                # --- 【修正】launch引数をStreamlit Cloudに最適化 ---
-                try:
-                    browser = await p.chromium.launch(
-                        headless=True,
-                        args=[
-                            '--no-sandbox', 
-                            '--disable-setuid-sandbox', 
-                            '--disable-dev-shm-usage',
-                            '--disable-gpu'
-                        ]
-                    )
-                except Exception as e:
-                    return {"status": "error", "message": f"ブラウザ起動失敗: {str(e)}"}
-
+                browser = await p.chromium.launch(
+                    headless=True,
+                    args=['--no-sandbox', '--disable-setuid-sandbox', '--disable-dev-shm-usage']
+                )
                 context = await browser.new_context(
                     user_agent="Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36"
                 )
@@ -753,14 +740,14 @@ with tab4:
                     await page.goto("https://deli-fuzoku.jp/entry/", wait_until="domcontentloaded")
                     await page.fill("#form_username", sid)
                     await page.fill("#form_password", spass)
-                    await page.click("#button") 
+                    # ログインボタンをクリック
+                    await page.evaluate('() => { const b = document.querySelector("#button") || document.querySelector(".loginBtn"); if(b) b.click(); }')
                     await page.wait_for_load_state("networkidle")
 
                     # 2. 追加画面へ
-                    await page.click('a:has-text("在籍の追加")')
-                    await page.wait_for_load_state("networkidle")
+                    await page.goto("https://deli-fuzoku.jp/entry/girl_edit.php", wait_until="networkidle")
 
-                    # 3. 入力 (dispatchEventを維持)
+                    # 3. 入力 (dispatchEventを徹底)
                     js_input = f'''() => {{
                         const setData = (id, val) => {{
                             const el = document.getElementById(id);
@@ -792,27 +779,42 @@ with tab4:
                             await asyncio.sleep(7) 
                             if os.path.exists(tmp): os.remove(tmp)
 
-                    # 5. 送信 (物理クリック)
-                    submit_btn = page.locator("#button")
-                    if await submit_btn.count() > 0:
-                        await submit_btn.scroll_into_view_if_needed()
-                        await asyncio.sleep(2)
-                        await submit_btn.click()
-                    else:
-                        await page.evaluate('() => { const b = document.querySelector(".btn_submit") || document.querySelector("#button"); if(b) b.click(); }')
+                    # 5. 送信 (日記コードの execute_script 形式を徹底採用)
+                    # IDが'button'でない場合も想定し、複数の方法でクリックを試みる
+                    await page.evaluate('''() => {
+                        const btn = document.getElementById('form_register_btn') || 
+                                    document.querySelector('button[type="submit"]') || 
+                                    document.getElementById('button');
+                        if(btn) {
+                            btn.scrollIntoView({block: 'center'});
+                            btn.click();
+                        } else if(typeof func_submit === 'function') {
+                            func_submit(); // サイト独自の関数があれば実行
+                        }
+                    }''')
 
-                    # 6. 反映確認
-                    for i in range(40):
-                        if "girl_list.php" in page.url:
-                            st.write("✅ 登録完了を確認。")
-                            await page.goto("https://deli-fuzoku.jp/entry/girl_list.php", wait_until="networkidle")
-                            if target_name in await page.content():
-                                return {"status": "success"}
-                        if i == 15 and "girl_edit" in page.url:
-                             await page.evaluate('() => { if(typeof func_submit === "function") func_submit(); }')
-                        await asyncio.sleep(3)
+                    # 6. 反映確認 (URLの変化または成功メッセージを待機)
+                    success = False
+                    for i in range(20):
+                        current_url = page.url
+                        # 一覧ページに戻ったか確認
+                        if "girl_list.php" in current_url:
+                            success = True
+                            break
+                        # ページ内に「完了」や「登録しました」の文字があるか確認
+                        content = await page.content()
+                        if "登録が完了" in content or "更新しました" in content:
+                            success = True
+                            break
+                        await asyncio.sleep(2)
                     
-                    raise Exception("画面遷移がタイムアウトしました。")
+                    if success:
+                        # 最終確認として一覧ページへ
+                        await page.goto("https://deli-fuzoku.jp/entry/girl_list.php", wait_until="networkidle")
+                        if target_name in await page.content():
+                            return {"status": "success"}
+
+                    raise Exception("送信ボタン押下後の完了画面への遷移が確認できませんでした。")
 
                 except Exception as e:
                     await page.screenshot(path=debug_path, full_page=True)
