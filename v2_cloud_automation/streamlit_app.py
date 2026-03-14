@@ -691,9 +691,9 @@ with tab3:
         st.error("店舗データが読み込まれていません。")
 
 
-# --- tab4: デリじゃ自動登録 (超忍耐・強制フォーム送信版) ---
+# --- tab4: デリじゃ自動登録 (日記コード流・安定版) ---
 with tab4:
-    st.subheader("🍓 デリじゃ キャスト自動登録")
+    st.subheader("🍓 デリじゃ キャスト自動登録 (安定版)")
 
     @st.cache_data(ttl=300)
     def fetch_data_v36():
@@ -718,69 +718,91 @@ with tab4:
 
         async def run_derija_v36(cast, sid, spass):
             async with async_playwright() as p:
+                # BOT検知回避のためのUserAgent設定
                 browser = await p.chromium.launch(headless=True, args=['--no-sandbox'])
-                context = await browser.new_context(viewport={'width': 1280, 'height': 2500})
+                context = await browser.new_context(
+                    user_agent="Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36"
+                )
                 page = await context.new_page()
                 target_name = str(cast[2]).strip()
                 debug_path = f"final_debug_{sid}.png"
 
                 try:
-                    # 1. ログイン
+                    # 1. ログイン (日記コード流の待機)
                     await page.goto("https://deli-fuzoku.jp/entry/", wait_until="domcontentloaded")
                     await page.fill("#form_username", sid)
                     await page.fill("#form_password", spass)
-                    await page.click("#button")
+                    # ログインボタンをクリック（日記コードのCSSセレクタを意識）
+                    await page.click("#button") 
                     await page.wait_for_load_state("networkidle")
 
-                    # 2. 追加画面
+                    # 2. 追加画面へ
                     await page.click('a:has-text("在籍の追加")')
                     await page.wait_for_load_state("networkidle")
 
-                    # 3. 入力 (JSで強制セット)
-                    await page.evaluate(f'''() => {{
-                        document.getElementById("form_girl_name").value = "{target_name}";
-                        document.getElementById("form_girl_age").value = "{cast[3]}";
-                        document.getElementById("form_girl_height").value = "{cast[4]}";
-                        document.getElementById("form_girl_sizeb").value = "{cast[5]}";
-                        document.getElementById("form_girl_sizew").value = "{cast[7]}";
-                        document.getElementById("form_girl_sizeh").value = "{cast[8]}";
-                        if(document.getElementById("form_girl_pr")) document.getElementById("form_girl_pr").value = `{cast[12]}`;
-                    }}''')
+                    # 3. 入力 (日記コードの dispatchEvent を採用)
+                    # 入力後にイベントを発生させないと、サイト側のバリデーションに引っかかるため
+                    js_input = f'''() => {{
+                        const setData = (id, val) => {{
+                            const el = document.getElementById(id);
+                            if(!el) return;
+                            el.value = val;
+                            el.dispatchEvent(new Event('input', {{ bubbles: true }}));
+                            el.dispatchEvent(new Event('change', {{ bubbles: true }}));
+                        }};
+                        setData("form_girl_name", "{target_name}");
+                        setData("form_girl_age", "{cast[3]}");
+                        setData("form_girl_height", "{cast[4]}");
+                        setData("form_girl_sizeb", "{cast[5]}");
+                        setData("form_girl_sizew", "{cast[7]}");
+                        setData("form_girl_sizeh", "{cast[8]}");
+                        if(document.getElementById("form_girl_pr")) {{
+                            document.getElementById("form_girl_pr").value = `{cast[12]}`;
+                        }}
+                    }}'''
+                    await page.evaluate(js_input)
 
-                    # 4. 画像アップロード
+                    # 4. 画像アップロード (日記コードの待機時間を反映)
                     img_name = cast[16]
                     if img_name:
                         tmp = f"up_{sid}.jpg"
                         if download_by_filename(img_name, tmp):
                             await page.locator("#form_file_girl_photo1").set_input_files(tmp)
-                            st.write("📸 画像処理のフリーズを想定して30秒待機します...")
-                            await asyncio.sleep(30)
+                            # 日記コードの time.sleep(7) を参考に、Playwrightでしっかり待機
+                            await asyncio.sleep(7) 
                             if os.path.exists(tmp): os.remove(tmp)
 
-                    # 5. 【重要】要素を介さず「フォームそのもの」を送信
-                    st.write("🚀 サーバーに直接データを送信中（最大2分間待ちます）...")
+                    # 5. 送信 (日記コード流：スクロールして物理クリック)
+                    # 強制 submit() ではなく、ボタンを認識させてクリック
+                    submit_selector = "#button" # 登録ボタンのID（適宜サイトに合わせて調整）
+                    submit_btn = page.locator(submit_selector)
                     
-                    # サイト内の最初のフォームを強制送信するJS
-                    await page.evaluate('() => { const f = document.querySelector("form"); if(f) f.submit(); }')
+                    if await submit_btn.count() > 0:
+                        await submit_btn.scroll_into_view_if_needed()
+                        await asyncio.sleep(2)
+                        await submit_btn.click()
+                    else:
+                        # ボタンIDが違う場合の保険としてJS実行
+                        await page.evaluate('() => { const b = document.querySelector(".btn_submit") || document.querySelector("#button"); if(b) b.click(); }')
 
-                    # 6. 反映を「超粘り強く」確認
-                    # 120秒間、2秒おきにURLまたは完了要素をチェック
-                    for i in range(60):
+                    # 6. 反映確認 (超粘り強くチェック)
+                    for i in range(40):
                         current_url = page.url
-                        # 成功判定：URLが変わるか、完了IDが出る
-                        if "girl_list.php" in current_url or await page.locator('#top-link_wrap').count() > 0:
-                            st.write("✅ 画面遷移を確認。一覧を照合します...")
+                        # 成功判定：一覧ページに戻るか、特定の成功要素が出るか
+                        if "girl_list.php" in current_url:
+                            st.write("✅ 登録完了を確認。照合します...")
                             await page.goto("https://deli-fuzoku.jp/entry/girl_list.php", wait_until="networkidle")
-                            if target_name in await page.content():
+                            content = await page.content()
+                            if target_name in content:
                                 return {"status": "success"}
                         
-                        # もし途中で404等が出たら再送を試みる（一回だけ）
+                        # 途中で止まっている場合、再度JSクリックを試みる
                         if i == 15 and "girl_edit" in current_url:
                              await page.evaluate('() => { if(typeof func_submit === "function") func_submit(); }')
-
-                        await asyncio.sleep(2)
+                        
+                        await asyncio.sleep(3)
                     
-                    raise Exception("送信リクエスト後、サーバーからの応答がタイムアウトしました。")
+                    raise Exception("送信後の画面遷移が確認できませんでした。")
 
                 except Exception as e:
                     await page.screenshot(path=debug_path, full_page=True)
@@ -788,7 +810,7 @@ with tab4:
                 finally:
                     await browser.close()
 
-        # UI (省略なし、そのまま使用可能)
+        # UI 部分
         selected = []
         if dj_shops:
             cols = st.columns(3)
