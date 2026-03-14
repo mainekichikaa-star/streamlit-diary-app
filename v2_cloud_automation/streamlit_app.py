@@ -691,7 +691,7 @@ with tab3:
         st.error("店舗データが読み込まれていません。")
 
 
-# --- tab4: デリじゃ自動登録 (日記コード流・安定版) ---
+# --- tab4: デリじゃ自動登録 (タブ内完結・修正版) ---
 with tab4:
     st.subheader("🍓 デリじゃ キャスト自動登録 (安定版)")
 
@@ -717,9 +717,30 @@ with tab4:
                 if sid and spass: dj_shops.append({"店舗名": s_name, "ID": sid, "PASS": spass, "casts": unreg})
 
         async def run_derija_v36(cast, sid, spass):
+            # --- 【修正】ブラウザ未インストール対策を関数内に内包 ---
+            import subprocess
+            import sys
+            try:
+                # 実行環境にブラウザがあるか確認し、なければインストールを試みる
+                subprocess.run([sys.executable, "-m", "playwright", "install", "chromium"], check=True)
+            except:
+                pass
+
             async with async_playwright() as p:
-                # BOT検知回避のためのUserAgent設定
-                browser = await p.chromium.launch(headless=True, args=['--no-sandbox'])
+                # --- 【修正】launch引数をStreamlit Cloudに最適化 ---
+                try:
+                    browser = await p.chromium.launch(
+                        headless=True,
+                        args=[
+                            '--no-sandbox', 
+                            '--disable-setuid-sandbox', 
+                            '--disable-dev-shm-usage',
+                            '--disable-gpu'
+                        ]
+                    )
+                except Exception as e:
+                    return {"status": "error", "message": f"ブラウザ起動失敗: {str(e)}"}
+
                 context = await browser.new_context(
                     user_agent="Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36"
                 )
@@ -728,11 +749,10 @@ with tab4:
                 debug_path = f"final_debug_{sid}.png"
 
                 try:
-                    # 1. ログイン (日記コード流の待機)
+                    # 1. ログイン
                     await page.goto("https://deli-fuzoku.jp/entry/", wait_until="domcontentloaded")
                     await page.fill("#form_username", sid)
                     await page.fill("#form_password", spass)
-                    # ログインボタンをクリック（日記コードのCSSセレクタを意識）
                     await page.click("#button") 
                     await page.wait_for_load_state("networkidle")
 
@@ -740,8 +760,7 @@ with tab4:
                     await page.click('a:has-text("在籍の追加")')
                     await page.wait_for_load_state("networkidle")
 
-                    # 3. 入力 (日記コードの dispatchEvent を採用)
-                    # 入力後にイベントを発生させないと、サイト側のバリデーションに引っかかるため
+                    # 3. 入力 (dispatchEventを維持)
                     js_input = f'''() => {{
                         const setData = (id, val) => {{
                             const el = document.getElementById(id);
@@ -756,53 +775,44 @@ with tab4:
                         setData("form_girl_sizeb", "{cast[5]}");
                         setData("form_girl_sizew", "{cast[7]}");
                         setData("form_girl_sizeh", "{cast[8]}");
-                        if(document.getElementById("form_girl_pr")) {{
-                            document.getElementById("form_girl_pr").value = `{cast[12]}`;
+                        const pr = document.getElementById("form_girl_pr");
+                        if(pr) {{
+                            pr.value = `{cast[12]}`;
+                            pr.dispatchEvent(new Event('input', {{ bubbles: true }}));
                         }}
                     }}'''
                     await page.evaluate(js_input)
 
-                    # 4. 画像アップロード (日記コードの待機時間を反映)
+                    # 4. 画像アップロード
                     img_name = cast[16]
                     if img_name:
                         tmp = f"up_{sid}.jpg"
                         if download_by_filename(img_name, tmp):
                             await page.locator("#form_file_girl_photo1").set_input_files(tmp)
-                            # 日記コードの time.sleep(7) を参考に、Playwrightでしっかり待機
                             await asyncio.sleep(7) 
                             if os.path.exists(tmp): os.remove(tmp)
 
-                    # 5. 送信 (日記コード流：スクロールして物理クリック)
-                    # 強制 submit() ではなく、ボタンを認識させてクリック
-                    submit_selector = "#button" # 登録ボタンのID（適宜サイトに合わせて調整）
-                    submit_btn = page.locator(submit_selector)
-                    
+                    # 5. 送信 (物理クリック)
+                    submit_btn = page.locator("#button")
                     if await submit_btn.count() > 0:
                         await submit_btn.scroll_into_view_if_needed()
                         await asyncio.sleep(2)
                         await submit_btn.click()
                     else:
-                        # ボタンIDが違う場合の保険としてJS実行
                         await page.evaluate('() => { const b = document.querySelector(".btn_submit") || document.querySelector("#button"); if(b) b.click(); }')
 
-                    # 6. 反映確認 (超粘り強くチェック)
+                    # 6. 反映確認
                     for i in range(40):
-                        current_url = page.url
-                        # 成功判定：一覧ページに戻るか、特定の成功要素が出るか
-                        if "girl_list.php" in current_url:
-                            st.write("✅ 登録完了を確認。照合します...")
+                        if "girl_list.php" in page.url:
+                            st.write("✅ 登録完了を確認。")
                             await page.goto("https://deli-fuzoku.jp/entry/girl_list.php", wait_until="networkidle")
-                            content = await page.content()
-                            if target_name in content:
+                            if target_name in await page.content():
                                 return {"status": "success"}
-                        
-                        # 途中で止まっている場合、再度JSクリックを試みる
-                        if i == 15 and "girl_edit" in current_url:
+                        if i == 15 and "girl_edit" in page.url:
                              await page.evaluate('() => { if(typeof func_submit === "function") func_submit(); }')
-                        
                         await asyncio.sleep(3)
                     
-                    raise Exception("送信後の画面遷移が確認できませんでした。")
+                    raise Exception("画面遷移がタイムアウトしました。")
 
                 except Exception as e:
                     await page.screenshot(path=debug_path, full_page=True)
@@ -810,7 +820,7 @@ with tab4:
                 finally:
                     await browser.close()
 
-        # UI 部分
+        # UI
         selected = []
         if dj_shops:
             cols = st.columns(3)
@@ -833,10 +843,8 @@ with tab4:
                             if res["status"] == "success":
                                 st.success(f"✅ {cast[2]} 完了！")
                                 if ws_w:
-                                    try:
-                                        row_idx = next((i for i, r in enumerate(raw_cast_data) if r[0] == cast[0]), None)
-                                        if row_idx: ws_w.update_cell(row_idx + 1, 16, "登録済")
-                                    except: pass
+                                    row_idx = next((i for i, r in enumerate(raw_cast_data) if r[0] == cast[0]), None)
+                                    if row_idx: ws_w.update_cell(row_idx + 1, 16, "登録済")
                             else:
                                 st.error(f"❌ {cast[2]} 失敗: {res['message']}")
                                 if "screenshot" in res: st.image(res["screenshot"])
