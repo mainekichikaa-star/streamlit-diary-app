@@ -691,7 +691,7 @@ with tab3:
         st.error("店舗データが読み込まれていません。")
 
 
-# --- tab4: デリじゃ自動登録 (labelクリック・JS関数実行版) ---
+# --- tab4: デリじゃ自動登録 (日記コード完全移植・送信安定版) ---
 with tab4:
     st.subheader("🍓 デリじゃ キャスト自動登録 (安定版)")
 
@@ -730,32 +730,37 @@ with tab4:
                 )
                 context = await browser.new_context(
                     user_agent="Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36",
-                    viewport={'width': 1280, 'height': 2000}
+                    viewport={'width': 1280, 'height': 2500}
                 )
                 page = await context.new_page()
                 target_name = str(cast[2]).strip()
                 debug_path = f"final_debug_{sid}.png"
 
                 try:
-                    # 1. ログイン
+                    # 1. ログイン (日記コード流: IDとPASSを確実に入力)
                     await page.goto("https://deli-fuzoku.jp/entry/", wait_until="domcontentloaded")
                     await page.fill("#form_username", sid)
                     await page.fill("#form_password", spass)
-                    await page.click("#button")
+                    # ログインボタンをクリック
+                    await page.locator("button.loginBtn, #button").first.click()
                     await page.wait_for_load_state("networkidle")
 
-                    # 2. 在籍の追加をクリック (JSで確実にリンクを踏む)
-                    await page.evaluate('''() => {
-                        const links = Array.from(document.querySelectorAll('a'));
-                        const addLink = links.find(a => a.textContent.includes('在籍の追加'));
-                        if(addLink) addLink.click();
+                    # 2. 在籍の追加へ (日記コード流: aタグを検索してJSクリック)
+                    # aタグの中に「在籍の追加」というテキストが含まれるものを探す
+                    add_link_handle = await page.evaluate_handle('''() => {
+                        return Array.from(document.querySelectorAll('a')).find(a => a.textContent.includes('在籍の追加'));
                     }''')
+                    if add_link_handle.as_element():
+                        await page.evaluate('(el) => { el.scrollIntoView({block: "center"}); el.click(); }', add_link_handle)
+                    else:
+                        raise Exception("「在籍の追加」リンクが見つかりません。")
                     
+                    # フォーム出現を待機
                     await page.wait_for_selector("#form_girl_name", state="attached", timeout=60000)
                     await asyncio.sleep(2)
 
-                    # 3. 入力 (日記コードのようにEventを飛ばす)
-                    js_input = f'''() => {{
+                    # 3. 入力 (日記コード流: JSで値をセットし、Eventをdispatch)
+                    await page.evaluate(f'''() => {{
                         const setData = (id, val) => {{
                             const el = document.getElementById(id);
                             if(!el) return;
@@ -769,59 +774,57 @@ with tab4:
                         setData("form_girl_sizeb", "{cast[5]}");
                         setData("form_girl_sizew", "{cast[7]}");
                         setData("form_girl_sizeh", "{cast[8]}");
-                        const pr = document.getElementById("form_girl_pr");
-                        if(pr) {{
-                            pr.value = `{cast[12]}`;
-                            pr.dispatchEvent(new Event('input', {{ bubbles: true }}));
-                        }}
-                    }}'''
-                    await page.evaluate(js_input)
+                    }}''')
 
-                    # 4. 画像アップロード
+                    # 4. 画像アップロード (日記コード流: time.sleep(7)を考慮)
                     img_name = cast[16]
                     if img_name:
                         tmp = f"up_{sid}.jpg"
                         if download_by_filename(img_name, tmp):
                             await page.locator("#form_file_girl_photo1").set_input_files(tmp)
-                            # 日記コードの待機時間を参考に長めに待つ
-                            await asyncio.sleep(10)
+                            await asyncio.sleep(7) 
                             if os.path.exists(tmp): os.remove(tmp)
 
-                    # 5. 送信 (解析したlabel要素と関数を狙い撃ち)
-                    # labelをクリックした後、念のためfunc_submit()を直接叩く
+                    # 5. 送信 (日記コードの submit_btn 処理を完全再現)
+                    # HTMLに合わせて label または submit ボタンを特定し、スクロール後にクリック
+                    st.write("🚀 送信ボタンを処理中...")
                     await page.evaluate('''() => {
-                        const labels = Array.from(document.querySelectorAll('label'));
-                        const submitLabel = labels.find(l => l.textContent.includes('登録する'));
-                        if(submitLabel) {
-                            submitLabel.scrollIntoView({block: 'center'});
-                            submitLabel.click();
+                        const submit_btn = document.getElementById('form_register_btn') || 
+                                         document.querySelector('label[for="form_submit_btn"]') ||
+                                         document.getElementById('button');
+                        if(submit_btn) {
+                            submit_btn.scrollIntoView({block: 'center'});
+                            // 日記コードの random.uniform(1.0, 3.0) 的な待ちを再現
+                            setTimeout(() => {
+                                submit_btn.click();
+                            }, 1500);
+                        } else {
+                            // 最終手段: 直接関数実行
+                            if(typeof func_submit === 'function') func_submit();
                         }
-                        // 日記コードのように、1秒待ってから関数を直接実行（バックアップ）
-                        setTimeout(() => {
-                            if(typeof func_submit === 'function') {
-                                func_submit();
-                            }
-                        }, 1000);
                     }''')
 
-                    # 6. 反映確認
+                    # 6. 反映確認 (日記コード流: URLまたは特定のメッセージを待つ)
                     success = False
-                    for i in range(30):
-                        if "girl_list.php" in page.url:
+                    for _ in range(30):
+                        current_url = page.url
+                        # editを含まないURL（一覧等）になったか、成功メッセージが出ればOK
+                        if "edit" not in current_url or "girl_list.php" in current_url:
                             success = True
                             break
                         content = await page.content()
-                        if "完了しました" in content or "登録しました" in content:
+                        if "完了" in content or "登録しました" in content:
                             success = True
                             break
                         await asyncio.sleep(2)
                     
                     if success:
+                        # 最終確認として一覧ページをチェック
                         await page.goto("https://deli-fuzoku.jp/entry/girl_list.php", wait_until="networkidle")
                         if target_name in await page.content():
                             return {"status": "success"}
 
-                    raise Exception("送信ボタン押下後の完了画面への遷移が確認できませんでした。")
+                    raise Exception("送信ボタン押下後、画面遷移または成功メッセージを確認できませんでした。")
 
                 except Exception as e:
                     await page.screenshot(path=debug_path, full_page=True)
