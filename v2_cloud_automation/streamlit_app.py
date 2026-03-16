@@ -691,7 +691,7 @@ with tab3:
         st.error("店舗データが読み込まれていません。")
 
 
-# --- tab4: デリじゃ自動登録 (完全人間エミュレーション版) ---
+# --- tab4: デリじゃ自動登録 (完全人間再現・タイムアウト延長版) ---
 with tab4:
     st.subheader("🍓 デリじゃ キャスト自動登録 (完全人間再現モード)")
 
@@ -726,50 +726,46 @@ with tab4:
                     headless=True,
                     args=['--no-sandbox', '--disable-setuid-sandbox', '--disable-dev-shm-usage']
                 )
-                # ブラウザの指紋を人間に近づける
                 context = await browser.new_context(
                     user_agent="Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36",
-                    viewport={'width': 1280, 'height': 1500}
+                    viewport={'width': 1280, 'height': 2000}
                 )
                 page = await context.new_page()
                 target_name = str(cast[2]).strip()
                 debug_path = f"final_debug_{sid}.png"
 
                 try:
-                    # 1. ログイン (ゆっくり入力)
+                    # 1. ログイン
                     await page.goto("https://deli-fuzoku.jp/entry/", wait_until="networkidle")
-                    await page.type("#form_username", sid, delay=random.randint(50, 150))
-                    await page.type("#form_password", spass, delay=random.randint(50, 150))
-                    await asyncio.sleep(1)
+                    await page.type("#form_username", sid, delay=random.randint(50, 100))
+                    await page.type("#form_password", spass, delay=random.randint(50, 100))
+                    await asyncio.sleep(1.5)
                     await page.click("button.loginBtn")
                     await page.wait_for_load_state("networkidle")
 
-                    # 2. メニューから「在籍の追加」を物理的に探してクリック
-                    await asyncio.sleep(random.uniform(2.0, 4.0))
-                    # 画面を少しスクロールして「探しているフリ」
-                    await page.mouse.wheel(0, 300)
+                    # 2. 在籍の追加へ (物理遷移)
+                    await asyncio.sleep(random.uniform(2.0, 3.5))
+                    await page.mouse.wheel(0, 500) # 探しているフリ
                     await asyncio.sleep(1)
                     add_link = page.get_by_role("link", name="在籍の追加")
                     await add_link.scroll_into_view_if_needed()
                     await add_link.click()
                     
-                    # 3. 入力 (ここが重要: 一文字ずつ打ち込む)
+                    # 3. 入力 (人間化タイピング)
                     await page.wait_for_selector("#form_girl_name", state="visible", timeout=60000)
                     await asyncio.sleep(2)
-                    
-                    # 画面を上下に揺らして人間味を出す
-                    await page.mouse.wheel(0, 400)
-                    await asyncio.sleep(0.5)
-                    await page.mouse.wheel(0, -200)
 
-                    # 各項目を人間が打つ速度で入力
-                    async def human_type(selector, text):
+                    async def human_type(selector, text, is_long=False):
                         if not text: return
-                        await page.locator(selector).scroll_into_view_if_needed()
-                        await page.locator(selector).focus()
-                        await page.type(selector, str(text), delay=random.randint(100, 250))
-                        await asyncio.sleep(random.uniform(0.3, 0.8))
+                        el = page.locator(selector)
+                        await el.scroll_into_view_if_needed()
+                        await el.focus()
+                        # 長文の場合は少しだけディレイを速めてタイムアウトを防ぎつつ、timeout設定を5分に延長
+                        d = random.randint(30, 80) if is_long else random.randint(100, 200)
+                        await page.type(selector, str(text), delay=d, timeout=300000)
+                        await asyncio.sleep(random.uniform(0.5, 1.0))
 
+                    # 順次入力
                     await human_type("#form_girl_name", target_name)
                     await human_type("#form_girl_age", cast[3])
                     await human_type("#form_girl_height", cast[4])
@@ -777,8 +773,9 @@ with tab4:
                     await human_type("#form_girl_sizew", cast[7])
                     await human_type("#form_girl_sizeh", cast[8])
                     
-                    if len(cast) > 12:
-                        await human_type("#form_girl_pr", cast[12])
+                    # 自己紹介文 (長文対応: タイムアウト5分)
+                    st.write(f"✍️ 自己紹介文を入力中（長文のため時間がかかります）...")
+                    await human_type("#form_girl_pr", cast[12], is_long=True)
 
                     # 4. 画像アップロード
                     img_name = cast[16]
@@ -786,41 +783,36 @@ with tab4:
                         tmp = f"up_{sid}.jpg"
                         if download_by_filename(img_name, tmp):
                             await page.locator("#form_file_girl_photo1").set_input_files(tmp)
-                            st.write("📸 画像アップ中（じっくり待ちます）...")
-                            await asyncio.sleep(10) # サーバーの処理時間を十分に確保
+                            st.write("📸 画像処理を待機中（10秒）...")
+                            await asyncio.sleep(10)
                             if os.path.exists(tmp): os.remove(tmp)
 
-                    # 5. 送信 (マウスを動かしてクリック)
-                    st.write("🚀 送信ボタンへマウスを移動中...")
+                    # 5. 送信 (座標計算クリック)
+                    st.write("🚀 送信ボタンを物理クリックします...")
                     submit_label = page.locator('label[for="form_submit_btn"]')
                     await submit_label.scroll_into_view_if_needed()
                     await asyncio.sleep(2)
                     
-                    # ボタンの座標を取得して、マウスをそこへ移動させてからクリック
                     box = await submit_label.bounding_box()
                     if box:
-                        await page.mouse.move(box['x'] + box['width'] / 2, box['y'] + box['height'] / 2)
-                        await asyncio.sleep(random.uniform(0.5, 1.5))
-                        
-                        # クリックと同時に「遷移」を監視
-                        try:
-                            async with page.expect_navigation(timeout=60000):
-                                await page.mouse.down()
-                                await asyncio.sleep(random.uniform(0.1, 0.2))
-                                await page.mouse.up()
-                        except:
-                            # 遷移が始まらない場合は関数を叩く
-                            await page.evaluate('() => { if(typeof func_submit === "function") func_submit(); }')
+                        # マウスをボタンまで移動させる
+                        await page.mouse.move(box['x'] + box['width'] / 2, box['y'] + box['height'] / 2, steps=10)
+                        await asyncio.sleep(1)
+                        # クリック実行
+                        async with page.expect_navigation(timeout=60000):
+                            await page.mouse.down()
+                            await asyncio.sleep(random.uniform(0.1, 0.2))
+                            await page.mouse.up()
+                    else:
+                        await page.evaluate('() => { if(typeof func_submit === "function") func_submit(); }')
 
-                    # 6. 判定 (URLの変化を最優先で待つ)
+                    # 6. 判定
                     success = False
                     for _ in range(30):
                         await asyncio.sleep(2)
-                        curr_url = page.url
-                        if "girl_list.php" in curr_url or "edit" not in curr_url:
+                        if "edit" not in page.url or "girl_list.php" in page.url:
                             success = True
                             break
-                        # ページ内の成功メッセージを確認
                         try:
                             content = await page.content()
                             if "完了" in content or "登録しました" in content:
@@ -833,7 +825,7 @@ with tab4:
                         if target_name in await page.content():
                             return {"status": "success"}
 
-                    raise Exception("送信ボタン後の画面変化を確認できませんでした。")
+                    raise Exception("送信後の画面遷移が確認できませんでした。")
 
                 except Exception as e:
                     await page.screenshot(path=debug_path, full_page=True)
