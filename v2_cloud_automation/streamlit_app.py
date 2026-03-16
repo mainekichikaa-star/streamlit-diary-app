@@ -691,7 +691,7 @@ with tab3:
         st.error("店舗データが読み込まれていません。")
 
 
-# --- tab4: デリじゃ自動登録 (完全人間再現・タイムアウト延長版) ---
+# --- tab4: デリじゃ自動登録 (完全人間再現・画像パス修正版) ---
 with tab4:
     st.subheader("🍓 デリじゃ キャスト自動登録 (完全人間再現モード)")
 
@@ -717,7 +717,7 @@ with tab4:
                 if sid and spass: dj_shops.append({"店舗名": s_name, "ID": sid, "PASS": spass, "casts": unreg})
 
         async def run_derija_v36(cast, sid, spass):
-            import subprocess, sys, random
+            import subprocess, sys, random, os
             try: subprocess.run([sys.executable, "-m", "playwright", "install", "chromium"], check=True)
             except: pass
 
@@ -733,6 +733,7 @@ with tab4:
                 page = await context.new_page()
                 target_name = str(cast[2]).strip()
                 debug_path = f"final_debug_{sid}.png"
+                tmp_img_path = None
 
                 try:
                     # 1. ログイン
@@ -743,15 +744,13 @@ with tab4:
                     await page.click("button.loginBtn")
                     await page.wait_for_load_state("networkidle")
 
-                    # 2. 在籍の追加へ (物理遷移)
+                    # 2. 在籍の追加へ
                     await asyncio.sleep(random.uniform(2.0, 3.5))
-                    await page.mouse.wheel(0, 500) # 探しているフリ
-                    await asyncio.sleep(1)
                     add_link = page.get_by_role("link", name="在籍の追加")
-                    await add_link.scroll_into_view_if_needed()
-                    await add_link.click()
+                    await add_link.first.scroll_into_view_if_needed()
+                    await add_link.first.click()
                     
-                    # 3. 入力 (人間化タイピング)
+                    # 3. 入力
                     await page.wait_for_selector("#form_girl_name", state="visible", timeout=60000)
                     await asyncio.sleep(2)
 
@@ -760,12 +759,10 @@ with tab4:
                         el = page.locator(selector)
                         await el.scroll_into_view_if_needed()
                         await el.focus()
-                        # 長文の場合は少しだけディレイを速めてタイムアウトを防ぎつつ、timeout設定を5分に延長
-                        d = random.randint(30, 80) if is_long else random.randint(100, 200)
+                        d = random.randint(30, 70) if is_long else random.randint(100, 200)
                         await page.type(selector, str(text), delay=d, timeout=300000)
                         await asyncio.sleep(random.uniform(0.5, 1.0))
 
-                    # 順次入力
                     await human_type("#form_girl_name", target_name)
                     await human_type("#form_girl_age", cast[3])
                     await human_type("#form_girl_height", cast[4])
@@ -773,44 +770,45 @@ with tab4:
                     await human_type("#form_girl_sizew", cast[7])
                     await human_type("#form_girl_sizeh", cast[8])
                     
-                    # 自己紹介文 (長文対応: タイムアウト5分)
-                    st.write(f"✍️ 自己紹介文を入力中（長文のため時間がかかります）...")
+                    st.write(f"✍️ 自己紹介文を入力中（5分間タイムアウト設定）...")
                     await human_type("#form_girl_pr", cast[12], is_long=True)
 
-                    # 4. 画像アップロード
+                    # 4. 画像アップロード (絶対パスを使用)
                     img_name = cast[16]
                     if img_name:
-                        tmp = f"up_{sid}.jpg"
-                        if download_by_filename(img_name, tmp):
-                            await page.locator("#form_file_girl_photo1").set_input_files(tmp)
+                        tmp_filename = f"up_{sid}_{random.randint(1000,9999)}.jpg"
+                        tmp_img_path = os.path.abspath(tmp_filename) # 絶対パスに変換
+                        if download_by_filename(img_name, tmp_img_path):
+                            await page.locator("#form_file_girl_photo1").set_input_files(tmp_img_path)
                             st.write("📸 画像処理を待機中（10秒）...")
                             await asyncio.sleep(10)
-                            if os.path.exists(tmp): os.remove(tmp)
 
-                    # 5. 送信 (座標計算クリック)
-                    st.write("🚀 送信ボタンを物理クリックします...")
+                    # 5. 送信 (物理クリック)
+                    st.write("🚀 送信ボタンをクリックします...")
                     submit_label = page.locator('label[for="form_submit_btn"]')
                     await submit_label.scroll_into_view_if_needed()
                     await asyncio.sleep(2)
                     
                     box = await submit_label.bounding_box()
                     if box:
-                        # マウスをボタンまで移動させる
-                        await page.mouse.move(box['x'] + box['width'] / 2, box['y'] + box['height'] / 2, steps=10)
+                        await page.mouse.move(box['x'] + box['width'] / 2, box['y'] + box['height'] / 2, steps=15)
                         await asyncio.sleep(1)
-                        # クリック実行
-                        async with page.expect_navigation(timeout=60000):
-                            await page.mouse.down()
-                            await asyncio.sleep(random.uniform(0.1, 0.2))
-                            await page.mouse.up()
-                    else:
-                        await page.evaluate('() => { if(typeof func_submit === "function") func_submit(); }')
+                        # クリックと同時に遷移を待つが、エラーが出ても後続の判定へ流す
+                        try:
+                            async with page.expect_navigation(timeout=60000):
+                                await page.mouse.down()
+                                await asyncio.sleep(random.uniform(0.1, 0.2))
+                                await page.mouse.up()
+                        except:
+                            # 遷移が始まらない場合は念押しでJS実行
+                            await page.evaluate('() => { if(typeof func_submit === "function") func_submit(); }')
 
-                    # 6. 判定
+                    # 6. 判定 (URLがeditでなくなるまで粘る)
                     success = False
                     for _ in range(30):
-                        await asyncio.sleep(2)
-                        if "edit" not in page.url or "girl_list.php" in page.url:
+                        await asyncio.sleep(3)
+                        curr_url = page.url
+                        if "girl_list.php" in curr_url or "edit" not in curr_url:
                             success = True
                             break
                         try:
@@ -831,9 +829,13 @@ with tab4:
                     await page.screenshot(path=debug_path, full_page=True)
                     return {"status": "error", "message": str(e), "screenshot": debug_path}
                 finally:
+                    # 送信処理が完全に終わってからファイルを削除
+                    if tmp_img_path and os.path.exists(tmp_img_path):
+                        try: os.remove(tmp_img_path)
+                        except: pass
                     await browser.close()
 
-        # UI
+        # --- UI部分 ---
         selected = []
         if dj_shops:
             cols = st.columns(3)
