@@ -874,7 +874,7 @@ with tab5:
         creds = Credentials.from_service_account_info(st.secrets["gcp_service_account"], scopes=SCOPE)
         gs_client = gspread.authorize(creds)
         spreadsheet = gs_client.open_by_key(SPREADSHEET_ID)
-        worksheet_shops = spreadsheet.worksheet("ID/Password")
+        worksheet_shops = spreadsheet.worksheet("シート3")
         data_shops = worksheet_shops.get_all_records()
 
         derija_keywords = ["デリじゃ", "デリジャ", "でりじゃ"]
