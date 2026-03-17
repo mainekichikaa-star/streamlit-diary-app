@@ -893,7 +893,6 @@ with tab5:
             async def run_fetch_derija_data(shop_id, shop_pass):
                 cast_data_list = []
                 async with async_playwright() as p:
-                    # ブラウザ起動（登録時と同じ設定）
                     browser = await p.chromium.launch(headless=True, args=['--no-sandbox', '--disable-setuid-sandbox', '--disable-dev-shm-usage'])
                     context = await browser.new_context(
                         user_agent="Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36",
@@ -902,85 +901,80 @@ with tab5:
                     page = await context.new_page()
                     
                     try:
-                        # 1. ログイン (セレクタを登録版と統一)
+                        # 1. ログイン
                         await page.goto("https://deli-fuzoku.jp/entry/", wait_until="networkidle")
                         await page.type("#form_username", shop_id, delay=50)
                         await page.type("#form_password", shop_pass, delay=50)
                         await page.click("button.loginBtn")
                         await page.wait_for_load_state("networkidle")
 
-                        # 2. 在籍一覧ページへ移動
-                        await page.goto("https://deli-fuzoku.jp/entry/girl_list.php", wait_until="networkidle")
+                        # 2. メニューから「在籍嬢一覧」のリンクを探して遷移
+                        # hrefに /entry/girls が含まれるリンクを取得
+                        girls_list_link = await page.locator('a[href*="/entry/girls"]').first.get_attribute("href")
+                        if girls_list_link:
+                            await page.goto(f"https://deli-fuzoku.jp{girls_list_link}" if girls_list_link.startswith("/") else girls_list_link, wait_until="networkidle")
+                        else:
+                            # 見つからない場合のフォールバック（直接指定）
+                            await page.goto("https://deli-fuzoku.jp/entry/girls", wait_until="networkidle")
                         
-                        # 3. 編集リンクを取得
-                        # hrefの中に girl_edit.php が含まれるaタグを抽出
-                        edit_links = await page.locator('a[href*="girl_edit.php"]').evaluate_all("nodes => nodes.map(n => n.href)")
+                        # 3. 各キャストの「編集」ボタンのリンク（onclick属性）を抽出
+                        # onclick="location.href='URL'" の形式からURLを抜き出す
+                        edit_links = await page.locator('input.edit[value="編集"]').evaluate_all(
+                            "nodes => nodes.map(n => n.getAttribute('onclick').match(/'([^']+)'/)[1])"
+                        )
+                        
                         # 重複削除
                         edit_links = list(dict.fromkeys(edit_links))
                         
                         if not edit_links:
                             return {"status": "success", "data": []}
 
-                        st.write(f"🔍 {len(edit_links)} 名のキャストを抽出中...")
+                        st.write(f"🔍 {len(edit_links)} 名のキャストを詳細解析中...")
                         progress_bar = st.progress(0)
 
                         for i, link in enumerate(edit_links):
-                            await page.goto(link, wait_until="networkidle")
-                            await asyncio.sleep(1) # 読み込み安定化
+                            # フルURLでない場合は補完
+                            target_url = link if link.startswith("http") else f"https://deli-fuzoku.jp{link}"
+                            await page.goto(target_url, wait_until="networkidle")
+                            await asyncio.sleep(1)
 
-                            # 各項目を抽出 (valueを取得)
-                            name = await page.input_value("#form_girl_name")
-                            age = await page.input_value("#form_girl_age")
-                            tall = await page.input_value("#form_girl_height")
-                            bust = await page.input_value("#form_girl_sizeb")
-                            waist = await page.input_value("#form_girl_sizew")
-                            hip = await page.input_value("#form_girl_sizeh")
-                            
-                            # カップ数 (選択されているoptionのvalueを取得)
+                            # --- 項目抽出 (input要素から取得) ---
+                            # ※セレクタは以前の安定版を維持
                             try:
-                                cup = await page.locator("#form_girl_cup").input_value()
-                            except: cup = ""
+                                name = await page.input_value("#form_girl_name")
+                                age = await page.input_value("#form_girl_age")
+                                tall = await page.input_value("#form_girl_height")
+                                bust = await page.input_value("#form_girl_sizeb")
+                                waist = await page.input_value("#form_girl_sizew")
+                                hip = await page.input_value("#form_girl_sizeh")
+                                
+                                try:
+                                    cup = await page.locator("#form_girl_cup").input_value()
+                                except: cup = ""
 
-                            shop_comment = await page.input_value("#form_girl_pr")
+                                shop_comment = await page.input_value("#form_girl_pr")
+                                
+                                # 画像取得
+                                main_img_path = ""
+                                try:
+                                    img_el = page.locator("div.girl_photo_box img").first
+                                    if await img_el.count() > 0:
+                                        img_src = await img_el.get_attribute("src")
+                                        if img_src and img_src.startswith("http"):
+                                            import requests
+                                            img_res = requests.get(img_src, timeout=10)
+                                            if img_res.status_code == 200:
+                                                rand_str = ''.join(random.choices(string.digits, k=4))
+                                                filename = f"SYNC_{name}_{rand_str}.jpg"
+                                                main_img_path = upload_to_drive_custom(img_res.content, "キャスト情報_Images", filename)
+                                except: pass
+
+                                # スプレッドシート形式 A-Q列
+                                row = ["", "", name, age, tall, bust, cup, waist, hip, "", "", "", shop_comment, "", "", shop_id, main_img_path]
+                                cast_data_list.append(row)
+                            except:
+                                st.warning(f"一部データの取得に失敗しました (Link: {link})")
                             
-                            # 画像URLの取得（imgタグからsrcを取得）
-                            main_img_path = ""
-                            try:
-                                img_el = page.locator("div.girl_photo_box img").first
-                                if await img_el.count() > 0:
-                                    img_src = await img_el.get_attribute("src")
-                                    if img_src and img_src.startswith("http"):
-                                        # 画像をバイナリで取得してDriveへ保存
-                                        import requests
-                                        img_res = requests.get(img_src, timeout=10)
-                                        if img_res.status_code == 200:
-                                            rand_str = ''.join(random.choices(string.digits, k=4))
-                                            filename = f"SYNC_{name}_{rand_str}.jpg"
-                                            # 既存のアップロード関数を使用
-                                            main_img_path = upload_to_drive_custom(img_res.content, "キャスト情報_Images", filename)
-                            except: pass
-
-                            # スプレッドシート A-Q列の形式に整形
-                            row = [
-                                "",               # A: ID (空欄)
-                                "",               # B: エリア
-                                name,             # C: 名前
-                                age,              # D: 年齢
-                                tall,             # E: 身長
-                                bust,             # F: バスト
-                                cup,              # G: カップ
-                                waist,            # H: ウエスト
-                                hip,              # I: ヒップ
-                                "",               # J: 系統
-                                "",               # K: キャッチ
-                                "",               # L: 娘コメ
-                                shop_comment,     # M: 店コメ
-                                "",               # N: 予備
-                                "",               # O: 登録済フラグ (空)
-                                shop_id,          # P: 店舗ID
-                                main_img_path     # Q: 画像名/Path
-                            ]
-                            cast_data_list.append(row)
                             progress_bar.progress((i + 1) / len(edit_links))
 
                         return {"status": "success", "data": cast_data_list}
@@ -999,7 +993,7 @@ with tab5:
                             st.success(f"✅ {len(res['data'])} 名の情報を追加しました。")
                             status.update(label="同期完了", state="complete")
                         else:
-                            st.warning("登録されているキャストが見つかりませんでした。")
+                            st.warning("在籍嬢一覧にキャストが見つかりませんでした。")
                             status.update(label="完了（データなし）", state="complete")
                     else:
                         st.error(f"エラー: {res.get('message')}")
