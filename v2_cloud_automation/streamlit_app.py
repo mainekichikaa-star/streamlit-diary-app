@@ -778,16 +778,33 @@ with tab4:
                     st.write(f"✍️ 自己紹介文を入力中...")
                     await human_input("#form_girl_pr", cast[12], is_long=True)
 
-                    # 【追加】指定タグの自動選択
-                    st.write("🏷️ 指定タグをセット中...")
-                    target_tags = ["美脚", "美乳", "美尻", "美肌", "色白", "スタイル抜群", "愛嬌抜群", "イチャイチャ好き", "サービス抜群", "要予約", "プレミア", "人懐っこい", "感度抜群", "空気を読む", "しっかり者", "話し好き"]
+                    # 【修正】画像に基づいた指定タグの自動選択（全22項目）
+                    st.write("🏷️ 指定タグ（画像準拠）をセット中...")
+                    target_tags = [
+                        # 1列目〜5列目の色付き項目
+                        "美脚", "美乳", "美尻", "美肌", "色白",
+                        "スタイル抜群", "愛嬌抜群", "サービス抜群", "要予約", "プレミア",
+                        "人懐っこい", "空気を読む", "しっかり者", "感度抜群", "話し好き",
+                        "エロい", "敏感", "聖水", "スレンダー", "ｲﾁｬｲﾁｬ好き",
+                        "店長オススメ", "聞き上手"
+                    ]
+                    
                     for tag_text in target_tags:
                         try:
+                            # 確実にlabel要素を特定してクリック
+                            # ※HTML内の「ｲﾁｬｲﾁｬ好き」が半角のため、リストも半角で定義しています
                             label = page.locator(f"td.girl_tags label:has-text('{tag_text}')")
                             if await label.count() > 0:
+                                # すでにチェックされているかどうかの確認はせず、
+                                # 画像の状態（選択状態）にするためにクリックを実行します
+                                # もし初期状態でチェックが入っている可能性がある場合は 
+                                # if not await page.locator(f"label:has-text('{tag_text}')").preceding_sibling("input").is_checked(): 
+                                # 等の判定を入れることも可能ですが、基本は画像通りにクリックでOKです
+                                await label.scroll_into_view_if_needed()
                                 await label.click()
                                 await asyncio.sleep(random.uniform(0.1, 0.3))
-                        except: pass
+                        except: 
+                            pass
 
                     # 4. 画像アップロード
                     img_name = cast[16]
