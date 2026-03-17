@@ -693,7 +693,7 @@ with tab3:
 
 # --- tab4: デリじゃ自動登録 (タグ・カップ数対応・入力安定版) ---
 with tab4:
-    st.subheader("🍓 デリじゃ キャスト自動登録 (タグ・カップ数対応版)")
+    st.subheader("🍓 デリじゃ キャスト自動登録")
 
     @st.cache_data(ttl=300)
     def fetch_data_v38():
