@@ -691,12 +691,12 @@ with tab3:
         st.error("店舗データが読み込まれていません。")
 
 
-# --- tab4: デリじゃ自動登録 (全項目・タグ・カップ数完全対応版) ---
+# --- tab4: デリじゃ自動登録 (タグ・カップ数対応・入力安定版) ---
 with tab4:
-    st.subheader("🍓 デリじゃ キャスト自動登録 (完全版)")
+    st.subheader("🍓 デリじゃ キャスト自動登録 (タグ・カップ数対応版)")
 
     @st.cache_data(ttl=300)
-    def fetch_data_v37():
+    def fetch_data_v38():
         try:
             creds = Credentials.from_service_account_info(st.secrets["gcp_service_account"], scopes=SCOPE)
             gc = gspread.authorize(creds)
@@ -704,7 +704,7 @@ with tab4:
             return ss.worksheet("キャスト情報").get_all_values(), ss.worksheet("シート3").get_all_records()
         except Exception as e: return None, str(e)
 
-    raw_cast_data, shop_records = fetch_data_v37()
+    raw_cast_data, shop_records = fetch_data_v38()
 
     if raw_cast_data:
         rows_info = raw_cast_data[1:]
@@ -716,7 +716,7 @@ with tab4:
                 unreg = [r for r in rows_info if len(r) > 14 and str(r[14]).strip() == sid and str(r[15]).strip() != "登録済"]
                 if sid and spass: dj_shops.append({"店舗名": s_name, "ID": sid, "PASS": spass, "casts": unreg})
 
-        async def run_derija_v37(cast, sid, spass):
+        async def run_derija_v38(cast, sid, spass):
             import subprocess, sys, random, os
             try: subprocess.run([sys.executable, "-m", "playwright", "install", "chromium"], check=True)
             except: pass
@@ -733,78 +733,79 @@ with tab4:
                 try:
                     # 1. ログイン
                     await page.goto("https://deli-fuzoku.jp/entry/", wait_until="networkidle")
-                    await page.type("#form_username", sid, delay=random.randint(50, 100))
-                    await page.type("#form_password", spass, delay=random.randint(50, 100))
+                    await page.type("#form_username", sid, delay=random.randint(50, 120))
+                    await page.type("#form_password", spass, delay=random.randint(50, 120))
+                    await asyncio.sleep(1)
                     await page.click("button.loginBtn")
                     await page.wait_for_load_state("networkidle")
 
                     # 2. 在籍の追加
                     await asyncio.sleep(random.uniform(2.0, 4.0))
-                    await page.get_by_role("link", name="在籍の追加").first.click()
+                    await page.mouse.wheel(0, 400)
+                    add_link = page.get_by_role("link", name="在籍の追加")
+                    await add_link.first.click()
                     await page.wait_for_selector("#form_girl_name", state="visible", timeout=60000)
 
-                    # --- 入力補助関数 ---
-                    async def human_type(selector, text, is_long=False):
+                    # --- 元の安定していた入力関数 ---
+                    async def human_input(selector, text, is_long=False):
                         if not text: return
                         el = page.locator(selector)
                         await el.scroll_into_view_if_needed()
-                        await asyncio.sleep(random.uniform(0.3, 0.6))
+                        await asyncio.sleep(random.uniform(0.3, 0.7))
                         await el.click()
-                        await page.type(selector, str(text), delay=random.randint(50, 150) if not is_long else random.randint(30, 80))
-                        await page.mouse.click(0, 0)
+                        # 長文（PR）の場合はディレイを短くし、タイムアウトを極限まで伸ばす
+                        d = random.randint(30, 70) if is_long else random.randint(100, 250)
+                        await page.type(selector, str(text), delay=d, timeout=300000)
+                        await page.mouse.click(0, 0) 
+                        await asyncio.sleep(random.uniform(0.5, 1.2))
 
-                    # 3. テキスト項目入力
-                    await human_type("#form_girl_name", target_name)
-                    await human_type("#form_girl_age", cast[3])
-                    await human_type("#form_girl_height", cast[4])
+                    # 3. 各項目入力
+                    await human_input("#form_girl_name", target_name)
+                    await human_input("#form_girl_age", cast[3])
+                    await human_input("#form_girl_height", cast[4])
                     
-                    # カップ数 (セレクトボックス対応)
-                    cup_val = str(cast[6]).strip().replace("カップ", "").upper() # 「Eカップ」→「E」
+                    # 【追加】カップ数
+                    cup_val = str(cast[6]).strip().replace("カップ", "").upper()
                     if cup_val:
                         st.write(f"🍷 カップ数を選択中: {cup_val}")
                         await page.select_option("#form_girl_cup", value=cup_val)
                         await asyncio.sleep(0.5)
 
-                    await human_type("#form_girl_sizeb", cast[5])
-                    await human_type("#form_girl_sizew", cast[7])
-                    await human_type("#form_girl_sizeh", cast[8])
-                    await human_type("#form_girl_pr", cast[12], is_long=True)
+                    await human_input("#form_girl_sizeb", cast[5])
+                    await human_input("#form_girl_sizew", cast[7])
+                    await human_input("#form_girl_sizeh", cast[8])
+                    
+                    st.write(f"✍️ 自己紹介文を入力中...")
+                    await human_input("#form_girl_pr", cast[12], is_long=True)
 
-                    # 4. タグ選択 (画像指定の15項目)
+                    # 【追加】指定タグの自動選択
                     st.write("🏷️ 指定タグをセット中...")
-                    target_tags = [
-                        "美脚", "美乳", "美尻", "美肌", "色白",
-                        "スタイル抜群", "愛嬌抜群", "イチャイチャ好き", "サービス抜群",
-                        "要予約", "プレミア", "人懐っこい", "感度抜群",
-                        "空気を読む", "しっかり者", "話し好き"
-                    ]
+                    target_tags = ["美脚", "美乳", "美尻", "美肌", "色白", "スタイル抜群", "愛嬌抜群", "イチャイチャ好き", "サービス抜群", "要予約", "プレミア", "人懐っこい", "感度抜群", "空気を読む", "しっかり者", "話し好き"]
                     for tag_text in target_tags:
                         try:
-                            # label要素を探してクリック（人間らしい動作）
                             label = page.locator(f"td.girl_tags label:has-text('{tag_text}')")
                             if await label.count() > 0:
-                                await label.scroll_into_view_if_needed()
                                 await label.click()
                                 await asyncio.sleep(random.uniform(0.1, 0.3))
                         except: pass
 
-                    # 5. 画像
+                    # 4. 画像アップロード
                     img_name = cast[16]
                     if img_name:
-                        tmp_img_path = os.path.abspath(f"up_{sid}_{random.randint(100,999)}.jpg")
+                        tmp_img_path = os.path.abspath(f"up_{sid}_{random.randint(1000,9999)}.jpg")
                         if download_by_filename(img_name, tmp_img_path):
                             await page.locator("#form_file_girl_photo1").set_input_files(tmp_img_path)
                             st.write("📸 画像反映待ち...")
-                            await asyncio.sleep(10)
+                            await asyncio.sleep(12)
 
-                    # 6. 送信
+                    # 5. 送信 (元コードの挙動を維持)
                     st.write("🚀 最終送信...")
                     submit_label = page.locator('label[for="form_submit_btn"]')
                     await submit_label.scroll_into_view_if_needed()
                     async with page.expect_navigation(timeout=120000):
                         await submit_label.click()
 
-                    # 7. 判定
+                    # 6. 判定
                     for _ in range(30):
                         await asyncio.sleep(3)
                         if "girl_list.php" in page.url or "完了" in await page.content():
@@ -819,16 +820,16 @@ with tab4:
                     if tmp_img_path and os.path.exists(tmp_img_path): os.remove(tmp_img_path)
                     await browser.close()
 
-        # UI表示
+        # UI
         selected = []
         if dj_shops:
             cols = st.columns(3)
             for i, s in enumerate(dj_shops):
                 with cols[i % 3]:
-                    if st.checkbox(f"{s['店舗名']} ({len(s['casts'])}名)", key=f"dj_final_cb_{i}"):
+                    if st.checkbox(f"{s['店舗名']} ({len(s['casts'])}名)", key=f"dj_v38_cb_{i}"):
                         selected.append(s)
 
-            if st.button("🚀 デリじゃ一括登録開始 (完全版)", type="primary"):
+            if st.button("🚀 デリじゃ一括登録開始", type="primary"):
                 ws_w = None
                 try:
                     creds_w = Credentials.from_service_account_info(st.secrets["gcp_service_account"], scopes=SCOPE)
@@ -838,7 +839,7 @@ with tab4:
                 for shop in selected:
                     for cast in shop['casts']:
                         with st.status(f"{cast[2]} 登録中..."):
-                            res = asyncio.run(run_derija_v37(cast, shop['ID'], shop['PASS']))
+                            res = asyncio.run(run_derija_v38(cast, shop['ID'], shop['PASS']))
                             if res["status"] == "success":
                                 st.success(f"✅ {cast[2]} 完了！")
                                 if ws_w:
