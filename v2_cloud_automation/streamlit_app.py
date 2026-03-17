@@ -869,9 +869,12 @@ with tab4:
 # --- tab5: デリじゃ既存店コピー (Web → シート) ---
 with tab5:
     st.subheader("📥 デリじゃ キャスト情報の同期")
+    st.info("物理クリックモード：一覧から1人ずつ「編集」ボタンを押して詳細を取得します。")
+    
     debug_image_space = st.empty()
 
     try:
+        # スプレッドシート準備
         creds = Credentials.from_service_account_info(st.secrets["gcp_service_account"], scopes=SCOPE)
         gs_client = gspread.authorize(creds)
         spreadsheet = gs_client.open_by_key(SPREADSHEET_ID)
@@ -891,10 +894,11 @@ with tab5:
             async def run_fetch_derija_data(shop_id, shop_pass):
                 cast_data_list = []
                 async with async_playwright() as p:
-                    # 人間味を出すために少しブラウザ設定を厚く
-                    browser = await p.chromium.launch(headless=True, args=['--no-sandbox'])
+                    # ブラウザ起動（人間らしい挙動のため headless=True でも slow_mo を追加）
+                    browser = await p.chromium.launch(headless=True, args=['--no-sandbox', '--disable-setuid-sandbox'])
                     context = await browser.new_context(
-                        user_agent="Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36"
+                        user_agent="Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36",
+                        viewport={'width': 1280, 'height': 1200}
                     )
                     page = await context.new_page()
                     
@@ -903,75 +907,91 @@ with tab5:
                         await page.goto("https://deli-fuzoku.jp/entry/", wait_until="networkidle")
                         await page.fill("#form_username", shop_id)
                         await page.fill("#form_password", shop_pass)
-                        await asyncio.sleep(1) # 少し待ってからクリック
+                        await asyncio.sleep(1)
                         await page.click("button.loginBtn")
                         await page.wait_for_load_state("networkidle")
 
                         # 2. 在籍嬢一覧へ移動
                         await page.goto("https://deli-fuzoku.jp/entry/girls", wait_until="networkidle")
-                        await asyncio.sleep(2)
+                        # フレーム構造を考慮し、ページ全体の読み込みを待つ
+                        await asyncio.sleep(3) 
 
-                        # 在籍一覧のボタンを特定 (input type="button" かつ value="編集")
-                        # 要素をリストとして取得
-                        edit_buttons = page.locator('input[value="編集"]')
-                        count = await edit_buttons.count()
+                        # --- フレーム対応：全てのフレームから「編集」ボタンを検索 ---
+                        all_frames = page.frames
+                        target_frame = page # デフォルトはメイン
+                        edit_btns_locator = None
 
-                        if count == 0:
-                            return {"status": "success", "data": [], "debug_msg": "編集ボタンが1つも見つかりませんでした。"}
+                        for frame in all_frames:
+                            locator = frame.locator('input[value="編集"]')
+                            if await locator.count() > 0:
+                                target_frame = frame
+                                edit_btns_locator = locator
+                                break
+                        
+                        if edit_btns_locator is None:
+                            # デバッグ用にスクショを撮る
+                            shot = await page.screenshot()
+                            debug_image_space.image(shot, caption="ボタンが見つからなかった時の画面")
+                            return {"status": "success", "data": [], "debug_msg": "全フレームを確認しましたが『編集』ボタンが見つかりませんでした。"}
 
-                        st.write(f"🔍 {count} 名のキャストを1人ずつクリックして解析します...")
+                        count = await edit_btns_locator.count()
+                        st.write(f"✅ {count} 名のキャストを確認。解析を開始します...")
                         progress_bar = st.progress(0)
 
                         for i in range(count):
-                            # 再度一覧ページからボタンを特定（遷移して戻るため、都度再取得が安全）
-                            current_btn = page.locator('input[value="編集"]').nth(i)
+                            # ボタンまでスクロール（人間らしさ＋要素を活性化させるため）
+                            btn = edit_btns_locator.nth(i)
+                            await btn.scroll_into_view_if_needed()
+                            await asyncio.sleep(0.5)
                             
-                            # 物理的にクリック
-                            await current_btn.click()
-                            await page.wait_for_load_state("networkidle")
-                            # フォームが表示されるまで待つ
-                            await page.wait_for_selector("#form_girl_name", timeout=10000)
-                            await asyncio.sleep(1) # 安定化
-
-                            # --- 項目抽出 ---
+                            # クリックして詳細へ
+                            await btn.click()
+                            await target_frame.wait_for_load_state("networkidle")
+                            
+                            # 詳細画面の入力項目が出るまで待機
                             try:
-                                name = await page.input_value("#form_girl_name")
-                                age = await page.input_value("#form_girl_age")
-                                tall = await page.input_value("#form_girl_height")
-                                bust = await page.input_value("#form_girl_sizeb")
-                                waist = await page.input_value("#form_girl_sizew")
-                                hip = await page.input_value("#form_girl_sizeh")
-                                try:
-                                    cup = await page.locator("#form_girl_cup").input_value()
-                                except: cup = ""
-                                shop_comment = await page.input_value("#form_girl_pr")
+                                await target_frame.wait_for_selector("#form_girl_name", timeout=8000)
                                 
-                                # 画像取得 (Drive保存)
+                                # データ抽出
+                                name = await target_frame.input_value("#form_girl_name")
+                                age = await target_frame.input_value("#form_girl_age")
+                                tall = await target_frame.input_value("#form_girl_height")
+                                bust = await target_frame.input_value("#form_girl_sizeb")
+                                waist = await target_frame.input_value("#form_girl_sizew")
+                                hip = await target_frame.input_value("#form_girl_sizeh")
+                                try:
+                                    cup = await target_frame.locator("#form_girl_cup").input_value()
+                                except: cup = ""
+                                shop_comment = await target_frame.input_value("#form_girl_pr")
+                                
+                                # 画像取得
                                 main_img_path = ""
                                 try:
-                                    img_el = page.locator("div.girl_photo_box img").first
+                                    img_el = target_frame.locator("div.girl_photo_box img").first
                                     if await img_el.count() > 0:
                                         img_src = await img_el.get_attribute("src")
                                         if img_src and img_src.startswith("http"):
                                             import requests
                                             img_res = requests.get(img_src, timeout=10)
                                             if img_res.status_code == 200:
-                                                filename = f"SYNC_{name}_{''.join(random.choices(string.digits, k=4))}.jpg"
+                                                rand_str = ''.join(random.choices(string.digits, k=4))
+                                                filename = f"SYNC_{name}_{rand_str}.jpg"
                                                 main_img_path = upload_to_drive_custom(img_res.content, "キャスト情報_Images", filename)
                                 except: pass
 
-                                # スプレッドシート形式で保存
                                 row = ["", "", name, age, tall, bust, cup, waist, hip, "", "", "", shop_comment, "", "", shop_id, main_img_path]
                                 cast_data_list.append(row)
-                            except Exception as e:
-                                st.error(f"{i+1}人目のデータ取得中にエラー: {e}")
 
-                            # 一覧に戻る（ブラウザの戻るボタン的な挙動）
+                            except Exception as e:
+                                st.warning(f"{i+1}人目の詳細ページ読み込みに失敗しました。")
+
+                            # 一覧ページに戻る
                             await page.goto("https://deli-fuzoku.jp/entry/girls", wait_until="networkidle")
-                            await asyncio.sleep(1)
+                            await asyncio.sleep(2)
                             progress_bar.progress((i + 1) / count)
 
                         return {"status": "success", "data": cast_data_list}
+
                     except Exception as e:
                         return {"status": "error", "message": str(e)}
                     finally:
@@ -983,17 +1003,16 @@ with tab5:
                     if res["status"] == "success":
                         if res["data"]:
                             worksheet_cast = spreadsheet.worksheet("キャスト情報")
-                            # まとめて追記
                             worksheet_cast.append_rows(res["data"])
-                            st.success(f"✅ {len(res['data'])} 名の情報を追加しました。")
-                            status.update(label="同期完了", state="complete")
+                            st.success(f"✅ {len(res['data'])} 名の情報を追加完了。")
+                            status.update(label="完了", state="complete")
                         else:
-                            st.warning(f"取得データが0件です。理由: {res.get('debug_msg')}")
-                            status.update(label="完了（データなし）", state="complete")
+                            st.error(f"取得失敗: {res.get('debug_msg')}")
+                            status.update(label="エラー", state="error")
                     else:
-                        st.error(f"エラー: {res.get('message')}")
-                        status.update(label="エラー発生", state="error")
+                        st.error(f"システムエラー: {res.get('message')}")
+                        status.update(label="エラー", state="error")
         else:
-            st.warning("シート3にデリじゃ店舗が見つかりません。")
+            st.warning("デリじゃ店舗が見つかりません。")
     except Exception as e:
-        st.error(f"システムエラー: {e}")
+        st.error(f"エラー: {e}")
