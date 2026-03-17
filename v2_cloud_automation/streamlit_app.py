@@ -869,8 +869,6 @@ with tab4:
 # --- tab5: デリじゃ既存店コピー (Web → シート) ---
 with tab5:
     st.subheader("📥 デリじゃ キャスト情報の同期")
-    
-    # デバッグ表示用のプレースホルダ
     debug_image_space = st.empty()
 
     try:
@@ -893,8 +891,11 @@ with tab5:
             async def run_fetch_derija_data(shop_id, shop_pass):
                 cast_data_list = []
                 async with async_playwright() as p:
-                    browser = await p.chromium.launch(headless=True, args=['--no-sandbox', '--disable-setuid-sandbox'])
-                    context = await browser.new_context(viewport={'width': 1280, 'height': 2000})
+                    # 人間味を出すために少しブラウザ設定を厚く
+                    browser = await p.chromium.launch(headless=True, args=['--no-sandbox'])
+                    context = await browser.new_context(
+                        user_agent="Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36"
+                    )
                     page = await context.new_page()
                     
                     try:
@@ -902,49 +903,37 @@ with tab5:
                         await page.goto("https://deli-fuzoku.jp/entry/", wait_until="networkidle")
                         await page.fill("#form_username", shop_id)
                         await page.fill("#form_password", shop_pass)
+                        await asyncio.sleep(1) # 少し待ってからクリック
                         await page.click("button.loginBtn")
                         await page.wait_for_load_state("networkidle")
 
                         # 2. 在籍嬢一覧へ移動
-                        # メニューの「在籍嬢一覧」というテキストを持つリンクをクリック
-                        girls_menu = page.get_by_role("link", name="在籍嬢一覧")
-                        if await girls_menu.count() > 0:
-                            await girls_menu.click()
-                        else:
-                            # 直接URL（バックアップ）
-                            await page.goto("https://deli-fuzoku.jp/entry/girls", wait_until="networkidle")
-                        
-                        await page.wait_for_load_state("networkidle")
-                        await asyncio.sleep(2) # 読み込み待ち
+                        await page.goto("https://deli-fuzoku.jp/entry/girls", wait_until="networkidle")
+                        await asyncio.sleep(2)
 
-                        # --- デバッグ: 一覧ページのスクショを撮る ---
-                        screenshot = await page.screenshot(full_page=False)
-                        debug_image_space.image(screenshot, caption="現在の一覧ページ画面 (デバッグ用)")
+                        # 在籍一覧のボタンを特定 (input type="button" かつ value="編集")
+                        # 要素をリストとして取得
+                        edit_buttons = page.locator('input[value="編集"]')
+                        count = await edit_buttons.count()
 
-                        # 3. 編集ボタンのonclickからURLを抽出
-                        # 抽出条件を「valueが編集であるinputタグ」に広げる
-                        edit_links = await page.locator('input[value="編集"]').evaluate_all("""
-                            nodes => nodes.map(n => {
-                                const onclick = n.getAttribute('onclick') || "";
-                                // location.href='...' または "..." の中身を抽出
-                                const match = onclick.match(/location\.href=['"]([^'"]+)['"]/);
-                                return match ? match[1] : null;
-                            }).filter(url => url !== null)
-                        """)
-                        
-                        edit_links = list(dict.fromkeys(edit_links))
-                        
-                        if not edit_links:
-                            return {"status": "success", "data": [], "debug_msg": "編集リンクが見つかりませんでした"}
+                        if count == 0:
+                            return {"status": "success", "data": [], "debug_msg": "編集ボタンが1つも見つかりませんでした。"}
 
-                        st.write(f"🔍 {len(edit_links)} 名のキャストを解析中...")
+                        st.write(f"🔍 {count} 名のキャストを1人ずつクリックして解析します...")
                         progress_bar = st.progress(0)
 
-                        for i, link in enumerate(edit_links):
-                            target_url = link if link.startswith("http") else f"https://deli-fuzoku.jp{link}"
-                            await page.goto(target_url, wait_until="networkidle")
+                        for i in range(count):
+                            # 再度一覧ページからボタンを特定（遷移して戻るため、都度再取得が安全）
+                            current_btn = page.locator('input[value="編集"]').nth(i)
                             
-                            # 項目抽出
+                            # 物理的にクリック
+                            await current_btn.click()
+                            await page.wait_for_load_state("networkidle")
+                            # フォームが表示されるまで待つ
+                            await page.wait_for_selector("#form_girl_name", timeout=10000)
+                            await asyncio.sleep(1) # 安定化
+
+                            # --- 項目抽出 ---
                             try:
                                 name = await page.input_value("#form_girl_name")
                                 age = await page.input_value("#form_girl_age")
@@ -957,7 +946,7 @@ with tab5:
                                 except: cup = ""
                                 shop_comment = await page.input_value("#form_girl_pr")
                                 
-                                # 画像取得
+                                # 画像取得 (Drive保存)
                                 main_img_path = ""
                                 try:
                                     img_el = page.locator("div.girl_photo_box img").first
@@ -971,12 +960,16 @@ with tab5:
                                                 main_img_path = upload_to_drive_custom(img_res.content, "キャスト情報_Images", filename)
                                 except: pass
 
+                                # スプレッドシート形式で保存
                                 row = ["", "", name, age, tall, bust, cup, waist, hip, "", "", "", shop_comment, "", "", shop_id, main_img_path]
                                 cast_data_list.append(row)
-                            except:
-                                pass
-                            
-                            progress_bar.progress((i + 1) / len(edit_links))
+                            except Exception as e:
+                                st.error(f"{i+1}人目のデータ取得中にエラー: {e}")
+
+                            # 一覧に戻る（ブラウザの戻るボタン的な挙動）
+                            await page.goto("https://deli-fuzoku.jp/entry/girls", wait_until="networkidle")
+                            await asyncio.sleep(1)
+                            progress_bar.progress((i + 1) / count)
 
                         return {"status": "success", "data": cast_data_list}
                     except Exception as e:
@@ -990,14 +983,17 @@ with tab5:
                     if res["status"] == "success":
                         if res["data"]:
                             worksheet_cast = spreadsheet.worksheet("キャスト情報")
+                            # まとめて追記
                             worksheet_cast.append_rows(res["data"])
                             st.success(f"✅ {len(res['data'])} 名の情報を追加しました。")
                             status.update(label="同期完了", state="complete")
                         else:
-                            st.warning(f"キャストが見つかりませんでした。理由: {res.get('debug_msg', '不明')}")
+                            st.warning(f"取得データが0件です。理由: {res.get('debug_msg')}")
                             status.update(label="完了（データなし）", state="complete")
                     else:
                         st.error(f"エラー: {res.get('message')}")
                         status.update(label="エラー発生", state="error")
+        else:
+            st.warning("シート3にデリじゃ店舗が見つかりません。")
     except Exception as e:
         st.error(f"システムエラー: {e}")
