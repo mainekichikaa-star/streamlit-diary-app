@@ -691,9 +691,9 @@ with tab3:
         st.error("店舗データが読み込まれていません。")
 
 
-# --- tab4: デリじゃ自動登録 (全項目入力・人間挙動再現版) ---
+# --- tab4: デリじゃ自動登録 (テキスト先行・画像抜き版) ---
 with tab4:
-    st.subheader("🍓 デリじゃ キャスト自動登録 (全項目・人間再現モード)")
+    st.subheader("🍓 デリじゃ キャスト自動登録 (テキスト先行モード)")
 
     @st.cache_data(ttl=300)
     def fetch_data_v36():
@@ -733,122 +733,99 @@ with tab4:
                 page = await context.new_page()
                 target_name = str(cast[2]).strip()
                 debug_path = f"final_debug_{sid}.png"
-                tmp_img_path = None
 
                 try:
-                    # 1. ログイン
+                    # 1. ログイン (少し間隔をあける)
                     await page.goto("https://deli-fuzoku.jp/entry/", wait_until="networkidle")
-                    await page.type("#form_username", sid, delay=random.randint(50, 120))
-                    await page.type("#form_password", spass, delay=random.randint(50, 120))
-                    await asyncio.sleep(1)
+                    await page.type("#form_username", sid, delay=random.randint(60, 130))
+                    await page.type("#form_password", spass, delay=random.randint(60, 130))
+                    await asyncio.sleep(1.5)
                     await page.click("button.loginBtn")
                     await page.wait_for_load_state("networkidle")
 
                     # 2. 在籍の追加
-                    await asyncio.sleep(random.uniform(2.0, 4.0))
-                    await page.mouse.wheel(0, 400) # スクロールして探すフリ
+                    await asyncio.sleep(random.uniform(3.0, 5.0))
                     add_link = page.get_by_role("link", name="在籍の追加")
                     await add_link.first.click()
                     
-                    # 3. 入力 (人間エミュレーション)
+                    # 3. テキスト入力 (全項目を人間が打つように)
                     await page.wait_for_selector("#form_girl_name", state="visible", timeout=60000)
                     await asyncio.sleep(2)
 
-                    async def human_input(selector, text, is_long=False):
+                    async def human_step_input(selector, text, is_long=False):
                         if not text: return
                         el = page.locator(selector)
                         await el.scroll_into_view_if_needed()
-                        # 入力前に少し待機
-                        await asyncio.sleep(random.uniform(0.3, 0.7))
-                        await el.click() # 一度クリックしてフォーカス
+                        await asyncio.sleep(random.uniform(0.4, 0.8))
+                        await el.click()
                         
-                        # タイピング (長文はタイムアウト延長)
-                        d = random.randint(40, 100) if is_long else random.randint(100, 250)
+                        # タイピング
+                        d = random.randint(30, 80) if is_long else random.randint(80, 200)
                         await page.type(selector, str(text), delay=d, timeout=300000)
                         
-                        # 入力確定をサイトに認識させるための「空クリック」
-                        await page.mouse.click(0, 0) 
-                        await asyncio.sleep(random.uniform(0.5, 1.2))
+                        # Tabキーで次の項目へ移動（これで入力を確定させる）
+                        await page.keyboard.press("Tab")
+                        await asyncio.sleep(random.uniform(0.5, 1.0))
 
-                    # 全項目を丁寧に埋める
-                    await human_input("#form_girl_name", target_name)
-                    await human_input("#form_girl_age", cast[3])
-                    await human_input("#form_girl_height", cast[4])
-                    await human_input("#form_girl_sizeb", cast[5])
-                    await human_input("#form_girl_sizew", cast[7])
-                    await human_input("#form_girl_sizeh", cast[8])
+                    # 登録に必要な情報を順次入力
+                    await human_step_input("#form_girl_name", target_name)
+                    await human_step_input("#form_girl_age", cast[3])
+                    await human_step_input("#form_girl_height", cast[4])
+                    await human_step_input("#form_girl_sizeb", cast[5])
+                    await human_step_input("#form_girl_sizew", cast[7])
+                    await human_step_input("#form_girl_sizeh", cast[8])
                     
-                    st.write(f"✍️ 自己紹介文を入力中...")
-                    await human_input("#form_girl_pr", cast[12], is_long=True)
+                    st.write(f"✍️ 自己紹介文を入力中（画像は飛ばします）...")
+                    await human_step_input("#form_girl_pr", cast[12], is_long=True)
 
-                    # 4. 画像アップロード
-                    img_name = cast[16]
-                    if img_name:
-                        tmp_filename = f"up_{sid}_{random.randint(1000,9999)}.jpg"
-                        tmp_img_path = os.path.abspath(tmp_filename)
-                        if download_by_filename(img_name, tmp_img_path):
-                            await page.locator("#form_file_girl_photo1").set_input_files(tmp_img_path)
-                            st.write("📸 画像反映待ち（12秒）...")
-                            await asyncio.sleep(12)
-
-                    # 5. 送信 (極限まで人間に寄せる)
-                    st.write("🚀 最終確認のスクロール中...")
+                    # 4. 送信 (画像がないので軽いはず)
+                    st.write("🚀 送信ボタンをゆっくり押し込みます...")
                     submit_label = page.locator('label[for="form_submit_btn"]')
                     await submit_label.scroll_into_view_if_needed()
-                    
-                    # 画面を少し上下させて「最終確認している」挙動
-                    await asyncio.sleep(1.5)
-                    await page.mouse.wheel(0, 100)
-                    await asyncio.sleep(0.5)
-                    await page.mouse.wheel(0, -100)
-                    await asyncio.sleep(2)
+                    await asyncio.sleep(3) # 送信前の「溜め」
                     
                     box = await submit_label.bounding_box()
                     if box:
-                        # 直線的ではなく、少しゆらぎを持たせてマウスを移動
                         await page.mouse.move(
-                            box['x'] + box['width'] / 2 + random.randint(-5, 5), 
-                            box['y'] + box['height'] / 2 + random.randint(-5, 5), 
-                            steps=20
+                            box['x'] + box['width'] / 2 + random.randint(-3, 3), 
+                            box['y'] + box['height'] / 2 + random.randint(-3, 3), 
+                            steps=25
                         )
-                        await asyncio.sleep(random.uniform(1.0, 2.0))
+                        await asyncio.sleep(1)
                         
-                        # 「ゆっくり押し込んで、ゆっくり離す」クリック
-                        async with page.expect_navigation(timeout=90000):
+                        # 遷移を粘り強く待つ
+                        async with page.expect_navigation(timeout=120000):
                             await page.mouse.down()
-                            await asyncio.sleep(random.uniform(0.2, 0.4))
+                            await asyncio.sleep(random.uniform(0.3, 0.5))
                             await page.mouse.up()
                     else:
                         await page.evaluate('() => { if(typeof func_submit === "function") func_submit(); }')
 
-                    # 6. 判定
+                    # 5. 成功判定
                     success = False
-                    for _ in range(30):
+                    for _ in range(40): # 判定時間をさらに延長
                         await asyncio.sleep(3)
-                        if "girl_list.php" in page.url or "edit" not in page.url:
+                        curr_url = page.url
+                        if "girl_list.php" in curr_url or "edit" not in curr_url:
                             success = True
                             break
-                        try:
-                            content = await page.content()
-                            if "完了" in content or "登録しました" in content:
-                                success = True
-                                break
-                        except: continue
+                        content = await page.content()
+                        if "完了" in content or "登録しました" in content:
+                            success = True
+                            break
 
                     if success:
+                        # 最終確認
                         await page.goto("https://deli-fuzoku.jp/entry/girl_list.php", wait_until="networkidle")
                         if target_name in await page.content():
                             return {"status": "success"}
 
-                    raise Exception("送信ボタン押下後、完了画面への遷移が拒否されました。")
+                    raise Exception("送信後の完了判定に失敗しました。")
 
                 except Exception as e:
                     await page.screenshot(path=debug_path, full_page=True)
                     return {"status": "error", "message": str(e), "screenshot": debug_path}
                 finally:
-                    if tmp_img_path and os.path.exists(tmp_img_path):
-                        try: os.remove(tmp_img_path)
-                        except: pass
                     await browser.close()
 
         # UI
@@ -860,7 +837,7 @@ with tab4:
                     if st.checkbox(f"{s['店舗名']} ({len(s['casts'])}名)", key=f"dj_v36_cb_{i}"):
                         selected.append(s)
 
-            if st.button("🚀 デリじゃ一括登録開始", type="primary"):
+            if st.button("🚀 デリじゃテキスト登録開始", type="primary"):
                 ws_w = None
                 try:
                     creds_w = Credentials.from_service_account_info(st.secrets["gcp_service_account"], scopes=SCOPE)
@@ -872,7 +849,7 @@ with tab4:
                         with st.status(f"{cast[2]} 登録中..."):
                             res = asyncio.run(run_derija_v36(cast, shop['ID'], shop['PASS']))
                             if res["status"] == "success":
-                                st.success(f"✅ {cast[2]} 完了！")
+                                st.success(f"✅ {cast[2]} テキスト登録完了！")
                                 if ws_w:
                                     row_idx = next((i for i, r in enumerate(raw_cast_data) if r[0] == cast[0]), None)
                                     if row_idx: ws_w.update_cell(row_idx + 1, 16, "登録済")
