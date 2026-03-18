@@ -873,7 +873,7 @@ with tab5:
     debug_image_space = st.empty()
 
     try:
-        # スプレッドシート設定
+        # スプレッドシート準備
         creds = Credentials.from_service_account_info(st.secrets["gcp_service_account"], scopes=SCOPE)
         gs_client = gspread.authorize(creds)
         spreadsheet = gs_client.open_by_key(SPREADSHEET_ID)
@@ -894,26 +894,35 @@ with tab5:
                 cast_data_list = []
                 async with async_playwright() as p:
                     browser = await p.chromium.launch(headless=True, args=['--no-sandbox', '--disable-setuid-sandbox'])
-                    context = await browser.new_context(viewport={'width': 1280, 'height': 2000})
+                    context = await browser.new_context(viewport={'width': 1280, 'height': 1500})
                     page = await context.new_page()
                     
                     try:
-                        # 1. ログイン実行
-                        await page.goto("https://deli-fuzoku.jp/entry/", wait_until="networkidle")
-                        await page.fill("#form_username", shop_id)
-                        await page.fill("#form_password", shop_pass)
-                        await page.click("button.loginBtn")
+                        # 1. ログイン画面へ移動
+                        await page.goto("https://deli-fuzoku.jp/entry/", wait_until="domcontentloaded")
+                        
+                        # 2. フォーム入力（セレクタを強固に）
+                        await page.locator("#form_username").fill(shop_id)
+                        await page.locator("#form_password").fill(shop_pass)
+                        await asyncio.sleep(1)
+                        
+                        # 3. ログインボタンをクリック（.loginBtn または button[type='submit']）
+                        login_btn = page.locator("button.loginBtn, input[type='submit'], .loginBtn")
+                        await login_btn.first.click()
+                        
+                        # 4. ログイン後の遷移をしっかり待つ
                         await page.wait_for_load_state("networkidle")
+                        await asyncio.sleep(3) # ログイン処理待ち
 
-                        # 2. 在籍嬢一覧ページへ直接遷移（確実性を優先）
+                        # 5. 在籍嬢一覧ページへ移動
                         await page.goto("https://deli-fuzoku.jp/entry/girls", wait_until="networkidle")
                         await asyncio.sleep(2)
 
-                        # デバッグ用スクショ（一覧画面が正しく出ているか確認用）
+                        # デバッグ用スクショ（ログインに失敗していればここで判明する）
                         screenshot = await page.screenshot(full_page=False)
-                        debug_image_space.image(screenshot, caption="一覧ページ確認")
+                        debug_image_space.image(screenshot, caption="現在の画面（ログイン成否の確認）")
 
-                        # 3. 編集ボタンのonclickからURLを抽出（シングル/ダブルクォート両対応）
+                        # 6. 編集URL抽出
                         edit_links = await page.locator('input[value="編集"]').evaluate_all("""
                             nodes => nodes.map(n => {
                                 const onclick = n.getAttribute('onclick') || "";
@@ -925,18 +934,17 @@ with tab5:
                         edit_links = list(dict.fromkeys(edit_links))
                         
                         if not edit_links:
-                            return {"status": "success", "data": [], "debug_msg": "編集ボタンのURLを抽出できませんでした"}
+                            return {"status": "success", "data": [], "debug_msg": "ログインに失敗しているか、キャストが0名です。"}
 
-                        st.write(f"🔍 {len(edit_links)} 名の解析を開始...")
+                        st.write(f"🔍 {len(edit_links)} 名の抽出を開始...")
                         progress_bar = st.progress(0)
 
                         for i, link in enumerate(edit_links):
                             target_url = link if link.startswith("http") else f"https://deli-fuzoku.jp{link}"
                             await page.goto(target_url, wait_until="networkidle")
-                            await asyncio.sleep(1)
-
-                            # データ抽出
+                            
                             try:
+                                # 詳細項目抽出
                                 name = await page.input_value("#form_girl_name")
                                 age = await page.input_value("#form_girl_age")
                                 tall = await page.input_value("#form_girl_height")
@@ -948,7 +956,7 @@ with tab5:
                                 except: cup = ""
                                 shop_comment = await page.input_value("#form_girl_pr")
                                 
-                                # 画像保存
+                                # 画像取得
                                 main_img_path = ""
                                 try:
                                     img_el = page.locator("div.girl_photo_box img").first
@@ -975,21 +983,21 @@ with tab5:
                         await browser.close()
 
             if st.button("🔄 同期を実行", type="primary"):
-                with st.status("同期中...") as status:
+                with st.status("実行中...") as status:
                     res = asyncio.run(run_fetch_derija_data(target_shop['ID'], target_shop['raw_pass']))
                     if res["status"] == "success":
                         if res["data"]:
                             worksheet_cast = spreadsheet.worksheet("キャスト情報")
                             worksheet_cast.append_rows(res["data"])
-                            st.success(f"✅ {len(res['data'])} 名追加しました。")
+                            st.success(f"✅ {len(res['data'])} 名追加完了")
                             status.update(label="完了", state="complete")
                         else:
-                            st.warning(f"データなし: {res.get('debug_msg')}")
-                            status.update(label="完了", state="complete")
+                            st.error(f"失敗: {res.get('debug_msg')}")
+                            status.update(label="データなし", state="error")
                     else:
-                        st.error(f"エラー: {res.get('message')}")
-                        status.update(label="失敗", state="error")
+                        st.error(f"システムエラー: {res.get('message')}")
+                        status.update(label="エラー", state="error")
         else:
-            st.warning("対象店舗なし")
+            st.warning("デリじゃ店舗が見つかりません。")
     except Exception as e:
-        st.error(f"システムエラー: {e}")
+        st.error(f"エラー: {e}")
