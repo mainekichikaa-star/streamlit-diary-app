@@ -870,8 +870,7 @@ with tab4:
 with tab5:
     st.subheader("📥 デリじゃ キャスト情報の同期")
     
-    # 【追加】Playwrightのブラウザパスをユーザーディレクトリ内に固定
-    # これにより、権限エラーを避け、場所を特定させます
+    # ブラウザのインストール先をカレントディレクトリに固定
     PW_BROWSER_PATH = os.path.join(os.getcwd(), ".playwright_browsers")
     os.environ["PLAYWRIGHT_BROWSERS_PATH"] = PW_BROWSER_PATH
 
@@ -896,18 +895,16 @@ with tab5:
             target_shop = next(s for s in derija_sync_shops if s['店舗名'] == selected_name)
 
             async def run_fetch_derija_data(shop_id, shop_pass):
-                # 【重要】実行直前にブラウザがあるか確認し、なければインストール
+                # ブラウザがない場合はインストールを実行
                 if not os.path.exists(PW_BROWSER_PATH):
-                    with st.spinner("初回のみブラウザのセットアップを行っています（1~2分かかります）..."):
-                        subprocess.run(["python", "-m", "playwright", "install", "chromium"], env=os.environ)
+                    subprocess.run(["python", "-m", "playwright", "install", "chromium"], env=os.environ)
                 
                 cast_data_list = []
                 async with async_playwright() as p:
-                    # ブラウザ起動
                     try:
                         browser = await p.chromium.launch(headless=True, args=['--no-sandbox', '--disable-setuid-sandbox'])
-                    except Exception as launch_err:
-                        # 起動に失敗した場合は再インストールを試みてリトライ
+                    except:
+                        # 起動失敗時に再試行
                         subprocess.run(["python", "-m", "playwright", "install", "chromium"], env=os.environ)
                         browser = await p.chromium.launch(headless=True, args=['--no-sandbox', '--disable-setuid-sandbox'])
 
@@ -915,14 +912,12 @@ with tab5:
                     page = await context.new_page()
                     
                     try:
-                        # 1. ログイン
                         await page.goto("https://deli-fuzoku.jp/entry/", wait_until="networkidle")
                         await page.fill("#form_username", shop_id)
                         await page.fill("#form_password", shop_pass)
                         await page.click("button.loginBtn")
                         await page.wait_for_load_state("networkidle")
 
-                        # 2. 在籍嬢一覧へ移動
                         girls_menu = page.get_by_role("link", name="在籍嬢一覧")
                         if await girls_menu.count() > 0:
                             await girls_menu.click()
@@ -932,11 +927,10 @@ with tab5:
                         await page.wait_for_load_state("networkidle")
                         await asyncio.sleep(2)
 
-                        # デバッグ用スクショ
+                        # スクショ
                         screenshot = await page.screenshot(full_page=False)
-                        debug_image_space.image(screenshot, caption="現在の一覧ページ画面 (デバッグ用)")
+                        debug_image_space.image(screenshot, caption="現在の一覧ページ画面")
 
-                        # 3. 編集ボタン抽出
                         edit_links = await page.locator('input[value="編集"]').evaluate_all("""
                             nodes => nodes.map(n => {
                                 const onclick = n.getAttribute('onclick') || "";
@@ -948,9 +942,9 @@ with tab5:
                         edit_links = list(dict.fromkeys(edit_links))
                         
                         if not edit_links:
-                            return {"status": "success", "data": [], "debug_msg": "編集リンクが見つかりませんでした"}
+                            return {"status": "success", "data": [], "debug_msg": "編集リンクなし"}
 
-                        st.write(f"🔍 {len(edit_links)} 名のキャストを解析中...")
+                        st.write(f"🔍 {len(edit_links)} 名を解析中...")
                         progress_bar = st.progress(0)
 
                         for i, link in enumerate(edit_links):
@@ -984,9 +978,7 @@ with tab5:
 
                                 row = ["", "", name, age, tall, bust, cup, waist, hip, "", "", "", shop_comment, "", "", shop_id, main_img_path]
                                 cast_data_list.append(row)
-                            except:
-                                pass
-                            
+                            except: pass
                             progress_bar.progress((i + 1) / len(edit_links))
 
                         return {"status": "success", "data": cast_data_list}
@@ -1002,13 +994,13 @@ with tab5:
                         if res["data"]:
                             worksheet_cast = spreadsheet.worksheet("キャスト情報")
                             worksheet_cast.append_rows(res["data"])
-                            st.success(f"✅ {len(res['data'])} 名の情報を追加しました。")
+                            st.success(f"✅ {len(res['data'])} 名追加完了")
                             status.update(label="同期完了", state="complete")
                         else:
-                            st.warning(f"キャストが見つかりませんでした。理由: {res.get('debug_msg', '不明')}")
-                            status.update(label="完了（データなし）", state="complete")
+                            st.warning("データが見つかりませんでした")
+                            status.update(label="完了", state="complete")
                     else:
                         st.error(f"エラー: {res.get('message')}")
-                        status.update(label="エラー発生", state="error")
+                        status.update(label="エラー", state="error")
     except Exception as e:
         st.error(f"システムエラー: {e}")
