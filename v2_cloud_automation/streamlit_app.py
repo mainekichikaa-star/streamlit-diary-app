@@ -866,24 +866,6 @@ with tab4:
                                 st.error(f"❌ {cast[2]} 失敗: {res['message']}")
                                 if "screenshot" in res: st.image(res["screenshot"])
         
-Streamlit Cloudなどの環境で「Executable doesn't exist」が出る場合、実行時に playwright install を叩くコードを書いても、環境の制約やパスの不一致でうまくいかないことが多々あります。
-
-設定ファイル（packages.txt など）を触らず、コード側で「ブラウザの実行ファイルを探しに行く場所」を明示的に指定し、かつ初回実行時にその場所へインストールを強制する方法が最も確実です。
-
-以下に、修正した tab5 のコードを提示します。
-
-修正後のコード (tab5)
-Python
-import os
-import subprocess
-import asyncio
-import streamlit as st
-import gspread
-from google.oauth2.service_account import Credentials
-from playwright.async_api import async_playwright
-import random
-import string
-
 # --- tab5: デリじゃ既存店コピー (Web → シート) ---
 with tab5:
     st.subheader("📥 デリじゃ キャスト情報の同期")
