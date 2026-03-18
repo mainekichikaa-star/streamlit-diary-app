@@ -870,11 +870,10 @@ with tab4:
 # --- tab5: デリじゃ既存店コピー (Web → シート) ---
 with tab5:
     st.subheader("📥 デリじゃ キャスト情報の同期")
-    
-    # デバッグ表示用のプレースホルダ
-    debug_image_space = st.empty()
+    st.info("デリじゃ管理画面からキャスト情報を取得し、スプレッドシートへ追記します。")
 
     try:
+        # スプレッドシートからの店舗情報取得
         creds = Credentials.from_service_account_info(st.secrets["gcp_service_account"], scopes=SCOPE)
         gs_client = gspread.authorize(creds)
         spreadsheet = gs_client.open_by_key(SPREADSHEET_ID)
@@ -894,69 +893,66 @@ with tab5:
             async def run_fetch_derija_data(shop_id, shop_pass):
                 cast_data_list = []
                 async with async_playwright() as p:
-                    # ブラウザ起動
-                    browser = await p.chromium.launch(headless=True, args=['--no-sandbox', '--disable-setuid-sandbox'])
+                    # ブラウザ設定
+                    browser = await p.chromium.launch(headless=True, args=['--no-sandbox', '--disable-setuid-sandbox', '--disable-dev-shm-usage'])
                     context = await browser.new_context(
-                        viewport={'width': 1280, 'height': 2000},
-                        user_agent="Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36"
+                        user_agent="Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36",
+                        viewport={'width': 1280, 'height': 2000}
                     )
                     page = await context.new_page()
                     
                     try:
-                        # 1. ログイン画面
+                        # 1. ログイン処理
                         await page.goto("https://deli-fuzoku.jp/entry/", wait_until="domcontentloaded")
                         
-                        # IDとパスワードの入力
-                        # セレクタをより汎用的なものに変更
-                        await page.wait_for_selector('input[name="username"], #form_username')
-                        await page.fill('input[name="username"], #form_username', shop_id)
-                        await page.fill('input[name="password"], #form_password', shop_pass)
+                        # ID/PASS入力
+                        await page.wait_for_selector("#form_username")
+                        await page.fill("#form_username", shop_id)
+                        await page.fill("#form_password", shop_pass)
                         
-                        # ログインボタンをクリック（複数の候補で試行）
-                        login_button = page.locator('input[type="submit"], button[type="submit"], .loginBtn').first
-                        await login_button.click()
+                        # ログイン実行（クリックとEnterの両押し）
+                        login_btn = page.get_by_role("button", name="ログイン")
+                        if await login_btn.count() > 0:
+                            await login_btn.click()
+                        else:
+                            await page.keyboard.press("Enter")
                         
-                        # ログイン後の遷移待ち
+                        # ログイン後の安定を待つ
                         await page.wait_for_load_state("networkidle")
-                        
-                        # 2. 在籍嬢一覧へ直接移動
-                        await page.goto("https://deli-fuzoku.jp/entry/girls", wait_until="networkidle")
-                        await asyncio.sleep(2) # 描画待ち
+                        await asyncio.sleep(2)
 
-                        # --- デバッグ: ログイン後のスクショを撮る ---
-                        screenshot = await page.screenshot(full_page=False)
-                        debug_image_space.image(screenshot, caption="ログイン後の画面確認 (デバッグ用)")
+                        # 2. 在籍嬢一覧へ直接遷移（確実性を高めるため）
+                        await page.goto("https://deli-fuzoku.jp/entry/girls", wait_until="networkidle")
+                        await asyncio.sleep(2)
 
                         # 3. 編集ボタンのURLを抽出
-                        # onclick属性の中身を正規表現で引っこ抜く
+                        # onclick属性から '...' で囲まれたパスを抜き出す
                         edit_links = await page.evaluate("""
                             () => {
                                 const urls = [];
                                 const inputs = Array.from(document.querySelectorAll('input[onclick*="location.href"]'));
                                 inputs.forEach(el => {
                                     const onclick = el.getAttribute('onclick');
-                                    const match = onclick.match(/location\\.href=['"]([^'"]+)['"]/);
+                                    const match = onclick.match(/'([^']+)'/);
                                     if (match) urls.push(match[1]);
                                 });
-                                return urls;
+                                return [...new Set(urls)]; // 重複排除
                             }
                         """)
                         
-                        # 重複排除
-                        edit_links = list(dict.fromkeys(edit_links))
-                        
                         if not edit_links:
-                            return {"status": "success", "data": [], "debug_msg": "ログインはできたようですが、編集対象のキャスト（ボタン）が見つかりませんでした。"}
+                            return {"status": "success", "data": []}
 
-                        st.write(f"🔍 {len(edit_links)} 名のキャストを解析中...")
+                        st.write(f"🔍 {len(edit_links)} 名のキャストを詳細解析中...")
                         progress_bar = st.progress(0)
 
                         for i, link in enumerate(edit_links):
                             target_url = link if link.startswith("http") else f"https://deli-fuzoku.jp{link}"
+                            # 編集画面へ
                             await page.goto(target_url, wait_until="networkidle")
                             
                             try:
-                                # 詳細データの抽出
+                                # 項目抽出
                                 name = await page.input_value("#form_girl_name")
                                 age = await page.input_value("#form_girl_age")
                                 tall = await page.input_value("#form_girl_height")
@@ -967,13 +963,13 @@ with tab5:
                                 try:
                                     cup = await page.locator("#form_girl_cup").input_value()
                                 except: cup = ""
-                                
+
                                 shop_comment = await page.input_value("#form_girl_pr")
                                 
                                 # 画像取得
                                 main_img_path = ""
                                 try:
-                                    img_el = page.locator("div.girl_photo_box img").first
+                                    img_el = page.locator("div.girl_photo_box img, .photo img").first
                                     if await img_el.count() > 0:
                                         img_src = await img_el.get_attribute("src")
                                         if img_src and img_src.startswith("http"):
@@ -981,10 +977,12 @@ with tab5:
                                             img_res = requests.get(img_src, timeout=10)
                                             if img_res.status_code == 200:
                                                 import random, string
-                                                filename = f"SYNC_{name}_{''.join(random.choices(string.digits, k=4))}.jpg"
+                                                rand_str = ''.join(random.choices(string.digits, k=4))
+                                                filename = f"SYNC_{name}_{rand_str}.jpg"
                                                 main_img_path = upload_to_drive_custom(img_res.content, "キャスト情報_Images", filename)
                                 except: pass
 
+                                # A-Q列の形式に合わせる
                                 row = ["", "", name, age, tall, bust, cup, waist, hip, "", "", "", shop_comment, "", "", shop_id, main_img_path]
                                 cast_data_list.append(row)
                             except:
@@ -994,7 +992,7 @@ with tab5:
 
                         return {"status": "success", "data": cast_data_list}
                     except Exception as e:
-                        return {"status": "error", "message": f"操作失敗: {str(e)}"}
+                        return {"status": "error", "message": str(e)}
                     finally:
                         await browser.close()
 
@@ -1008,10 +1006,12 @@ with tab5:
                             st.success(f"✅ {len(res['data'])} 名の情報を追加しました。")
                             status.update(label="同期完了", state="complete")
                         else:
-                            st.warning(f"結果: {res.get('debug_msg', 'データが見つかりませんでした。')}")
+                            st.warning("在籍嬢一覧にキャストが見つかりませんでした。ログインに失敗しているか、キャストが登録されていません。")
                             status.update(label="完了（データなし）", state="complete")
                     else:
                         st.error(f"エラー: {res.get('message')}")
                         status.update(label="エラー発生", state="error")
+        else:
+            st.warning("シート3にデリじゃ店舗が見つかりません。")
     except Exception as e:
         st.error(f"システムエラー: {e}")
