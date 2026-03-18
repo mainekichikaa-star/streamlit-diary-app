@@ -886,13 +886,13 @@ with tab5:
         ]
 
         if derija_sync_shops:
-            selected_name = st.selectbox("情報を取得する店舗を選択", [s['店舗名'] for s in derija_sync_shops], key="derija_sync_sel")
+            selected_name = st.selectbox("同期する店舗を選択", [s['店舗名'] for s in derija_sync_shops], key="derija_sync_sel")
             target_shop = next(s for s in derija_sync_shops if s['店舗名'] == selected_name)
 
             async def run_fetch_derija_data(shop_id, shop_pass):
                 cast_data_list = []
                 async with async_playwright() as p:
-                    # tab4と同じ設定
+                    # tab4の設定を完全再現
                     browser = await p.chromium.launch(headless=True, args=['--no-sandbox', '--disable-setuid-sandbox', '--disable-dev-shm-usage'])
                     context = await browser.new_context(
                         user_agent="Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36",
@@ -901,26 +901,34 @@ with tab5:
                     page = await context.new_page()
                     
                     try:
-                        # 1. ログイン (tab4の書き方を完全コピー)
+                        # 1. ログイン実行
                         await page.goto("https://deli-fuzoku.jp/entry/", wait_until="networkidle")
-                        await page.type("#form_username", shop_id, delay=random.randint(50, 120))
-                        await page.type("#form_password", shop_pass, delay=random.randint(50, 120))
+                        
+                        # フォームをクリックしてから入力（tab4の人間らしい動きを強化）
+                        await page.click("#form_username")
+                        await page.type("#form_username", shop_id, delay=random.randint(60, 150))
+                        
+                        await page.click("#form_password")
+                        await page.type("#form_password", shop_pass, delay=random.randint(60, 150))
+                        
                         await asyncio.sleep(1)
+                        
+                        # ログインボタンをクリック
                         await page.click("button.loginBtn")
                         
-                        # ログイン後の読み込みを待機
+                        # ログイン後の安定を待つ
                         await page.wait_for_load_state("networkidle")
-                        await asyncio.sleep(random.uniform(2.0, 4.0))
+                        await asyncio.sleep(4) 
 
-                        # 2. 在籍嬢一覧へ移動
+                        # 2. 在籍嬢一覧ページへ移動
                         await page.goto("https://deli-fuzoku.jp/entry/girls", wait_until="networkidle")
                         await asyncio.sleep(2)
 
-                        # 状況確認用スクショ
+                        # デバッグ用：この時点での画面をキャプチャ
                         screenshot = await page.screenshot(full_page=False)
-                        debug_image_space.image(screenshot, caption="現在の一覧ページ画面")
+                        debug_image_space.image(screenshot, caption="ログイン後の画面確認")
 
-                        # 3. 編集URL抽出
+                        # 3. 編集ボタンURLを抽出
                         edit_links = await page.locator('input[value="編集"]').evaluate_all("""
                             nodes => nodes.map(n => {
                                 const onclick = n.getAttribute('onclick') || "";
@@ -932,9 +940,9 @@ with tab5:
                         edit_links = list(dict.fromkeys(edit_links))
                         
                         if not edit_links:
-                            return {"status": "success", "data": [], "debug_msg": "ログイン失敗または編集リンクが見つかりません。"}
+                            return {"status": "success", "data": [], "debug_msg": "一覧ページに「編集」ボタンが見つかりません。"}
 
-                        st.write(f"🔍 {len(edit_links)} 名の解析を開始...")
+                        st.write(f"🔍 {len(edit_links)} 名のキャストを解析中...")
                         progress_bar = st.progress(0)
 
                         for i, link in enumerate(edit_links):
@@ -942,7 +950,7 @@ with tab5:
                             await page.goto(target_url, wait_until="networkidle")
                             await asyncio.sleep(1)
 
-                            # データ抽出
+                            # 抽出処理
                             try:
                                 name = await page.input_value("#form_girl_name")
                                 age = await page.input_value("#form_girl_age")
@@ -981,22 +989,22 @@ with tab5:
                     finally:
                         await browser.close()
 
-            if st.button("🔄 同期を実行", type="primary"):
-                with st.status("同期中...") as status:
+            if st.button("🔄 同期を実行する", type="primary"):
+                with st.status("同期処理中...") as status:
                     res = asyncio.run(run_fetch_derija_data(target_shop['ID'], target_shop['raw_pass']))
                     if res["status"] == "success":
                         if res["data"]:
                             worksheet_cast = spreadsheet.worksheet("キャスト情報")
                             worksheet_cast.append_rows(res["data"])
-                            st.success(f"✅ {len(res['data'])} 名の情報を追加しました。")
-                            status.update(label="同期完了", state="complete")
+                            st.success(f"✅ {len(res['data'])} 名の情報をシートへ追加しました。")
+                            status.update(label="完了", state="complete")
                         else:
                             st.warning(f"取得失敗: {res.get('debug_msg')}")
                             status.update(label="完了（データなし）", state="complete")
                     else:
-                        st.error(f"システムエラー: {res.get('message')}")
-                        status.update(label="エラー", state="error")
+                        st.error(f"エラー: {res.get('message')}")
+                        status.update(label="エラー終了", state="error")
         else:
-            st.warning("対象店舗が見つかりません。")
+            st.warning("対象店舗がありません。")
     except Exception as e:
-        st.error(f"システムエラー: {e}")
+        st.error(f"エラー: {e}")
