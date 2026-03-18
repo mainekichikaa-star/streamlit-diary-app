@@ -867,156 +867,154 @@ with tab4:
                                 st.error(f"❌ {cast[2]} 失敗: {res['message']}")
                                 if "screenshot" in res: st.image(res["screenshot"])
         
+# --- tab5: デリじゃ既存店コピー (Web → シート) ---
 with tab5:
     st.subheader("📥 デリじゃ キャスト情報の同期")
-    st.info("デリじゃの管理画面からキャスト情報を取得し、スプレッドシートの「キャスト情報」シートへ追加します。")
+    
+    debug_image_space = st.empty()
 
-    # 1. デリじゃ店舗のみを抽出
-    derija_keywords = ["デリじゃ", "デリジャ", "でりじゃ"]
-    derija_shops = [
-        s for s in shop_status 
-        if any(k in s['店舗名'] for k in derija_keywords)
-    ]
+    try:
+        creds = Credentials.from_service_account_info(st.secrets["gcp_service_account"], scopes=SCOPE)
+        gs_client = gspread.authorize(creds)
+        spreadsheet = gs_client.open_by_key(SPREADSHEET_ID)
+        worksheet_shops = spreadsheet.worksheet("シート3")
+        data_shops = worksheet_shops.get_all_records()
 
-    if not derija_shops:
-        st.warning("「デリじゃ」キーワードを含む店舗がシート3に見つかりません。")
-    else:
-        selected_derija_name = st.selectbox("情報を取得するデリじゃ店舗を選択", [s['店舗名'] for s in derija_shops], key="derija_sync_select")
-        target_derija = next(s for s in derija_shops if s['店舗名'] == selected_derija_name)
+        derija_keywords = ["デリじゃ", "デリジャ", "でりじゃ"]
+        derija_sync_shops = [
+            {"店舗名": str(s.get('登録店舗')).strip(), "ID": str(s.get('店舗ID')).strip(), "raw_pass": str(s.get('店舗PASSWORD')).strip()}
+            for s in data_shops if any(k in str(s.get('登録店舗')).strip() for k in derija_keywords)
+        ]
 
-        # --- デリじゃ専用同期ロジック ---
-        async def run_fetch_derija_data(shop_id, shop_pass, shop_name):
-            # Playwrightのインストール確認
-            if not os.path.exists(LOCAL_PW_PATH):
-                try: subprocess.run([sys.executable, "-m", "playwright", "install", "chromium"], check=True)
-                except: pass
+        if derija_sync_shops:
+            selected_name = st.selectbox("情報を取得するデリじゃ店舗を選択", [s['店舗名'] for s in derija_sync_shops], key="derija_sync_sel")
+            target_shop = next(s for s in derija_sync_shops if s['店舗名'] == selected_name)
 
-            cast_data_list = []
-            async with async_playwright() as p:
-                browser = await p.chromium.launch(
-                    headless=True, 
-                    args=['--no-sandbox', '--disable-dev-shm-usage']
-                )
-                context = await browser.new_context(viewport={'width': 1280, 'height': 2000}, locale="ja-JP")
-                page = await context.new_page()
-
-                try:
-                    # ログイン処理
-                    await page.goto("https://deli-fuzoku.jp/entry/", wait_until="networkidle")
-                    await page.fill("#form_username", str(shop_id).strip())
-                    await page.fill("#form_password", str(shop_pass).strip())
-                    await page.click("button.loginBtn")
-                    await page.wait_for_load_state("networkidle")
-
-                    # 在籍嬢一覧ページへ移動
-                    await page.goto("https://deli-fuzoku.jp/entry/girls", wait_until="networkidle")
-                    await asyncio.sleep(2)
-
-                    # 編集ボタンのURLを抽出 (JavaScriptのonclick属性から解析)
-                    edit_links = await page.locator('input[value="編集"]').evaluate_all("""
-                        nodes => nodes.map(n => {
-                            const onclick = n.getAttribute('onclick') || "";
-                            const match = onclick.match(/location\\.href=['"]([^'"]+)['"]/);
-                            return match ? match[1] : null;
-                        }).filter(u => u !== null)
-                    """)
+            async def run_fetch_derija_data(shop_id, shop_pass):
+                cast_data_list = []
+                async with async_playwright() as p:
+                    # ブラウザ起動 (headless=TrueでOKですが、問題時はFalseにして動作確認してください)
+                    browser = await p.chromium.launch(headless=True, args=['--no-sandbox', '--disable-setuid-sandbox'])
+                    context = await browser.new_context(viewport={'width': 1280, 'height': 2000})
+                    page = await context.new_page()
                     
-                    # 重複削除
-                    edit_links = list(dict.fromkeys(edit_links))
-                    
-                    if not edit_links:
-                        return {"status": "success", "data": [], "message": "編集対象のキャストが見つかりませんでした。"}
+                    try:
+                        # 1. ログイン
+                        await page.goto("https://deli-fuzoku.jp/entry/", wait_until="networkidle")
+                        await page.fill("#form_username", shop_id)
+                        await page.fill("#form_password", shop_pass)
+                        await page.click("button.loginBtn")
+                        await page.wait_for_load_state("networkidle")
 
-                    st.write(f"🔍 {len(edit_links)} 名のキャストを解析中...")
-                    progress_bar = st.progress(0)
+                        # 2. 在籍嬢一覧へ移動
+                        # URLへ直接飛ぶ方が確実な場合が多いです
+                        await page.goto("https://deli-fuzoku.jp/entry/girls", wait_until="networkidle")
+                        # 読み込み待ちを強化
+                        await page.wait_for_selector("body", timeout=10000)
+                        await asyncio.sleep(3) 
 
-                    for i, link in enumerate(edit_links):
-                        target_url = link if link.startswith("http") else f"https://deli-fuzoku.jp{link}"
-                        await page.goto(target_url, wait_until="networkidle")
+                        # デバッグ用スクショ
+                        screenshot = await page.screenshot(full_page=True)
+                        debug_image_space.image(screenshot, caption="現在の一覧ページ画面 (デバッグ用)")
+
+                        # 3. 編集ボタンの抽出
+                        # より汎用的なJSでの抽出に変更
+                        edit_links = await page.evaluate("""
+                            () => {
+                                const urls = [];
+                                // inputタグまたはbuttonタグから「編集」という文字を持つものを探す
+                                const elements = Array.from(document.querySelectorAll('input, button, a'));
+                                elements.forEach(el => {
+                                    const val = el.value || el.innerText || "";
+                                    const onclick = el.getAttribute('onclick') || "";
+                                    
+                                    if (val.includes("編集") || onclick.includes("edit")) {
+                                        const match = onclick.match(/location\\.href=['"]([^'"]+)['"]/);
+                                        if (match) {
+                                            urls.push(match[1]);
+                                        } else if (el.tagName === 'A' && el.href) {
+                                            urls.push(el.getAttribute('href'));
+                                        }
+                                    }
+                                });
+                                return [...new Set(urls)]; // 重複排除
+                            }
+                        """)
                         
-                        try:
-                            # 各項目の取得
-                            name = await page.input_value("#form_girl_name")
-                            age = await page.input_value("#form_girl_age")
-                            tall = await page.input_value("#form_girl_height")
-                            bust = await page.input_value("#form_girl_sizeb")
-                            waist = await page.input_value("#form_girl_sizew")
-                            hip = await page.input_value("#form_girl_sizeh")
-                            
-                            # カップ数はセレクトボックスの場合があるため
-                            try:
-                                cup = await page.locator("#form_girl_cup").input_value()
-                            except:
-                                cup = ""
-
-                            shop_comment = await page.input_value("#form_girl_pr")
-                            
-                            # --- 画像取得とGoogle Drive保存 ---
-                            main_img_drive_path = ""
-                            try:
-                                img_el = page.locator("div.girl_photo_box img").first
-                                if await img_el.count() > 0:
-                                    img_src = await img_el.get_attribute("src")
-                                    if img_src and img_src.startswith("http"):
-                                        img_res = requests.get(img_src, timeout=10)
-                                        if img_res.status_code == 200:
-                                            rand_str = ''.join(random.choices(string.digits, k=4))
-                                            filename = f"DJ_{name}_{rand_str}.jpg"
-                                            # 共通関数を利用してアップロード
-                                            main_img_drive_path = upload_to_drive_custom(img_res.content, "キャスト情報_Images", filename)
-                            except:
-                                pass
-
-                            # --- シートの列構成 (A〜Q) に合わせる ---
-                            # A:ID, B:エリア, C:名前, D:年齢, E:身長, F:バスト, G:カップ, H:ウエスト, I:ヒップ, 
-                            # J:性格, K:キャッチ, L:娘コメ, M:店コメ, N:出勤, O:店舗ID, P:ステータス, Q:画像
-                            custom_id = f"DJ{str(shop_id).strip()}{(i + 1):02d}"
-                            row = [
-                                custom_id,        # A
-                                "",                # B
-                                name,              # C
-                                age,               # D
-                                tall,              # E
-                                bust,              # F
-                                cup,               # G
-                                waist,             # H
-                                hip,               # I
-                                "",                # J
-                                "",                # K
-                                "",                # L
-                                shop_comment,      # M
-                                "",                # N
-                                str(shop_id),      # O
-                                "",                # P
-                                main_img_drive_path # Q
-                            ]
-                            cast_data_list.append(row)
-                        except Exception as e:
-                            st.error(f"詳細取得エラー ({link}): {e}")
+                        st.write(f"DEBUG: 発見されたリンク数: {len(edit_links)}")
                         
-                        progress_bar.progress((i + 1) / len(edit_links))
-                        await asyncio.sleep(0.5)
+                        if not edit_links:
+                            return {"status": "success", "data": [], "debug_msg": "編集ボタン（またはonclickリンク）が見つかりませんでした。"}
 
-                    return {"status": "success", "data": cast_data_list}
-                except Exception as e:
-                    return {"status": "error", "message": str(e)}
-                finally:
-                    await browser.close()
+                        st.write(f"🔍 {len(edit_links)} 名のキャストを解析中...")
+                        progress_bar = st.progress(0)
 
-        # 実行ボタン
-        if st.button("🔄 デリじゃ情報をシートへ同期", type="primary"):
-            with st.status("同期処理を実行中...") as status:
-                res = asyncio.run(run_fetch_derija_data(target_derija['ID'], target_derija['raw_pass'], target_derija['店舗名']))
-                
-                if res["status"] == "success":
-                    if res["data"]:
-                        # まとめてスプレッドシートに追記
-                        worksheet_cast.append_rows(res["data"])
-                        st.success(f"✅ {len(res['data'])} 名の情報をシートに追加しました。")
-                        status.update(label="同期完了", state="complete")
+                        for i, link in enumerate(edit_links):
+                            target_url = link if link.startswith("http") else f"https://deli-fuzoku.jp{link}"
+                            # IDが含まれないリンクなどはスキップ
+                            if "edit" not in target_url and "girl_id" not in target_url:
+                                continue
+
+                            await page.goto(target_url, wait_until="networkidle")
+                            
+                            try:
+                                # 要素があるか確認してから取得
+                                name = await page.input_value("#form_girl_name") if await page.locator("#form_girl_name").count() > 0 else "不明"
+                                age = await page.input_value("#form_girl_age") if await page.locator("#form_girl_age").count() > 0 else ""
+                                tall = await page.input_value("#form_girl_height") if await page.locator("#form_girl_height").count() > 0 else ""
+                                bust = await page.input_value("#form_girl_sizeb") if await page.locator("#form_girl_sizeb").count() > 0 else ""
+                                waist = await page.input_value("#form_girl_sizew") if await page.locator("#form_girl_sizew").count() > 0 else ""
+                                hip = await page.input_value("#form_girl_sizeh") if await page.locator("#form_girl_sizeh").count() > 0 else ""
+                                
+                                try:
+                                    cup = await page.locator("#form_girl_cup").input_value()
+                                except: cup = ""
+                                
+                                shop_comment = await page.input_value("#form_girl_pr") if await page.locator("#form_girl_pr").count() > 0 else ""
+                                
+                                # 画像取得
+                                main_img_path = ""
+                                try:
+                                    img_el = page.locator("div.girl_photo_box img, .photo img").first
+                                    if await img_el.count() > 0:
+                                        img_src = await img_el.get_attribute("src")
+                                        if img_src and img_src.startswith("http"):
+                                            import requests
+                                            img_res = requests.get(img_src, timeout=10)
+                                            if img_res.status_code == 200:
+                                                import random, string
+                                                filename = f"SYNC_{name}_{''.join(random.choices(string.digits, k=4))}.jpg"
+                                                main_img_path = upload_to_drive_custom(img_res.content, "キャスト情報_Images", filename)
+                                except: pass
+
+                                row = ["", "", name, age, tall, bust, cup, waist, hip, "", "", "", shop_comment, "", "", shop_id, main_img_path]
+                                cast_data_list.append(row)
+                            except Exception as e:
+                                st.write(f"⚠️ キャスト1名の解析中にエラー: {e}")
+                                continue
+                            
+                            progress_bar.progress((i + 1) / len(edit_links))
+
+                        return {"status": "success", "data": cast_data_list}
+                    except Exception as e:
+                        return {"status": "error", "message": str(e)}
+                    finally:
+                        await browser.close()
+
+            if st.button("🔄 デリじゃ情報をシートへ同期", type="primary"):
+                with st.status("同期実行中...") as status:
+                    res = asyncio.run(run_fetch_derija_data(target_shop['ID'], target_shop['raw_pass']))
+                    if res["status"] == "success":
+                        if res["data"]:
+                            worksheet_cast = spreadsheet.worksheet("キャスト情報")
+                            worksheet_cast.append_rows(res["data"])
+                            st.success(f"✅ {len(res['data'])} 名の情報を追加しました。")
+                            status.update(label="同期完了", state="complete")
+                        else:
+                            st.warning(f"キャストが見つかりませんでした。理由: {res.get('debug_msg', '不明')}")
+                            status.update(label="完了（データなし）", state="complete")
                     else:
-                        st.warning(res.get("message", "データがありませんでした。"))
-                        status.update(label="完了（データなし）", state="complete")
-                else:
-                    st.error(f"エラーが発生しました: {res['message']}")
-                    status.update(label="エラー終了", state="error")
+                        st.error(f"エラー: {res.get('message')}")
+                        status.update(label="エラー発生", state="error")
+    except Exception as e:
+        st.error(f"システムエラー: {e}")
