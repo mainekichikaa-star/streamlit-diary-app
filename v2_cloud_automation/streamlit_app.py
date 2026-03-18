@@ -866,10 +866,33 @@ with tab4:
                                 st.error(f"❌ {cast[2]} 失敗: {res['message']}")
                                 if "screenshot" in res: st.image(res["screenshot"])
         
+Streamlit Cloudなどの環境で「Executable doesn't exist」が出る場合、実行時に playwright install を叩くコードを書いても、環境の制約やパスの不一致でうまくいかないことが多々あります。
+
+設定ファイル（packages.txt など）を触らず、コード側で「ブラウザの実行ファイルを探しに行く場所」を明示的に指定し、かつ初回実行時にその場所へインストールを強制する方法が最も確実です。
+
+以下に、修正した tab5 のコードを提示します。
+
+修正後のコード (tab5)
+Python
+import os
+import subprocess
+import asyncio
+import streamlit as st
+import gspread
+from google.oauth2.service_account import Credentials
+from playwright.async_api import async_playwright
+import random
+import string
+
 # --- tab5: デリじゃ既存店コピー (Web → シート) ---
 with tab5:
     st.subheader("📥 デリじゃ キャスト情報の同期")
     
+    # 【追加】Playwrightのブラウザパスをユーザーディレクトリ内に固定
+    # これにより、権限エラーを避け、場所を特定させます
+    PW_BROWSER_PATH = os.path.join(os.getcwd(), ".playwright_browsers")
+    os.environ["PLAYWRIGHT_BROWSERS_PATH"] = PW_BROWSER_PATH
+
     # デバッグ表示用のプレースホルダ
     debug_image_space = st.empty()
 
@@ -891,9 +914,21 @@ with tab5:
             target_shop = next(s for s in derija_sync_shops if s['店舗名'] == selected_name)
 
             async def run_fetch_derija_data(shop_id, shop_pass):
+                # 【重要】実行直前にブラウザがあるか確認し、なければインストール
+                if not os.path.exists(PW_BROWSER_PATH):
+                    with st.spinner("初回のみブラウザのセットアップを行っています（1~2分かかります）..."):
+                        subprocess.run(["python", "-m", "playwright", "install", "chromium"], env=os.environ)
+                
                 cast_data_list = []
                 async with async_playwright() as p:
-                    browser = await p.chromium.launch(headless=True, args=['--no-sandbox', '--disable-setuid-sandbox'])
+                    # ブラウザ起動
+                    try:
+                        browser = await p.chromium.launch(headless=True, args=['--no-sandbox', '--disable-setuid-sandbox'])
+                    except Exception as launch_err:
+                        # 起動に失敗した場合は再インストールを試みてリトライ
+                        subprocess.run(["python", "-m", "playwright", "install", "chromium"], env=os.environ)
+                        browser = await p.chromium.launch(headless=True, args=['--no-sandbox', '--disable-setuid-sandbox'])
+
                     context = await browser.new_context(viewport={'width': 1280, 'height': 2000})
                     page = await context.new_page()
                     
@@ -906,28 +941,24 @@ with tab5:
                         await page.wait_for_load_state("networkidle")
 
                         # 2. 在籍嬢一覧へ移動
-                        # メニューの「在籍嬢一覧」というテキストを持つリンクをクリック
                         girls_menu = page.get_by_role("link", name="在籍嬢一覧")
                         if await girls_menu.count() > 0:
                             await girls_menu.click()
                         else:
-                            # 直接URL（バックアップ）
                             await page.goto("https://deli-fuzoku.jp/entry/girls", wait_until="networkidle")
                         
                         await page.wait_for_load_state("networkidle")
-                        await asyncio.sleep(2) # 読み込み待ち
+                        await asyncio.sleep(2)
 
-                        # --- デバッグ: 一覧ページのスクショを撮る ---
+                        # デバッグ用スクショ
                         screenshot = await page.screenshot(full_page=False)
                         debug_image_space.image(screenshot, caption="現在の一覧ページ画面 (デバッグ用)")
 
-                        # 3. 編集ボタンのonclickからURLを抽出
-                        # 抽出条件を「valueが編集であるinputタグ」に広げる
+                        # 3. 編集ボタン抽出
                         edit_links = await page.locator('input[value="編集"]').evaluate_all("""
                             nodes => nodes.map(n => {
                                 const onclick = n.getAttribute('onclick') || "";
-                                // location.href='...' または "..." の中身を抽出
-                                const match = onclick.match(/location\.href=['"]([^'"]+)['"]/);
+                                const match = onclick.match(/location\\.href=['"]([^'"]+)['"]/);
                                 return match ? match[1] : null;
                             }).filter(url => url !== null)
                         """)
@@ -944,7 +975,6 @@ with tab5:
                             target_url = link if link.startswith("http") else f"https://deli-fuzoku.jp{link}"
                             await page.goto(target_url, wait_until="networkidle")
                             
-                            # 項目抽出
                             try:
                                 name = await page.input_value("#form_girl_name")
                                 age = await page.input_value("#form_girl_age")
@@ -957,7 +987,6 @@ with tab5:
                                 except: cup = ""
                                 shop_comment = await page.input_value("#form_girl_pr")
                                 
-                                # 画像取得
                                 main_img_path = ""
                                 try:
                                     img_el = page.locator("div.girl_photo_box img").first
