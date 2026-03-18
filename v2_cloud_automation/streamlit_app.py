@@ -871,6 +871,7 @@ with tab4:
 with tab5:
     st.subheader("📥 デリじゃ キャスト情報の同期")
     
+    # デバッグ表示用のプレースホルダ
     debug_image_space = st.empty()
 
     try:
@@ -893,89 +894,86 @@ with tab5:
             async def run_fetch_derija_data(shop_id, shop_pass):
                 cast_data_list = []
                 async with async_playwright() as p:
-                    # ブラウザ起動 (headless=TrueでOKですが、問題時はFalseにして動作確認してください)
+                    # ブラウザ起動
                     browser = await p.chromium.launch(headless=True, args=['--no-sandbox', '--disable-setuid-sandbox'])
-                    context = await browser.new_context(viewport={'width': 1280, 'height': 2000})
+                    context = await browser.new_context(
+                        viewport={'width': 1280, 'height': 2000},
+                        user_agent="Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36"
+                    )
                     page = await context.new_page()
                     
                     try:
-                        # 1. ログイン
-                        await page.goto("https://deli-fuzoku.jp/entry/", wait_until="networkidle")
-                        await page.fill("#form_username", shop_id)
-                        await page.fill("#form_password", shop_pass)
-                        await page.click("button.loginBtn")
+                        # 1. ログイン画面
+                        await page.goto("https://deli-fuzoku.jp/entry/", wait_until="domcontentloaded")
+                        
+                        # IDとパスワードの入力
+                        # セレクタをより汎用的なものに変更
+                        await page.wait_for_selector('input[name="username"], #form_username')
+                        await page.fill('input[name="username"], #form_username', shop_id)
+                        await page.fill('input[name="password"], #form_password', shop_pass)
+                        
+                        # ログインボタンをクリック（複数の候補で試行）
+                        login_button = page.locator('input[type="submit"], button[type="submit"], .loginBtn').first
+                        await login_button.click()
+                        
+                        # ログイン後の遷移待ち
                         await page.wait_for_load_state("networkidle")
-
-                        # 2. 在籍嬢一覧へ移動
-                        # URLへ直接飛ぶ方が確実な場合が多いです
+                        
+                        # 2. 在籍嬢一覧へ直接移動
                         await page.goto("https://deli-fuzoku.jp/entry/girls", wait_until="networkidle")
-                        # 読み込み待ちを強化
-                        await page.wait_for_selector("body", timeout=10000)
-                        await asyncio.sleep(3) 
+                        await asyncio.sleep(2) # 描画待ち
 
-                        # デバッグ用スクショ
-                        screenshot = await page.screenshot(full_page=True)
-                        debug_image_space.image(screenshot, caption="現在の一覧ページ画面 (デバッグ用)")
+                        # --- デバッグ: ログイン後のスクショを撮る ---
+                        screenshot = await page.screenshot(full_page=False)
+                        debug_image_space.image(screenshot, caption="ログイン後の画面確認 (デバッグ用)")
 
-                        # 3. 編集ボタンの抽出
-                        # より汎用的なJSでの抽出に変更
+                        # 3. 編集ボタンのURLを抽出
+                        # onclick属性の中身を正規表現で引っこ抜く
                         edit_links = await page.evaluate("""
                             () => {
                                 const urls = [];
-                                // inputタグまたはbuttonタグから「編集」という文字を持つものを探す
-                                const elements = Array.from(document.querySelectorAll('input, button, a'));
-                                elements.forEach(el => {
-                                    const val = el.value || el.innerText || "";
-                                    const onclick = el.getAttribute('onclick') || "";
-                                    
-                                    if (val.includes("編集") || onclick.includes("edit")) {
-                                        const match = onclick.match(/location\\.href=['"]([^'"]+)['"]/);
-                                        if (match) {
-                                            urls.push(match[1]);
-                                        } else if (el.tagName === 'A' && el.href) {
-                                            urls.push(el.getAttribute('href'));
-                                        }
-                                    }
+                                const inputs = Array.from(document.querySelectorAll('input[onclick*="location.href"]'));
+                                inputs.forEach(el => {
+                                    const onclick = el.getAttribute('onclick');
+                                    const match = onclick.match(/location\\.href=['"]([^'"]+)['"]/);
+                                    if (match) urls.push(match[1]);
                                 });
-                                return [...new Set(urls)]; // 重複排除
+                                return urls;
                             }
                         """)
                         
-                        st.write(f"DEBUG: 発見されたリンク数: {len(edit_links)}")
+                        # 重複排除
+                        edit_links = list(dict.fromkeys(edit_links))
                         
                         if not edit_links:
-                            return {"status": "success", "data": [], "debug_msg": "編集ボタン（またはonclickリンク）が見つかりませんでした。"}
+                            return {"status": "success", "data": [], "debug_msg": "ログインはできたようですが、編集対象のキャスト（ボタン）が見つかりませんでした。"}
 
                         st.write(f"🔍 {len(edit_links)} 名のキャストを解析中...")
                         progress_bar = st.progress(0)
 
                         for i, link in enumerate(edit_links):
                             target_url = link if link.startswith("http") else f"https://deli-fuzoku.jp{link}"
-                            # IDが含まれないリンクなどはスキップ
-                            if "edit" not in target_url and "girl_id" not in target_url:
-                                continue
-
                             await page.goto(target_url, wait_until="networkidle")
                             
                             try:
-                                # 要素があるか確認してから取得
-                                name = await page.input_value("#form_girl_name") if await page.locator("#form_girl_name").count() > 0 else "不明"
-                                age = await page.input_value("#form_girl_age") if await page.locator("#form_girl_age").count() > 0 else ""
-                                tall = await page.input_value("#form_girl_height") if await page.locator("#form_girl_height").count() > 0 else ""
-                                bust = await page.input_value("#form_girl_sizeb") if await page.locator("#form_girl_sizeb").count() > 0 else ""
-                                waist = await page.input_value("#form_girl_sizew") if await page.locator("#form_girl_sizew").count() > 0 else ""
-                                hip = await page.input_value("#form_girl_sizeh") if await page.locator("#form_girl_sizeh").count() > 0 else ""
+                                # 詳細データの抽出
+                                name = await page.input_value("#form_girl_name")
+                                age = await page.input_value("#form_girl_age")
+                                tall = await page.input_value("#form_girl_height")
+                                bust = await page.input_value("#form_girl_sizeb")
+                                waist = await page.input_value("#form_girl_sizew")
+                                hip = await page.input_value("#form_girl_sizeh")
                                 
                                 try:
                                     cup = await page.locator("#form_girl_cup").input_value()
                                 except: cup = ""
                                 
-                                shop_comment = await page.input_value("#form_girl_pr") if await page.locator("#form_girl_pr").count() > 0 else ""
+                                shop_comment = await page.input_value("#form_girl_pr")
                                 
                                 # 画像取得
                                 main_img_path = ""
                                 try:
-                                    img_el = page.locator("div.girl_photo_box img, .photo img").first
+                                    img_el = page.locator("div.girl_photo_box img").first
                                     if await img_el.count() > 0:
                                         img_src = await img_el.get_attribute("src")
                                         if img_src and img_src.startswith("http"):
@@ -989,15 +987,14 @@ with tab5:
 
                                 row = ["", "", name, age, tall, bust, cup, waist, hip, "", "", "", shop_comment, "", "", shop_id, main_img_path]
                                 cast_data_list.append(row)
-                            except Exception as e:
-                                st.write(f"⚠️ キャスト1名の解析中にエラー: {e}")
-                                continue
+                            except:
+                                pass
                             
                             progress_bar.progress((i + 1) / len(edit_links))
 
                         return {"status": "success", "data": cast_data_list}
                     except Exception as e:
-                        return {"status": "error", "message": str(e)}
+                        return {"status": "error", "message": f"操作失敗: {str(e)}"}
                     finally:
                         await browser.close()
 
@@ -1011,7 +1008,7 @@ with tab5:
                             st.success(f"✅ {len(res['data'])} 名の情報を追加しました。")
                             status.update(label="同期完了", state="complete")
                         else:
-                            st.warning(f"キャストが見つかりませんでした。理由: {res.get('debug_msg', '不明')}")
+                            st.warning(f"結果: {res.get('debug_msg', 'データが見つかりませんでした。')}")
                             status.update(label="完了（データなし）", state="complete")
                     else:
                         st.error(f"エラー: {res.get('message')}")
