@@ -870,24 +870,30 @@ with tab4:
 with tab5:
     st.subheader("📥 デリじゃ キャスト情報の同期")
     
-    # ブラウザのインストール先をカレントディレクトリに固定
+    # Playwrightのパス設定
     PW_BROWSER_PATH = os.path.join(os.getcwd(), ".playwright_browsers")
     os.environ["PLAYWRIGHT_BROWSERS_PATH"] = PW_BROWSER_PATH
 
-    # デバッグ表示用のプレースホルダ
     debug_image_space = st.empty()
 
     try:
+        # API制限対策：認証とデータ取得を最小限にする
         creds = Credentials.from_service_account_info(st.secrets["gcp_service_account"], scopes=SCOPE)
         gs_client = gspread.authorize(creds)
         spreadsheet = gs_client.open_by_key(SPREADSHEET_ID)
+        
+        # 「シート3」の全データを一度だけ取得（API叩く回数を減らす）
         worksheet_shops = spreadsheet.worksheet("シート3")
         data_shops = worksheet_shops.get_all_records()
 
         derija_keywords = ["デリじゃ", "デリジャ", "でりじゃ"]
         derija_sync_shops = [
-            {"店舗名": str(s.get('登録店舗')).strip(), "ID": str(s.get('店舗ID')).strip(), "raw_pass": str(s.get('店舗PASSWORD')).strip()}
-            for s in data_shops if any(k in str(s.get('登録店舗')).strip() for k in derija_keywords)
+            {
+                "店舗名": str(s.get('登録店舗', '')).strip(), 
+                "ID": str(s.get('店舗ID', '')).strip(), 
+                "raw_pass": str(s.get('店舗PASSWORD', '')).strip()
+            }
+            for s in data_shops if any(k in str(s.get('登録店舗', '')) for k in derija_keywords)
         ]
 
         if derija_sync_shops:
@@ -895,7 +901,7 @@ with tab5:
             target_shop = next(s for s in derija_sync_shops if s['店舗名'] == selected_name)
 
             async def run_fetch_derija_data(shop_id, shop_pass):
-                # ブラウザがない場合はインストールを実行
+                # ブラウザチェック
                 if not os.path.exists(PW_BROWSER_PATH):
                     subprocess.run(["python", "-m", "playwright", "install", "chromium"], env=os.environ)
                 
@@ -904,7 +910,6 @@ with tab5:
                     try:
                         browser = await p.chromium.launch(headless=True, args=['--no-sandbox', '--disable-setuid-sandbox'])
                     except:
-                        # 起動失敗時に再試行
                         subprocess.run(["python", "-m", "playwright", "install", "chromium"], env=os.environ)
                         browser = await p.chromium.launch(headless=True, args=['--no-sandbox', '--disable-setuid-sandbox'])
 
@@ -912,39 +917,35 @@ with tab5:
                     page = await context.new_page()
                     
                     try:
+                        # ログイン
                         await page.goto("https://deli-fuzoku.jp/entry/", wait_until="networkidle")
                         await page.fill("#form_username", shop_id)
                         await page.fill("#form_password", shop_pass)
                         await page.click("button.loginBtn")
                         await page.wait_for_load_state("networkidle")
 
-                        girls_menu = page.get_by_role("link", name="在籍嬢一覧")
-                        if await girls_menu.count() > 0:
-                            await girls_menu.click()
-                        else:
-                            await page.goto("https://deli-fuzoku.jp/entry/girls", wait_until="networkidle")
-                        
-                        await page.wait_for_load_state("networkidle")
+                        # 一覧へ移動
+                        await page.goto("https://deli-fuzoku.jp/entry/girls", wait_until="networkidle")
                         await asyncio.sleep(2)
 
                         # スクショ
                         screenshot = await page.screenshot(full_page=False)
-                        debug_image_space.image(screenshot, caption="現在の一覧ページ画面")
+                        debug_image_space.image(screenshot, caption="解析中の一覧画面")
 
+                        # 編集URL抽出
                         edit_links = await page.locator('input[value="編集"]').evaluate_all("""
                             nodes => nodes.map(n => {
                                 const onclick = n.getAttribute('onclick') || "";
                                 const match = onclick.match(/location\\.href=['"]([^'"]+)['"]/);
                                 return match ? match[1] : null;
-                            }).filter(url => url !== null)
+                            }).filter(u => u !== null)
                         """)
-                        
                         edit_links = list(dict.fromkeys(edit_links))
                         
                         if not edit_links:
-                            return {"status": "success", "data": [], "debug_msg": "編集リンクなし"}
+                            return {"status": "success", "data": [], "debug_msg": "編集ボタンなし"}
 
-                        st.write(f"🔍 {len(edit_links)} 名を解析中...")
+                        st.info(f"🔍 {len(edit_links)} 名の解析を開始します...")
                         progress_bar = st.progress(0)
 
                         for i, link in enumerate(edit_links):
@@ -956,13 +957,12 @@ with tab5:
                                 age = await page.input_value("#form_girl_age")
                                 tall = await page.input_value("#form_girl_height")
                                 bust = await page.input_value("#form_girl_sizeb")
+                                cup = await page.locator("#form_girl_cup").input_value() if await page.locator("#form_girl_cup").count() > 0 else ""
                                 waist = await page.input_value("#form_girl_sizew")
                                 hip = await page.input_value("#form_girl_sizeh")
-                                try:
-                                    cup = await page.locator("#form_girl_cup").input_value()
-                                except: cup = ""
                                 shop_comment = await page.input_value("#form_girl_pr")
                                 
+                                # 画像
                                 main_img_path = ""
                                 try:
                                     img_el = page.locator("div.girl_photo_box img").first
@@ -980,6 +980,7 @@ with tab5:
                                 cast_data_list.append(row)
                             except: pass
                             progress_bar.progress((i + 1) / len(edit_links))
+                            await asyncio.sleep(0.5) # 負荷軽減
 
                         return {"status": "success", "data": cast_data_list}
                     except Exception as e:
@@ -988,19 +989,28 @@ with tab5:
                         await browser.close()
 
             if st.button("🔄 デリじゃ情報をシートへ同期", type="primary"):
+                # API制限(Quota)対策：少し待機してから実行
+                time.sleep(1) 
                 with st.status("同期実行中...") as status:
                     res = asyncio.run(run_fetch_derija_data(target_shop['ID'], target_shop['raw_pass']))
                     if res["status"] == "success":
                         if res["data"]:
                             worksheet_cast = spreadsheet.worksheet("キャスト情報")
+                            # まとめて書き込み（API消費1回分）
                             worksheet_cast.append_rows(res["data"])
-                            st.success(f"✅ {len(res['data'])} 名追加完了")
+                            st.success(f"✅ {len(res['data'])} 名の情報を追加しました。")
                             status.update(label="同期完了", state="complete")
                         else:
-                            st.warning("データが見つかりませんでした")
+                            st.warning(f"取得データなし: {res.get('debug_msg')}")
                             status.update(label="完了", state="complete")
                     else:
                         st.error(f"エラー: {res.get('message')}")
                         status.update(label="エラー", state="error")
+        else:
+            st.warning("「デリじゃ」キーワードを含む店舗がシート3に見つかりません。")
+
     except Exception as e:
-        st.error(f"システムエラー: {e}")
+        if "429" in str(e):
+            st.error("Google Sheets APIの制限に達しました。1分ほど待ってから再度お試しください。")
+        else:
+            st.error(f"システムエラー: {e}")
