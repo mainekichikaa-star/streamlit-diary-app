@@ -51,6 +51,26 @@ LOCAL_PW_PATH = os.path.join(os.getcwd(), "pw-browsers")
 os.environ["PLAYWRIGHT_BROWSERS_PATH"] = LOCAL_PW_PATH
 
 # ==========================================
+# 【Playwright インストール確保関数】
+# ==========================================
+def ensure_playwright_installed():
+    """Playwright ブラウザをインストール確保"""
+    if not os.path.exists(LOCAL_PW_PATH):
+        try:
+            st.info("🔄 Playwright ブラウザをインストール中...")
+            subprocess.run(
+                [sys.executable, "-m", "playwright", "install", "chromium"],
+                check=True,
+                capture_output=True
+            )
+            st.success("✅ Playwright インストール完了")
+        except subprocess.CalledProcessError as e:
+            st.error(f"❌ Playwright インストール失敗: {e}")
+            logger.error(f"Playwright install failed: {e}")
+            return False
+    return True
+
+# ==========================================
 # 【NEW】キャッシュ・認証情報の一元管理
 # ==========================================
 @st.cache_resource
@@ -126,7 +146,7 @@ def download_by_filename(path_str, save_path):
         logger.error(f"download_by_filename failed: {e}")
         return False
 
-# --- 自動化ロジック（変更なし）---
+# --- 自動化ロジック ---
 async def upload_and_crop(page, modal_id, file_path):
     try:
         await page.locator(f"{modal_id} input[type='file']").set_input_files(file_path)
@@ -173,9 +193,8 @@ async def run_automation(cast_row_list, shop_id, shop_pass, sub_image_paths):
     idx_shop_comment = 12
     idx_main_img = 16
     
-    if not os.path.exists(LOCAL_PW_PATH):
-        try: subprocess.run([sys.executable, "-m", "playwright", "install", "chromium"], check=True)
-        except: pass
+    if not ensure_playwright_installed():
+        return {"status": "error", "message": "Playwright browser not available"}
 
     async with async_playwright() as p:
         browser = await p.chromium.launch(headless=True, args=['--no-sandbox', '--disable-dev-shm-usage', '--lang=ja-JP'])
@@ -313,49 +332,42 @@ with tab1:
     
     try:
         # データ取得
-        creds = Credentials.from_service_account_info(st.secrets["gcp_service_account"], scopes=SCOPE)
+        creds = get_credentials()
         gs_client = gspread.authorize(creds)
         spreadsheet = gs_client.open_by_key(SPREADSHEET_ID)
         
-        worksheet_cast = spreadsheet.worksheet("キャスト情報")
-        worksheet_images = spreadsheet.worksheet("キャスト画像")
-        worksheet_shops = spreadsheet.worksheet("シート3")
+        worksheet_cast = _call_sheets_api(lambda: spreadsheet.worksheet("キャスト情報"))
+        worksheet_images = _call_sheets_api(lambda: spreadsheet.worksheet("キャスト画像"))
+        worksheet_shops = _call_sheets_api(lambda: spreadsheet.worksheet("シート3"))
 
-        data_info = worksheet_cast.get_all_values()
+        data_info = _call_sheets_api(lambda: worksheet_cast.get_all_values())
         headers_info = data_info[0]
         rows_info = data_info[1:]
         
-        data_images = worksheet_images.get_all_values()
+        data_images = _call_sheets_api(lambda: worksheet_images.get_all_values())
         rows_images = data_images[1:]
         
-        #シート3をレコード形式で取得
-        data_shops = worksheet_shops.get_all_records()
+        data_shops = _call_sheets_api(lambda: worksheet_shops.get_all_records())
         
         # 店舗ごとの未登録数をカウント
         shop_status = []
         for shop in data_shops:
-            #シート3の各列を取得
             s_name = str(shop.get('登録店舗')).strip()
             s_id = str(shop.get('店舗ID')).strip()
             s_pass = str(shop.get('店舗PASSWORD')).strip()
             
-            # --- 判定ロジック ---
-            # キャスト情報のO列(index 14)と、シート3の「店舗ID」を照合
             unregistered_casts = []
             for r in rows_info:
                 if len(r) > 14:
-                    # O列(14): 登録店舗（ここに入っている店舗IDを確認）
                     cast_shop_id = str(r[14]).strip()
-                    # P列(15): 登録ステータス（「登録済」以外、または空白を対象）
                     status_field = str(r[15]).strip() if len(r) > 15 else ""
                     
-                    # キャスト側のO列とシート3の店舗IDが一致し、かつ未登録の場合
                     if cast_shop_id == s_id and status_field != "登録済":
                         unregistered_casts.append(r)
             
             if s_id and s_pass:
                 shop_status.append({
-                    "店舗名": s_name,      # 表示用は「登録店舗」名
+                    "店舗名": s_name,
                     "ID": s_id,
                     "PW": "********",
                     "未登録数": len(unregistered_casts),
@@ -373,7 +385,6 @@ with tab1:
             cols = st.columns(3)
             for idx, shop in enumerate(shop_status):
                 with cols[idx % 3]:
-                    # ボタン表示は「店舗名 (人数)」
                     is_selected = st.checkbox(f"{shop['店舗名']} ({shop['未登録数']}名)", key=f"shop_{idx}")
                     if is_selected:
                         selected_shops.append(shop)
@@ -388,18 +399,18 @@ with tab1:
                     st.markdown(f"### 🏢 店舗: {shop['店舗名']}")
                     for cast in shop['casts']:
                         target_id = str(cast[0]).strip()
-                        cast_name = cast[2] # C列の名前をそのまま使用
+                        cast_name = cast[2]
                         sub_urls = [img_row[2] for img_row in rows_images if str(img_row[1]).strip() == target_id]
                         
-                        with st.status(f"【{shop['店舗名']}】{cast_name} さんの登録中...") as status:
-                            # 自動化処理の実行
+                        with st.status(f"【{shop['店舗名']}】{cast_name} さ��の登録中...") as status:
                             res = asyncio.run(run_automation(cast, shop['ID'], shop['raw_pass'], sub_urls))
                             
                             if res["status"] == "success":
-                                # スプレッドシートのP列(16列目)を「登録済」に更新
                                 row_idx = next((i for i, r in enumerate(data_info) if str(r[0]).strip() == target_id), None)
                                 if row_idx:
-                                    worksheet_cast.update_cell(row_idx + 1, 16, "登録済")
+                                    _call_sheets_api(
+                                        lambda: worksheet_cast.update_cell(row_idx + 1, 16, "登録済")
+                                    )
                                 status.update(label=f"✅ {cast_name} 完了", state="complete")
                             else:
                                 st.error(f"{cast_name} エラー: {res['message']}")
@@ -413,14 +424,12 @@ with tab1:
 with tab2:
     st.subheader("🚉 駅ちかネット予約登録 (e-yoyaku.jp)")
     
-    # Tab 1で作成した shop_status を利用して店舗選択を表示
     st.write("ネット予約設定を行う店舗を選択してください:")
     selected_yoyaku_shops = []
     
     y_cols = st.columns(3)
     for idx, shop in enumerate(shop_status):
         with y_cols[idx % 3]:
-            # Tab 2専用のキーでチェックボックスを作成
             is_y_selected = st.checkbox(f"{shop['店舗名']} を設定", key=f"yoyaku_{idx}")
             if is_y_selected:
                 selected_yoyaku_shops.append(shop)
@@ -434,26 +443,21 @@ with tab2:
             for shop in selected_yoyaku_shops:
                 st.markdown(f"### 🏢 店舗: {shop['店舗名']} の同期処理を実行中...")
                 
-                # --- 自動化メイン関数 (最新の判定ロジックを保持) ---
                 async def run_yoyaku_automation(s_id, s_pass):
                     async with async_playwright() as p:
-                        # ブラウザ起動（日本語設定）
                         browser = await p.chromium.launch(headless=True, args=['--no-sandbox', '--lang=ja-JP'])
                         context = await browser.new_context(viewport={'width': 1280, 'height': 1200})
                         page = await context.new_page()
                         
                         try:
-                            # --- 1. ランキングデリ ログイン ---
                             await page.goto("https://ranking-deli.jp/admin/login")
                             await page.fill("#form_email", str(s_id).strip())
                             await page.fill("#form_password", str(s_pass).strip())
                             await page.click("#form_submit")
                             await page.wait_for_load_state("networkidle")
 
-                            # --- 2. ランキングデリから各データを取得 ---
                             await page.goto("https://ranking-deli.jp/admin/shopcharges/")
                             
-                            # 2-1. メインプラン情報 (course[0])
                             course_data = {"title": await page.locator("#form_course\\[0\\]\\[course_name\\]").get_attribute("value"), "prices": []}
                             for i in range(1, 6):
                                 t_val = await page.locator(f"#form_course\\[0\\]\\[time{i}\\]").get_attribute("value")
@@ -461,27 +465,22 @@ with tab2:
                                 if t_val and p_val:
                                     course_data["prices"].append({"time": t_val, "price": p_val})
 
-                            # 2-2. その他料金 (course[1]) から 入会金・指名料 を取得
                             extra_fees = {"admission": "", "nomination": "0", "repeat": "0"}
                             for i in range(1, 6):
                                 label = await page.locator(f"#form_course\\[1\\]\\[time{i}\\]").get_attribute("value") or ""
                                 val = await page.locator(f"#form_course\\[1\\]\\[charge{i}\\]").get_attribute("value") or ""
                                 
-                                # 入会金の判定
                                 if "入会金" in label:
                                     clean_val = "".join(filter(str.isdigit, val))
                                     if clean_val and clean_val != "0":
                                         extra_fees["admission"] = clean_val
                                 
-                                # 指名料（通常）の判定
                                 if any(x in label for x in ["指名料", "ネット指名料", "指名", "写真指名料", "写真指名"]):
                                     extra_fees["nomination"] = "".join(filter(str.isdigit, val)) or "0"
 
-                                # 本指名の判定
                                 if any(x in label for x in ["本指名", "本指名料"]):
                                     extra_fees["repeat"] = "".join(filter(str.isdigit, val)) or "0"
 
-                            # 2-3. オプション情報取得
                             await page.goto("https://ranking-deli.jp/admin/shopoptions/")
                             option_data = []
                             for i in range(20):
@@ -494,7 +493,6 @@ with tab2:
                                         option_data.append({"name": name.strip(), "fee": fee or "0"})
                                 else: break
 
-                            # 2-4. 交通費情報取得
                             await page.goto("https://ranking-deli.jp/admin/shop/transportation")
                             transport_data = []
                             fee_divs = await page.locator(".carfare-fee-div").all()
@@ -507,17 +505,14 @@ with tab2:
                                     if area_name:
                                         transport_data.append({"area": area_name, "fee": fee_val})
 
-                            # --- 3. 予約管理（駅ちかネット）へデータ反映 ---
                             async with context.expect_page() as new_page_info:
                                 await page.locator("a.web_link").click()
                             yoyaku_page = await new_page_info.value
                             await yoyaku_page.wait_for_load_state()
 
-                            # 設定メニュー展開
                             await yoyaku_page.locator(".listItem.setting .menuTxt").click()
                             await asyncio.sleep(1)
 
-                            # 3-1. 予約設定（公開・受付・入会金）
                             await yoyaku_page.locator("a.acListTxt", has_text="予約設定").first.click()
                             await yoyaku_page.locator("label[for='release']").click()
                             await yoyaku_page.locator("label[for='freeReserveAccept']").click()
@@ -525,7 +520,6 @@ with tab2:
                             await yoyaku_page.locator("button.saveBt", has_text="保存").click()
                             await asyncio.sleep(1)
 
-                            # 3-2. 料金コース同期
                             await yoyaku_page.locator("a.acListTxt", has_text="料金コース").first.click()
                             if course_data["title"]:
                                 await yoyaku_page.locator("input[name='courses[0][name]']").fill(course_data["title"])
@@ -538,7 +532,6 @@ with tab2:
                             await yoyaku_page.locator("button.js-save-btn").click()
                             await asyncio.sleep(1)
 
-                            # 3-3. オプション同期
                             await yoyaku_page.locator("a.acListTxt", has_text="オプション").first.click()
                             for idx, opt in enumerate(option_data):
                                 n_in, f_in = yoyaku_page.locator(f"input[name='options[{idx}][name]']"), yoyaku_page.locator(f"input[name='options[{idx}][fee]']")
@@ -548,7 +541,6 @@ with tab2:
                             await yoyaku_page.locator("button.js-save-btn").click()
                             await asyncio.sleep(1)
 
-                            # 3-4. 交通費同期
                             await yoyaku_page.locator("a.acListTxt", has_text="交通費").first.click()
                             for idx, tf in enumerate(transport_data):
                                 a_in, f_in = yoyaku_page.locator(f"input[name='carfares[{idx}][area_name]']"), yoyaku_page.locator(f"input[name='carfares[{idx}][fee]']")
@@ -558,11 +550,10 @@ with tab2:
                             await yoyaku_page.locator("button.js-save-btn").click()
                             await asyncio.sleep(1)
 
-                            # 3-5. チャット設定 & 3-6. 予約通知設定
                             target_email = "isgroup0001@gmail.com"
                             for menu_name in ["チャット設定", "予約通知"]:
                                 await yoyaku_page.locator("a.acListTxt", has_text=menu_name).first.click()
-                                if menu_name == "チャット設定":
+                                if menu_name == "チャッ��設定":
                                     await yoyaku_page.locator("label[for='Release']").click()
                                 exs_emails = await yoyaku_page.locator("input[type='email']").all_attribute_values("value")
                                 if target_email not in [e.strip() for e in exs_emails if e]:
@@ -572,7 +563,6 @@ with tab2:
                                 await yoyaku_page.locator(save_btn_sel).click()
                                 await asyncio.sleep(1)
 
-                            # 3-7. 女の子設定（指名料一括反映）
                             await yoyaku_page.locator("a.acListTxt", has_text="女の子").first.click()
                             await yoyaku_page.wait_for_load_state()
                             await yoyaku_page.locator("label[for='allGirls']").click()
@@ -587,7 +577,6 @@ with tab2:
                         finally:
                             await browser.close()
 
-                # --- 実行 ---
                 with st.status(f"🔄 {shop['店舗名']} の同期を実行中...") as status:
                     res = asyncio.run(run_yoyaku_automation(shop['ID'], shop['raw_pass']))
                     if res["status"] == "success":
@@ -601,23 +590,24 @@ with tab3:
     st.subheader("📥 既存店キャスト情報の同期 (Web → シート)")
     st.info("選択した店舗の管理画面にログインし、登録されている全てのキャスト情報をスプレッドシートへ書き出します。")
 
-    # 店舗リストの作成
     shop_names = [s['店舗名'] for s in shop_status] if 'shop_status' in locals() else []
 
     if shop_names:
         selected_sync_shop_name = st.selectbox("情報を取得する店舗を選択", shop_names, key="sync_shop_select")
         target_shop = next(s for s in shop_status if s['店舗名'] == selected_sync_shop_name)
 
-        # --- ドライブ用ヘルパー ---
         def upload_to_drive_custom(file_content, folder_name, file_name):
             drive_service = get_drive_service()
-            # フォルダを探す
             query = f"name = '{folder_name}' and mimeType = 'application/vnd.google-apps.folder' and trashed = false"
-            folders = drive_service.files().list(q=query, fields="files(id)").execute().get('files', [])
+            folders = _call_drive_api(
+                lambda: drive_service.files().list(q=query, fields="files(id)").execute().get('files', [])
+            )
             
             if not folders:
                 folder_metadata = {'name': folder_name, 'mimeType': 'application/vnd.google-apps.folder'}
-                folder = drive_service.files().create(body=folder_metadata, fields='id').execute()
+                folder = _call_drive_api(
+                    lambda: drive_service.files().create(body=folder_metadata, fields='id').execute()
+                )
                 folder_id = folder.get('id')
             else:
                 folder_id = folders[0]['id']
@@ -625,16 +615,14 @@ with tab3:
             file_metadata = {'name': file_name, 'parents': [folder_id]}
             from googleapiclient.http import MediaIoBaseUpload
             media = MediaIoBaseUpload(io.BytesIO(file_content), mimetype='image/jpeg')
-            drive_service.files().create(body=file_metadata, media_body=media, fields='id').execute()
+            _call_drive_api(
+                lambda: drive_service.files().create(body=file_metadata, media_body=media, fields='id').execute()
+            )
             return f"{folder_name}/{file_name}"
 
-        # --- 同期処理用関数 ---
         async def run_fetch_cast_data(shop_id, shop_pass, shop_name):
-            if not os.path.exists(LOCAL_PW_PATH):
-                try:
-                    subprocess.run([sys.executable, "-m", "playwright", "install", "chromium"], check=True)
-                except:
-                    pass
+            if not ensure_playwright_installed():
+                return {"status": "error", "message": "Playwright browser not available"}
 
             cast_data_list = []
             async with async_playwright() as p:
@@ -646,17 +634,14 @@ with tab3:
                 page = await context.new_page()
 
                 try:
-                    # 1. ログイン
                     await page.goto("https://ranking-deli.jp/admin/login")
                     await page.fill("#form_email", str(shop_id).strip())
                     await page.fill("#form_password", str(shop_pass).strip())
                     await page.click("#form_submit")
                     await page.wait_for_load_state("networkidle")
                     
-                    # 2. 女の子一覧ページへ
                     await page.goto("https://ranking-deli.jp/admin/girls/")
                     
-                    # 3. 編集URL取得
                     edit_links = await page.locator('.girl-btn a[href*="edit"]').evaluate_all(
                         "nodes => nodes.map(n => n.href)"
                     )
@@ -671,7 +656,6 @@ with tab3:
                         await page.goto(link)
                         await asyncio.sleep(1) 
 
-                        # データ抽出
                         site_girl_name = await page.input_value("#form_name")
                         age = await page.input_value("#form_age")
                         tall = await page.input_value("#form_tall")
@@ -689,10 +673,8 @@ with tab3:
                         girl_comment = await page.input_value("#form_girl_comments")
                         shop_comment = await page.input_value("#form_comments")
 
-                        # --- 画像1の取得 ---
                         main_image_path_in_sheet = ""
                         try:
-                            # セレクタから画像1の大画像URLを取得
                             img_src = await page.locator("#image-box1 .img_b img").get_attribute("src")
                             if img_src:
                                 response = requests.get(img_src)
@@ -700,33 +682,30 @@ with tab3:
                                     rand_str = ''.join(random.choices(string.digits, k=6))
                                     custom_id = f"{str(shop_id).strip()}{(i + 1):02d}"
                                     filename = f"{custom_id}.メイン画像.{rand_str}.jpg"
-                                    # ドライブへアップロード
                                     main_image_path_in_sheet = upload_to_drive_custom(response.content, "キャスト情報_Images", filename)
                         except Exception as e:
                             st.warning(f"画像取得スキップ ({site_girl_name}): {e}")
 
-                        # --- IDの生成 (店舗ID + 連番2桁) ---
                         custom_id = f"{str(shop_id).strip()}{(i + 1):02d}"
 
-                        # --- 指定された列順に構成 (Q列まで拡張) ---
                         row = [
-                            custom_id,                  # A: ID
-                            "",                         # B: エリア
-                            f"{shop_name} {site_girl_name}", # C: 店舗名 名前
-                            age,                        # D: 年齢
-                            tall,                       # E: 身長
-                            bust,                       # F: バスト
-                            cup,                        # G: カップ数
-                            waist,                      # H: ウエスト
-                            hip,                        # I: ヒップ
-                            "",                         # J: 系統
-                            catch,                      # K: キャッチコピー
-                            girl_comment,               # L: 女の子コメント
-                            shop_comment,               # M: 店舗コメント
-                            "",                         # N: (空)
-                            "",                         # O: (空)
-                            "",                         # P: (空)
-                            main_image_path_in_sheet    # Q: メイン画像
+                            custom_id,
+                            "",
+                            f"{shop_name} {site_girl_name}",
+                            age,
+                            tall,
+                            bust,
+                            cup,
+                            waist,
+                            hip,
+                            "",
+                            catch,
+                            girl_comment,
+                            shop_comment,
+                            "",
+                            "",
+                            "",
+                            main_image_path_in_sheet
                         ]
                         cast_data_list.append(row)
                         progress_bar.progress((i + 1) / len(edit_links))
@@ -737,7 +716,6 @@ with tab3:
                 finally:
                     await browser.close()
 
-        # --- 実行ボタン ---
         if st.button("🔄 同期を実行（スプレッドシートへ追記）", type="primary", key="exec_sync_btn"):
             with st.status("同期処理を実行中...") as status:
                 loop = asyncio.new_event_loop()
@@ -747,11 +725,13 @@ with tab3:
                     
                     if result["status"] == "success":
                         if result["data"]:
-                            creds = Credentials.from_service_account_info(st.secrets["gcp_service_account"], scopes=SCOPE)
+                            creds = get_credentials()
                             gs_client = gspread.authorize(creds)
-                            worksheet = gs_client.open_by_key(SPREADSHEET_ID).worksheet("キャスト情報")
+                            worksheet = _call_sheets_api(
+                                lambda: gs_client.open_by_key(SPREADSHEET_ID).worksheet("キャスト情報")
+                            )
                             
-                            worksheet.append_rows(result["data"])
+                            _call_sheets_api(lambda: worksheet.append_rows(result["data"]))
                             st.success(f"✅ {len(result['data'])} 名の情報を画像と共にシートに追加しました。")
                             st.dataframe(pd.DataFrame(result["data"], columns=["ID", "エリア", "名前", "年齢", "身長", "バスト", "カップ", "ウエスト", "ヒップ", "系統", "キャッチ", "女コメント", "店コメント", "空1", "空2", "空3", "メイン画像"]))
                         else:
@@ -763,22 +743,22 @@ with tab3:
                 finally:
                     loop.close()
 
-    
     else:
         st.error("店舗データが読み込まれていません。")
 
-
-# --- tab4: デリじゃ自動登録 (タグ・カップ数対応・入力安定版) ---
 with tab4:
     st.subheader("🍓 デリじゃ キャスト自動登録")
 
     @st.cache_data(ttl=300)
     def fetch_data_v38():
         try:
-            creds = Credentials.from_service_account_info(st.secrets["gcp_service_account"], scopes=SCOPE)
+            creds = get_credentials()
             gc = gspread.authorize(creds)
-            ss = gc.open_by_key(SPREADSHEET_ID)
-            return ss.worksheet("キャスト情報").get_all_values(), ss.worksheet("シート3").get_all_records()
+            ss = _call_sheets_api(lambda: gc.open_by_key(SPREADSHEET_ID))
+            return (
+                _call_sheets_api(lambda: ss.worksheet("キャスト情報").get_all_values()),
+                _call_sheets_api(lambda: ss.worksheet("シート3").get_all_records())
+            )
         except Exception as e: return None, str(e)
 
     raw_cast_data, shop_records = fetch_data_v38()
@@ -794,9 +774,8 @@ with tab4:
                 if sid and spass: dj_shops.append({"店舗名": s_name, "ID": sid, "PASS": spass, "casts": unreg})
 
         async def run_derija_v38(cast, sid, spass):
-            import subprocess, sys, random, os
-            try: subprocess.run([sys.executable, "-m", "playwright", "install", "chromium"], check=True)
-            except: pass
+            if not ensure_playwright_installed():
+                return {"status": "error", "message": "Playwright browser not available"}
 
             async with async_playwright() as p:
                 browser = await p.chromium.launch(headless=True, args=['--no-sandbox', '--disable-setuid-sandbox', '--disable-dev-shm-usage'])
@@ -808,7 +787,6 @@ with tab4:
                 target_name, debug_path, tmp_img_path = str(cast[2]).strip(), f"debug_{sid}.png", None
 
                 try:
-                    # 1. ログイン
                     await page.goto("https://deli-fuzoku.jp/entry/", wait_until="networkidle")
                     await page.type("#form_username", sid, delay=random.randint(50, 120))
                     await page.type("#form_password", spass, delay=random.randint(50, 120))
@@ -816,32 +794,27 @@ with tab4:
                     await page.click("button.loginBtn")
                     await page.wait_for_load_state("networkidle")
 
-                    # 2. 在籍の追加
                     await asyncio.sleep(random.uniform(2.0, 4.0))
                     await page.mouse.wheel(0, 400)
                     add_link = page.get_by_role("link", name="在籍の追加")
                     await add_link.first.click()
                     await page.wait_for_selector("#form_girl_name", state="visible", timeout=60000)
 
-                    # --- 元の安定していた入力関数 ---
                     async def human_input(selector, text, is_long=False):
                         if not text: return
                         el = page.locator(selector)
                         await el.scroll_into_view_if_needed()
                         await asyncio.sleep(random.uniform(0.3, 0.7))
                         await el.click()
-                        # 長文（PR）の場合はディレイを短くし、タイムアウトを極限まで伸ばす
                         d = random.randint(30, 70) if is_long else random.randint(100, 250)
                         await page.type(selector, str(text), delay=d, timeout=300000)
                         await page.mouse.click(0, 0) 
                         await asyncio.sleep(random.uniform(0.5, 1.2))
 
-                    # 3. 各項目入力
                     await human_input("#form_girl_name", target_name)
                     await human_input("#form_girl_age", cast[3])
                     await human_input("#form_girl_height", cast[4])
                     
-                    # 【追加】カップ数
                     cup_val = str(cast[6]).strip().replace("カップ", "").upper()
                     if cup_val:
                         st.write(f"🍷 カップ数を選択中: {cup_val}")
@@ -855,10 +828,8 @@ with tab4:
                     st.write(f"✍️ 自己紹介文を入力中...")
                     await human_input("#form_girl_pr", cast[12], is_long=True)
 
-                    # 【修正】画像に基づいた指定タグの自動選択（全22項目）
                     st.write("🏷️ 指定タグ（画像準拠）をセット中...")
                     target_tags = [
-                        # 1列目〜5列目の色付き項目
                         "美脚", "美乳", "美尻", "美肌", "色白",
                         "スタイル抜群", "愛嬌抜群", "サービス抜群", "要予約", "プレミア",
                         "人懐っこい", "空気を読む", "しっかり者", "感度抜群", "話し好き",
@@ -868,22 +839,14 @@ with tab4:
                     
                     for tag_text in target_tags:
                         try:
-                            # 確実にlabel要素を特定してクリック
-                            # ※HTML内の「ｲﾁｬｲﾁｬ好き」が半角のため、リストも半角で定義しています
                             label = page.locator(f"td.girl_tags label:has-text('{tag_text}')")
                             if await label.count() > 0:
-                                # すでにチェックされているかどうかの確認はせず、
-                                # 画像の状態（選択状態）にするためにクリックを実行します
-                                # もし初期状態でチェックが入っている可能性がある場合は 
-                                # if not await page.locator(f"label:has-text('{tag_text}')").preceding_sibling("input").is_checked(): 
-                                # 等の判定を入れることも可能ですが、基本は画像通りにクリックでOKです
                                 await label.scroll_into_view_if_needed()
                                 await label.click()
                                 await asyncio.sleep(random.uniform(0.1, 0.3))
                         except: 
                             pass
 
-                    # 4. 画像アップロード
                     img_name = cast[16]
                     if img_name:
                         tmp_img_path = os.path.abspath(f"up_{sid}_{random.randint(1000,9999)}.jpg")
@@ -892,14 +855,12 @@ with tab4:
                             st.write("📸 画像反映待ち...")
                             await asyncio.sleep(12)
 
-                    # 5. 送信 (元コードの挙動を維持)
                     st.write("🚀 最終送信...")
                     submit_label = page.locator('label[for="form_submit_btn"]')
                     await submit_label.scroll_into_view_if_needed()
                     async with page.expect_navigation(timeout=120000):
                         await submit_label.click()
 
-                    # 6. 判定
                     for _ in range(30):
                         await asyncio.sleep(3)
                         if "girl_list.php" in page.url or "完了" in await page.content():
@@ -914,7 +875,6 @@ with tab4:
                     if tmp_img_path and os.path.exists(tmp_img_path): os.remove(tmp_img_path)
                     await browser.close()
 
-        # UI
         selected = []
         if dj_shops:
             cols = st.columns(3)
@@ -926,8 +886,10 @@ with tab4:
             if st.button("🚀 デリじゃ一括登録開始", type="primary"):
                 ws_w = None
                 try:
-                    creds_w = Credentials.from_service_account_info(st.secrets["gcp_service_account"], scopes=SCOPE)
-                    ws_w = gspread.authorize(creds_w).open_by_key(SPREADSHEET_ID).worksheet("キャスト情報")
+                    creds_w = get_credentials()
+                    ws_w = _call_sheets_api(
+                        lambda: gspread.authorize(creds_w).open_by_key(SPREADSHEET_ID).worksheet("キャスト情報")
+                    )
                 except: pass
 
                 for shop in selected:
@@ -938,22 +900,24 @@ with tab4:
                                 st.success(f"✅ {cast[2]} 完了！")
                                 if ws_w:
                                     row_idx = next((i for i, r in enumerate(raw_cast_data) if r[0] == cast[0]), None)
-                                    if row_idx: ws_w.update_cell(row_idx + 1, 16, "登録済")
+                                    if row_idx: 
+                                        _call_sheets_api(
+                                            lambda: ws_w.update_cell(row_idx + 1, 16, "登録済")
+                                        )
                             else:
                                 st.error(f"❌ {cast[2]} 失敗: {res['message']}")
                                 if "screenshot" in res: st.image(res["screenshot"])
-        
-# --- tab5: デリじゃ既存店コピー (Web → シート) ---
+
 with tab5:
     st.subheader("📥 デリじゃ キャスト情報の同期")
     debug_image_space = st.empty()
 
     try:
-        creds = Credentials.from_service_account_info(st.secrets["gcp_service_account"], scopes=SCOPE)
+        creds = get_credentials()
         gs_client = gspread.authorize(creds)
-        spreadsheet = gs_client.open_by_key(SPREADSHEET_ID)
-        worksheet_shops = spreadsheet.worksheet("シート3")
-        data_shops = worksheet_shops.get_all_records()
+        spreadsheet = _call_sheets_api(lambda: gs_client.open_by_key(SPREADSHEET_ID))
+        worksheet_shops = _call_sheets_api(lambda: spreadsheet.worksheet("シート3"))
+        data_shops = _call_sheets_api(lambda: worksheet_shops.get_all_records())
 
         derija_keywords = ["デリじゃ", "デリジャ", "でりじゃ"]
         derija_sync_shops = [
@@ -966,6 +930,10 @@ with tab5:
             target_shop = next(s for s in derija_sync_shops if s['店舗名'] == selected_name)
 
             async def run_fetch_derija_data(shop_id, shop_pass):
+                # 【修正】Playwrightインストール確保
+                if not ensure_playwright_installed():
+                    return {"status": "error", "message": "Playwright browser not available"}
+
                 cast_data_list = []
                 async with async_playwright() as p:
                     browser = await p.chromium.launch(headless=True, args=['--no-sandbox', '--disable-setuid-sandbox', '--disable-dev-shm-usage'])
@@ -973,14 +941,11 @@ with tab5:
                     page = await context.new_page()
                     
                     try:
-                        # 1. ログイン (調査結果 VM166 に基づく完全修正)
                         await page.goto("https://deli-fuzoku.jp/entry/", wait_until="networkidle")
                         
-                        # 直接値を流し込み、入力イベントを強制発生させる
                         await page.locator('input#form_username').fill(shop_id)
                         await page.locator('input#form_password').fill(shop_pass)
                         
-                        # ★重要: ボタンの disabled 属性を JS で強制除去し、クリック可能にする
                         await page.evaluate("""() => {
                             const btn = document.querySelector('button#button');
                             if (btn) {
@@ -990,22 +955,17 @@ with tab5:
                         }""")
                         
                         await asyncio.sleep(1)
-                        # 調査結果のセレクタでクリック
                         await page.locator('button#button').click()
                         
-                        # 2. 遷移待ち
                         await page.wait_for_load_state("networkidle")
                         await asyncio.sleep(3)
 
-                        # 在籍一覧へ
                         await page.goto("https://deli-fuzoku.jp/entry/girls", wait_until="networkidle")
                         await asyncio.sleep(2)
 
-                        # デバッグ画像
                         screenshot = await page.screenshot(full_page=False)
                         debug_image_space.image(screenshot, caption="ログイン後の画面")
 
-                        # 3. 編集URL抽出
                         edit_links = await page.locator('input[value="編集"]').evaluate_all("""
                             nodes => nodes.map(n => {
                                 const onclick = n.getAttribute('onclick') || "";
@@ -1037,7 +997,6 @@ with tab5:
                                 except: cup = ""
                                 pr = await page.input_value("#form_girl_pr")
                                 
-                                # 画像
                                 img_path = ""
                                 try:
                                     img_src = await page.locator("div.girl_photo_box img").first.get_attribute("src")
@@ -1061,8 +1020,10 @@ with tab5:
                     res = asyncio.run(run_fetch_derija_data(target_shop['ID'], target_shop['raw_pass']))
                     if res["status"] == "success":
                         if res["data"]:
-                            worksheet_cast = spreadsheet.worksheet("キャスト情報")
-                            worksheet_cast.append_rows(res["data"])
+                            worksheet_cast = _call_sheets_api(
+                                lambda: spreadsheet.worksheet("キャスト情報")
+                            )
+                            _call_sheets_api(lambda: worksheet_cast.append_rows(res["data"]))
                             st.success(f"✅ {len(res['data'])} 名同期完了")
                             status.update(label="完了", state="complete")
                         else:
@@ -1073,3 +1034,4 @@ with tab5:
                         status.update(label="エラー", state="error")
     except Exception as e:
         st.error(f"システムエラー: {e}")
+        logger.error(f"Tab5 system error: {e}")
