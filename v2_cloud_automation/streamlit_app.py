@@ -910,7 +910,7 @@ with tab4:
 
 # ==========================================
 # 【Tab5: デリじゃ既存店コピー (Web → シート)】
-# Bot検知回避・HTML構造対応版
+# キャストループ処理修正版
 # ==========================================
 
 with tab5:
@@ -936,11 +936,10 @@ with tab5:
 
             async def run_fetch_derija_data(shop_id, shop_pass):
                 """
-                【修正版】Bot検知回避・HTML構造対応
-                - tab4のログイン手順を継承
-                - 人間らしい動きを実装
-                - メニュークリックで在籍嬢一覧へ遷移
-                - HTML構造に基づいた情報抽出
+                【修正版】キャストループ処理・編集ボタンクリック対応
+                - HTML構造に基づいた要素取得（ul#ul_sortable1 > li.ui-state-default）
+                - 各キャストの「編集」ボタンを物理的にクリック
+                - 詳細画面で情報取得後、一覧に戻るループ
                 """
                 
                 # 【修正】Playwrightインストール確保
@@ -1003,7 +1002,7 @@ with tab5:
                         await page.mouse.move(random.randint(100, 800), random.randint(100, 600))
                         await asyncio.sleep(random.uniform(0.2, 0.5))
 
-                        # ボタン無効化を強制除去（tab5用修正）
+                        # ボタン無効化を強制除去
                         await page.evaluate("""() => {
                             const btn = document.querySelector('button#button');
                             if (btn) {
@@ -1024,17 +1023,13 @@ with tab5:
                         await page.wait_for_load_state("networkidle", timeout=30000)
                         await asyncio.sleep(random.uniform(2.0, 3.5))
 
-                        # ログイン成功確認
-                        current_url = page.url
-                        if "entry" in current_url and "girls" not in current_url:
-                            st.warning("⚠️ ログイン後、管理ページが表示されていない可能性があります")
+                        logger.info(f"ログイン後URL: {page.url}")
 
                         # ==========================================
                         # 【Step 3】メニューから「在籍嬢一覧」へ遷移
                         # ==========================================
                         st.write("📋 在籍嬢一覧へ移動中...")
                         
-                        # メニュー要素を探す（複数パターン対応）
                         menu_patterns = [
                             'a:has-text("在籍嬢一覧")',
                             '//a[contains(text(), "在籍嬢一覧")]',
@@ -1059,8 +1054,7 @@ with tab5:
                                 continue
                         
                         if not menu_clicked:
-                            # フォールバック: URL直接遷移（最終手段）
-                            st.info("ℹ️ メニュー要素が見つからないた��、URL直接遷移を実行")
+                            st.info("ℹ️ メニュー要素が見つからないため、URL直接遷移を実行")
                             await page.goto("https://deli-fuzoku.jp/entry/girls", wait_until="networkidle")
                         
                         await page.wait_for_load_state("networkidle", timeout=30000)
@@ -1074,134 +1068,200 @@ with tab5:
                         debug_image_space.image(screenshot, caption="在籍嬢一覧ページ")
 
                         # ==========================================
-                        # 【Step 5】在籍嬢一覧から編集ボタンを取得
+                        # 【Step 5】キャスト要素の検出
                         # ==========================================
-                        st.write("🔍 キャスト情報を検索中...")
+                        st.write("🔍 キャスト要素を検索中...")
                         
                         # HTML構造に基づいた要素取得
-                        # 親要素: <div class="list_content" id="search_area">
-                        # 各キャスト: <li class="ui-state-default ui-sortable-handle">
-                        # 編集ボタン: <input type="button" value="編集" class="edit">
+                        # ul#ul_sortable1 > li.ui-state-default
+                        cast_list_ul = page.locator('div#search_area ul#ul_sortable1')
                         
-                        search_area = page.locator('div#search_area')
-                        if await search_area.count() == 0:
-                            st.error("❌ 在籍嬢一覧エリア(id='search_area')が見つかりません")
-                            return {"status": "error", "message": "在籍嬢一覧エリアが見つかりません"}
+                        if await cast_list_ul.count() == 0:
+                            st.error("❌ キャストリスト要素(ul#ul_sortable1)が見つかりません")
+                            logger.error("ul#ul_sortable1 not found")
+                            return {"status": "error", "message": "キャストリスト要素が見つかりません"}
                         
-                        st.success("✅ 在籍嬢一覧エリアを検出")
+                        st.success("✅ キャストリスト要素を検出")
 
-                        # 各キャスト要素を取得
-                        cast_items = page.locator('div#search_area li.ui-state-default.ui-sortable-handle')
+                        # ul内の全てのli要素を取得
+                        cast_items = page.locator('ul#ul_sortable1 > li.ui-state-default')
                         cast_count = await cast_items.count()
                         
                         if cast_count == 0:
                             st.warning("⚠️ キャスト情報が見つかりません")
+                            logger.warning("No cast items found in ul#ul_sortable1")
                             return {"status": "success", "data": [], "debug_msg": "キャスト情報がありません"}
                         
                         st.write(f"🔍 {cast_count} 名のキャストを検出しました。取得を開始します...")
+                        logger.info(f"Found {cast_count} cast items")
                         progress_bar = st.progress(0)
 
                         # ==========================================
-                        # 【Step 6】各キャストの詳細情報を取得
+                        # 【Step 6】キャストループ処理
                         # ==========================================
                         for i in range(cast_count):
                             try:
-                                # 現在のキャスト要素を再取得（DOM更新対応）
-                                current_cast_item = page.locator('div#search_area li.ui-state-default.ui-sortable-handle').nth(i)
+                                st.write(f"⏳ {i+1}/{cast_count} 番目のキャストを処理中...")
                                 
-                                # スクロール＆表示待機
-                                await current_cast_item.scroll_into_view_if_needed()
+                                # ==========================================
+                                # 【Step 6-1】編集ボタンを再取得（DOM更新対応）
+                                # ==========================================
+                                await asyncio.sleep(random.uniform(0.5, 1.0))
+                                
+                                # 最新のキャスト要素を取得
+                                current_cast_li = page.locator('ul#ul_sortable1 > li.ui-state-default').nth(i)
+                                
+                                # スクロール
+                                await current_cast_li.scroll_into_view_if_needed()
                                 await asyncio.sleep(random.uniform(0.5, 1.0))
 
-                                # 編集ボタンを探す
-                                edit_button = current_cast_item.locator('input[type="button"][value="編集"]')
+                                # 編集ボタンをセレクタで特定
+                                # li.ui-state-default内のinput[value="編集"]
+                                edit_button = current_cast_li.locator('input[value="編集"]')
                                 
-                                if await edit_button.count() > 0:
-                                    # マウス移動（人間らしい動き）
-                                    await page.mouse.move(random.randint(100, 800), random.randint(100, 600))
-                                    await asyncio.sleep(random.uniform(0.2, 0.4))
-                                    
-                                    # クリック
-                                    await edit_button.click()
-                                    await asyncio.sleep(random.uniform(1.0, 1.5))
-                                    await page.wait_for_load_state("networkidle", timeout=15000)
-
-                                    # ==========================================
-                                    # 【Step 6-1】編集画面から情報抽出
-                                    # ==========================================
-                                    try:
-                                        name = await page.input_value("#form_girl_name")
-                                        age = await page.input_value("#form_girl_age")
-                                        tall = await page.input_value("#form_girl_height")
-                                        b = await page.input_value("#form_girl_sizeb")
-                                        w = await page.input_value("#form_girl_sizew")
-                                        h = await page.input_value("#form_girl_sizeh")
-                                        
-                                        try: 
-                                            cup = await page.locator("#form_girl_cup").input_value()
-                                        except: 
-                                            cup = ""
-                                        
-                                        pr = await page.input_value("#form_girl_pr")
-                                        
-                                        # 画像取得（Drive API対応）
-                                        img_path = ""
-                                        try:
-                                            img_src = await page.locator("div.girl_photo_box img").first.get_attribute("src")
-                                            if img_src and img_src.startswith("http"):
-                                                res_img = requests.get(img_src, timeout=10)
-                                                if res_img.status_code == 200:
-                                                    img_path = _call_drive_api(
-                                                        lambda: upload_to_drive_custom(
-                                                            res_img.content, 
-                                                            "キャスト情報_Images", 
-                                                            f"SYNC_{name}_{i:02d}.jpg"
-                                                        )
-                                                    )
-                                        except Exception as e:
-                                            logger.debug(f"Image fetch skip for {name}: {e}")
-
-                                        # データを追加
-                                        cast_data_list.append([
-                                            "",                    # A: ID
-                                            "",                    # B: エリア
-                                            name,                  # C: 名前
-                                            age,                   # D: 年齢
-                                            tall,                  # E: 身長
-                                            b,                     # F: バスト
-                                            cup,                   # G: カップ
-                                            w,                     # H: ウエスト
-                                            h,                     # I: ヒップ
-                                            "",                    # J: 系統
-                                            "",                    # K: キャッチ
-                                            "",                    # L: 女コメント
-                                            pr,                    # M: PR文
-                                            "",                    # N: 空
-                                            "",                    # O: 空
-                                            shop_id,               # P: 店舗ID
-                                            img_path               # Q: メイン画像
-                                        ])
-                                        
-                                        st.write(f"✅ {name} さんのデータ取得完了")
-
-                                    except Exception as e:
-                                        st.warning(f"⚠️ {i+1}番目のキャスト情報取得に失敗: {e}")
-                                        logger.error(f"Cast info extraction failed: {e}")
-                                    
-                                    # ==========================================
-                                    # 【Step 6-2】一覧ページに戻る
-                                    # ==========================================
-                                    await page.go_back()
-                                    await asyncio.sleep(random.uniform(1.0, 1.5))
-                                    await page.wait_for_load_state("networkidle", timeout=15000)
-                                    await asyncio.sleep(random.uniform(0.5, 1.0))
-
-                                else:
+                                edit_button_count = await edit_button.count()
+                                logger.info(f"Cast {i}: Found {edit_button_count} edit buttons")
+                                
+                                if edit_button_count == 0:
                                     st.warning(f"⚠️ {i+1}番目のキャストで編集ボタンが見つかりません")
+                                    logger.warning(f"Edit button not found for cast {i}")
+                                    continue
+                                
+                                # ==========================================
+                                # 【Step 6-2】人間らしい動きでボタンクリック
+                                # ==========================================
+                                st.write(f"🖱️ {i+1}番目のキャストの編集ボタンをクリック中...")
+                                
+                                # マウスを移動
+                                await page.mouse.move(random.randint(100, 800), random.randint(100, 600))
+                                await asyncio.sleep(random.uniform(0.3, 0.6))
+                                
+                                # ボタンをクリック
+                                await edit_button.first.click()
+                                await asyncio.sleep(random.uniform(1.5, 2.5))
+                                
+                                # ページロード待機
+                                try:
+                                    await page.wait_for_load_state("networkidle", timeout=15000)
+                                except:
+                                    await asyncio.sleep(random.uniform(1.0, 2.0))
+                                
+                                logger.info(f"Cast {i}: Edit screen loaded - {page.url}")
+
+                                # ==========================================
+                                # 【Step 6-3】詳細画面から情報を抽出
+                                # ==========================================
+                                st.write(f"📝 {i+1}番目のキャストの情報を取得中...")
+                                
+                                try:
+                                    # 名前
+                                    name = await page.input_value("#form_girl_name")
+                                    
+                                    # 年齢
+                                    age = await page.input_value("#form_girl_age")
+                                    
+                                    # 身長
+                                    tall = await page.input_value("#form_girl_height")
+                                    
+                                    # バスト
+                                    b = await page.input_value("#form_girl_sizeb")
+                                    
+                                    # ウエスト
+                                    w = await page.input_value("#form_girl_sizew")
+                                    
+                                    # ヒップ
+                                    h = await page.input_value("#form_girl_sizeh")
+                                    
+                                    # カップ
+                                    try: 
+                                        cup = await page.locator("#form_girl_cup").input_value()
+                                    except: 
+                                        cup = ""
+                                    
+                                    # PR文
+                                    pr = await page.input_value("#form_girl_pr")
+                                    
+                                    logger.info(f"Cast {i}: Extracted - name={name}, age={age}")
+
+                                    # 画像取得（Drive API対応）
+                                    img_path = ""
+                                    try:
+                                        img_src = await page.locator("div.girl_photo_box img").first.get_attribute("src")
+                                        if img_src and img_src.startswith("http"):
+                                            res_img = requests.get(img_src, timeout=10)
+                                            if res_img.status_code == 200:
+                                                img_path = _call_drive_api(
+                                                    lambda: upload_to_drive_custom(
+                                                        res_img.content, 
+                                                        "キャスト情報_Images", 
+                                                        f"SYNC_{name}_{i:02d}.jpg"
+                                                    )
+                                                )
+                                                st.write(f"📸 {i+1}番目の画像をアップロード完了")
+                                    except Exception as e:
+                                        logger.debug(f"Image fetch skip for cast {i} ({name}): {e}")
+
+                                    # データを追加
+                                    cast_data_list.append([
+                                        "",                    # A: ID
+                                        "",                    # B: エリア
+                                        name,                  # C: 名前
+                                        age,                   # D: 年齢
+                                        tall,                  # E: 身長
+                                        b,                     # F: バスト
+                                        cup,                   # G: カップ
+                                        w,                     # H: ウエスト
+                                        h,                     # I: ヒップ
+                                        "",                    # J: 系統
+                                        "",                    # K: キャッチ
+                                        "",                    # L: 女コメント
+                                        pr,                    # M: PR文
+                                        "",                    # N: 空
+                                        "",                    # O: 空
+                                        shop_id,               # P: 店舗ID
+                                        img_path               # Q: メイン画像
+                                    ])
+                                    
+                                    st.success(f"✅ {i+1}番目のキャスト({name})のデータ取得完了")
+
+                                except Exception as e:
+                                    st.warning(f"⚠️ {i+1}番目のキャスト情報取得に失敗: {e}")
+                                    logger.error(f"Cast {i}: Info extraction failed - {e}")
+                                
+                                # ==========================================
+                                # 【Step 6-4】一覧ページに戻る
+                                # ==========================================
+                                st.write(f"🔙 {i+1}番目のキャスト処理後、一覧に戻ります...")
+                                await asyncio.sleep(random.uniform(1.0, 2.0))
+                                
+                                # go_back() で戻る
+                                await page.go_back()
+                                await asyncio.sleep(random.uniform(1.5, 2.5))
+                                
+                                try:
+                                    await page.wait_for_load_state("networkidle", timeout=15000)
+                                except:
+                                    await asyncio.sleep(random.uniform(1.0, 2.0))
+                                
+                                logger.info(f"Cast {i}: Returned to list - {page.url}")
+
+                                # ==========================================
+                                # 【Step 6-5】一覧のDOMが再度読み込まれるまで待機
+                                # ==========================================
+                                await asyncio.sleep(random.uniform(0.5, 1.5))
 
                             except Exception as e:
-                                st.warning(f"❌ {i+1}番目のキャスト処理でエラー: {e}")
-                                logger.error(f"Cast {i+1} processing error: {e}")
+                                st.error(f"❌ {i+1}��目のキャスト処理でエラー: {e}")
+                                logger.error(f"Cast {i} loop error: {e}")
+                                
+                                # エラー時もgo_back()を試す
+                                try:
+                                    await page.go_back()
+                                    await asyncio.sleep(random.uniform(1.0, 2.0))
+                                    await page.wait_for_load_state("networkidle", timeout=15000)
+                                except:
+                                    pass
+                                
                                 continue
                             
                             progress_bar.progress((i + 1) / cast_count)
@@ -1209,6 +1269,8 @@ with tab5:
                         # ==========================================
                         # 【完了】
                         # ==========================================
+                        st.success(f"✅ スクレイピング完了: {len(cast_data_list)}名のデータを取得")
+                        logger.info(f"Scraping completed: {len(cast_data_list)} cast records")
                         return {"status": "success", "data": cast_data_list, "debug_msg": f"{len(cast_data_list)}名のデータを取得"}
 
                     except Exception as e:
