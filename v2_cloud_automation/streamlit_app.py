@@ -411,7 +411,7 @@ with tab1:
                         cast_name = cast[2]
                         sub_urls = [img_row[2] for img_row in rows_images if str(img_row[1]).strip() == target_id]
                         
-                        with st.status(f"【{shop['店舗名']}】{cast_name} さ��の登録中...") as status:
+                        with st.status(f"【{shop['店舗名']}】{cast_name} の登録中...") as status:
                             res = asyncio.run(run_automation(cast, shop['ID'], shop['raw_pass'], sub_urls))
                             
                             if res["status"] == "success":
@@ -562,7 +562,7 @@ with tab2:
                             target_email = "isgroup0001@gmail.com"
                             for menu_name in ["チャット設定", "予約通知"]:
                                 await yoyaku_page.locator("a.acListTxt", has_text=menu_name).first.click()
-                                if menu_name == "チャッ��設定":
+                                if menu_name == "チャット設定":
                                     await yoyaku_page.locator("label[for='Release']").click()
                                 exs_emails = await yoyaku_page.locator("input[type='email']").all_attribute_values("value")
                                 if target_email not in [e.strip() for e in exs_emails if e]:
@@ -755,6 +755,7 @@ with tab3:
     else:
         st.error("店舗データが読み込まれていません。")
 
+# --- tab4: デリじゃ自動登録 (タグ・カップ数対応・複数画像対応版) ---
 with tab4:
     st.subheader("🍓 デリじゃ キャスト自動登録")
 
@@ -766,14 +767,18 @@ with tab4:
             ss = _call_sheets_api(lambda: gc.open_by_key(SPREADSHEET_ID))
             return (
                 _call_sheets_api(lambda: ss.worksheet("キャスト情報").get_all_values()),
-                _call_sheets_api(lambda: ss.worksheet("シート3").get_all_records())
+                _call_sheets_api(lambda: ss.worksheet("シート3").get_all_records()),
+                _call_sheets_api(lambda: ss.worksheet("キャスト画像").get_all_values())
             )
-        except Exception as e: return None, str(e)
+        except Exception as e: 
+            return None, str(e), None
 
-    raw_cast_data, shop_records = fetch_data_v38()
+    raw_cast_data, shop_records, cast_images_data = fetch_data_v38()
 
-    if raw_cast_data:
+    if raw_cast_data and cast_images_data:
         rows_info = raw_cast_data[1:]
+        rows_images = cast_images_data[1:]
+        
         dj_shops = []
         for s in shop_records:
             s_name = str(s.get('登録店舗', '')).strip()
@@ -782,7 +787,13 @@ with tab4:
                 unreg = [r for r in rows_info if len(r) > 14 and str(r[14]).strip() == sid and str(r[15]).strip() != "登録済"]
                 if sid and spass: dj_shops.append({"店舗名": s_name, "ID": sid, "PASS": spass, "casts": unreg})
 
-        async def run_derija_v38(cast, sid, spass):
+        async def run_derija_v38(cast, sid, spass, cast_images_data):
+            """
+            【修正版】複数画像アップロード対応
+            - tab1の紐付けルールに準拠
+            - キャスト情報のA列とキャスト画像のB列を照合
+            - 最大10枚までの画像をアップロード
+            """
             if not ensure_playwright_installed():
                 return {"status": "error", "message": "Playwright browser not available"}
 
@@ -793,9 +804,10 @@ with tab4:
                     viewport={'width': 1280, 'height': 2000}
                 )
                 page = await context.new_page()
-                target_name, debug_path, tmp_img_path = str(cast[2]).strip(), f"debug_{sid}.png", None
+                target_name, debug_path, tmp_img_paths = str(cast[2]).strip(), f"debug_{sid}.png", []
 
                 try:
+                    # 1. ログイン
                     await page.goto("https://deli-fuzoku.jp/entry/", wait_until="networkidle")
                     await page.type("#form_username", sid, delay=random.randint(50, 120))
                     await page.type("#form_password", spass, delay=random.randint(50, 120))
@@ -803,12 +815,14 @@ with tab4:
                     await page.click("button.loginBtn")
                     await page.wait_for_load_state("networkidle")
 
+                    # 2. 在籍の追加
                     await asyncio.sleep(random.uniform(2.0, 4.0))
                     await page.mouse.wheel(0, 400)
                     add_link = page.get_by_role("link", name="在籍の追加")
                     await add_link.first.click()
                     await page.wait_for_selector("#form_girl_name", state="visible", timeout=60000)
 
+                    # --- 元の安定していた入力関数 ---
                     async def human_input(selector, text, is_long=False):
                         if not text: return
                         el = page.locator(selector)
@@ -820,10 +834,12 @@ with tab4:
                         await page.mouse.click(0, 0) 
                         await asyncio.sleep(random.uniform(0.5, 1.2))
 
+                    # 3. 各項目入力
                     await human_input("#form_girl_name", target_name)
                     await human_input("#form_girl_age", cast[3])
                     await human_input("#form_girl_height", cast[4])
                     
+                    # カップ数
                     cup_val = str(cast[6]).strip().replace("カップ", "").upper()
                     if cup_val:
                         st.write(f"🍷 カップ数を選択中: {cup_val}")
@@ -837,6 +853,7 @@ with tab4:
                     st.write(f"✍️ 自己紹介文を入力中...")
                     await human_input("#form_girl_pr", cast[12], is_long=True)
 
+                    # 指定タグの自動選択
                     st.write("🏷️ 指定タグ（画像準拠）をセット中...")
                     target_tags = [
                         "美脚", "美乳", "美尻", "美肌", "色白",
@@ -856,20 +873,120 @@ with tab4:
                         except: 
                             pass
 
-                    img_name = cast[16]
-                    if img_name:
-                        tmp_img_path = os.path.abspath(f"up_{sid}_{random.randint(1000,9999)}.jpg")
-                        if download_by_filename(img_name, tmp_img_path):
-                            await page.locator("#form_file_girl_photo1").set_input_files(tmp_img_path)
-                            st.write("📸 画像反映待ち...")
-                            await asyncio.sleep(12)
+                    # ==========================================
+                    # 【新規】複数画像のアップロード処理
+                    # ==========================================
+                    st.write("📸 複数画像をアップロード中...")
+                    
+                    # ==========================================
+                    # 【Step 1】キャストのIDを取得
+                    # ==========================================
+                    target_id = str(cast[0]).strip()
+                    logger.info(f"Looking for images for cast ID: {target_id}")
+                    
+                    # ==========================================
+                    # 【Step 2】キャスト画像シートから紐付けを検索
+                    # ==========================================
+                    # キャスト画像シートの構造:
+                    # B列: CastID（キャスト情報のA列と照合）
+                    # C列: 写真（ファイルパス例: キャスト画像_Images/xxxx.png）
+                    
+                    matching_images = []
+                    for img_row in rows_images:
+                        if len(img_row) > 2:
+                            # B列（index 1）: CastID
+                            cast_id_in_img = str(img_row[1]).strip()
+                            # C列（index 2）: 写真ファイルパス
+                            photo_path = str(img_row[2]).strip()
+                            
+                            # キャスト情報のA列と照合
+                            if cast_id_in_img == target_id and photo_path:
+                                matching_images.append(photo_path)
+                                logger.info(f"Found matching image: {photo_path}")
+                    
+                    if matching_images:
+                        st.write(f"✅ {len(matching_images)}枚の画像が紐付けされています")
+                    else:
+                        st.write(f"ℹ️ このキャストに紐付けされた画像がありません")
 
+                    # ==========================================
+                    # 【Step 3】画像をダウンロードしてアップロード
+                    # ==========================================
+                    uploaded_count = 0
+                    for img_index, photo_path in enumerate(matching_images):
+                        # 最大10枚まで
+                        if img_index >= 10:
+                            st.write(f"⚠️ 10枚の上限に達したため、残りの画像はスキップします")
+                            break
+                        
+                        slot_number = img_index + 1
+                        st.write(f"🔄 画像 {slot_number}/10 をアップロード中...")
+                        
+                        try:
+                            # ファイル名をパスから抽出
+                            # 例: "キャスト画像_Images/xxxx.png" → "xxxx.png"
+                            filename = photo_path.replace('\\', '/').split('/')[-1].strip()
+                            logger.info(f"Image {slot_number}: Downloading {filename}")
+                            
+                            # 一時ファイルパスを生成
+                            tmp_img_path = os.path.abspath(f"tmp_img_{sid}_{slot_number}_{random.randint(1000,9999)}.jpg")
+                            
+                            # download_by_filename で Google Drive からダウンロード
+                            if download_by_filename(filename, tmp_img_path):
+                                logger.info(f"Image {slot_number}: Downloaded successfully")
+                                
+                                # フォームID を生成（1-indexed）
+                                form_id = f"#form_file_girl_photo{slot_number}"
+                                
+                                # ファイル入力要素を取得
+                                file_input = page.locator(form_id)
+                                
+                                if await file_input.count() > 0:
+                                    # ファイルをセット
+                                    await file_input.set_input_files(tmp_img_path)
+                                    st.write(f"✅ 画像 {slot_number} をセットしました")
+                                    logger.info(f"Image {slot_number}: Set to form input")
+                                    
+                                    # 反映を待機
+                                    await asyncio.sleep(random.uniform(4.0, 6.0))
+                                    uploaded_count += 1
+                                    
+                                else:
+                                    st.warning(f"⚠️ 画像 {slot_number} のスロット（{form_id}）が見つかりません")
+                                    logger.warning(f"Image {slot_number}: Form input not found")
+                                
+                                # 一時ファイルを削除
+                                if os.path.exists(tmp_img_path):
+                                    os.remove(tmp_img_path)
+                                    tmp_img_paths.append(tmp_img_path)
+                                    logger.info(f"Image {slot_number}: Temporary file deleted")
+                            
+                            else:
+                                st.warning(f"⚠️ 画像 {slot_number}（{filename}）のダウンロードに失敗しました")
+                                logger.warning(f"Image {slot_number}: Download failed for {filename}")
+                        
+                        except Exception as e:
+                            st.warning(f"⚠️ 画像 {slot_number} のアップロー��処理でエラー: {e}")
+                            logger.error(f"Image {slot_number} upload error: {e}")
+                            
+                            # エラー時も一時ファイルを削除
+                            if os.path.exists(tmp_img_path):
+                                os.remove(tmp_img_path)
+                            continue
+                    
+                    if uploaded_count > 0:
+                        st.success(f"✅ {uploaded_count}枚の画像をアップロードしました")
+                    else:
+                        st.write(f"ℹ️ アップロードされた画像はありません")
+
+                    # 5. 送信
                     st.write("🚀 最終送信...")
                     submit_label = page.locator('label[for="form_submit_btn"]')
                     await submit_label.scroll_into_view_if_needed()
                     async with page.expect_navigation(timeout=120000):
                         await submit_label.click()
 
+                    # 6. 判定
                     for _ in range(30):
                         await asyncio.sleep(3)
                         if "girl_list.php" in page.url or "完了" in await page.content():
@@ -881,9 +998,16 @@ with tab4:
                     await page.screenshot(path=debug_path, full_page=True)
                     return {"status": "error", "message": str(e), "screenshot": debug_path}
                 finally:
-                    if tmp_img_path and os.path.exists(tmp_img_path): os.remove(tmp_img_path)
+                    # 一時ファイルのクリーンアップ
+                    for tmp_path in tmp_img_paths:
+                        try:
+                            if os.path.exists(tmp_path):
+                                os.remove(tmp_path)
+                        except:
+                            pass
                     await browser.close()
 
+        # UI
         selected = []
         if dj_shops:
             cols = st.columns(3)
@@ -899,12 +1023,14 @@ with tab4:
                     ws_w = _call_sheets_api(
                         lambda: gspread.authorize(creds_w).open_by_key(SPREADSHEET_ID).worksheet("キャスト情報")
                     )
-                except: pass
+                except: 
+                    pass
 
                 for shop in selected:
                     for cast in shop['casts']:
                         with st.status(f"{cast[2]} 登録中..."):
-                            res = asyncio.run(run_derija_v38(cast, shop['ID'], shop['PASS']))
+                            # 【修正】cast_images_data を引数に追加
+                            res = asyncio.run(run_derija_v38(cast, shop['ID'], shop['PASS'], cast_images_data))
                             if res["status"] == "success":
                                 st.success(f"✅ {cast[2]} 完了！")
                                 if ws_w:
@@ -1233,7 +1359,7 @@ with tab5:
                                         pr,                    # M列: PR文
                                         "",                    # N列: 空
                                         "",                    # O列: 空
-                                        shop_id,               # P列: 店舗ID
+                                        "",                    # P列: 空
                                         img_path               # Q列: メイン画像
                                     ])
                                     
