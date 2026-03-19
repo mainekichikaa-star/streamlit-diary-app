@@ -910,7 +910,7 @@ with tab4:
 
 # ==========================================
 # 【Tab5: デリじゃ既存店コピー (Web → シート)】
-# キャストループ処理修正版
+# 命名規則対応版
 # ==========================================
 
 with tab5:
@@ -934,12 +934,11 @@ with tab5:
             selected_name = st.selectbox("同期店舗を選択", [s['店舗名'] for s in derija_sync_shops], key="derija_sync_sel")
             target_shop = next(s for s in derija_sync_shops if s['店舗名'] == selected_name)
 
-            async def run_fetch_derija_data(shop_id, shop_pass):
+            async def run_fetch_derija_data(shop_id, shop_pass, shop_name):
                 """
-                【修正版】キャストループ処理・編集ボタンクリック対応
-                - HTML構造に基づいた要素取得（ul#ul_sortable1 > li.ui-state-default）
-                - 各キャストの「編集」ボタンを物理的にクリック
-                - 詳細画面で情報取得後、一覧に戻るループ
+                【修正版】命名規則対応
+                - A列: shop_id + 3桁連番 (例: gyal001, gyal002...)
+                - C列: 登録店舗名 + 全角スペース + 女の子の名前
                 """
                 
                 # 【修正】Playwrightインストール確保
@@ -1081,7 +1080,7 @@ with tab5:
                             logger.error("ul#ul_sortable1 not found")
                             return {"status": "error", "message": "キャストリスト要素が見つかりません"}
                         
-                        st.success("✅ キャストリスト要素を検出")
+                        st.success("✅ キャストリスト要素を検���")
 
                         # ul内の全てのli要素を取得
                         cast_items = page.locator('ul#ul_sortable1 > li.ui-state-default')
@@ -1149,13 +1148,20 @@ with tab5:
                                 logger.info(f"Cast {i}: Edit screen loaded - {page.url}")
 
                                 # ==========================================
-                                # 【Step 6-3】詳細画面から情報を抽出
+                                # 【Step 6-3��詳細画面から情報を抽出
                                 # ==========================================
                                 st.write(f"📝 {i+1}番目のキャストの情報を取得中...")
                                 
                                 try:
-                                    # 名前
-                                    name = await page.input_value("#form_girl_name")
+                                    # 【修正】名前を取得
+                                    raw_name = await page.input_value("#form_girl_name")
+                                    
+                                    # 【修正】命名規則を適用
+                                    # C列の形式: 登録店舗名 + 全角スペース + 女の子の名前
+                                    formatted_name = f"{shop_name}　{raw_name}"
+                                    
+                                    # A列の形式: shop_id + 3桁連番
+                                    custom_id = f"{shop_id}{i+1:03d}"
                                     
                                     # 年齢
                                     age = await page.input_value("#form_girl_age")
@@ -1181,7 +1187,7 @@ with tab5:
                                     # PR文
                                     pr = await page.input_value("#form_girl_pr")
                                     
-                                    logger.info(f"Cast {i}: Extracted - name={name}, age={age}")
+                                    logger.info(f"Cast {i}: Extracted - ID={custom_id}, name={formatted_name}, age={age}")
 
                                     # 画像取得（Drive API対応）
                                     img_path = ""
@@ -1194,35 +1200,35 @@ with tab5:
                                                     lambda: upload_to_drive_custom(
                                                         res_img.content, 
                                                         "キャスト情報_Images", 
-                                                        f"SYNC_{name}_{i:02d}.jpg"
+                                                        f"{custom_id}.メイン画像.jpg"
                                                     )
                                                 )
                                                 st.write(f"📸 {i+1}番目の画像をアップロード完了")
                                     except Exception as e:
-                                        logger.debug(f"Image fetch skip for cast {i} ({name}): {e}")
+                                        logger.debug(f"Image fetch skip for cast {i} ({formatted_name}): {e}")
 
-                                    # データを追加
+                                    # 【修正】データを追加（命名規則適用版）
                                     cast_data_list.append([
-                                        "",                    # A: ID
-                                        "",                    # B: エリア
-                                        name,                  # C: 名前
-                                        age,                   # D: 年齢
-                                        tall,                  # E: 身長
-                                        b,                     # F: バスト
-                                        cup,                   # G: カップ
-                                        w,                     # H: ウエスト
-                                        h,                     # I: ヒップ
-                                        "",                    # J: 系統
-                                        "",                    # K: キャッチ
-                                        "",                    # L: 女コメント
-                                        pr,                    # M: PR文
-                                        "",                    # N: 空
-                                        "",                    # O: 空
-                                        shop_id,               # P: 店舗ID
-                                        img_path               # Q: メイン画像
+                                        custom_id,             # A列: shop_id + 3桁連番
+                                        "",                    # B列: エリア
+                                        formatted_name,        # C列: 店舗名 + 全角スペース + 名前
+                                        age,                   # D列: 年齢
+                                        tall,                  # E列: 身長
+                                        b,                     # F列: バスト
+                                        cup,                   # G列: カップ
+                                        w,                     # H列: ウエスト
+                                        h,                     # I列: ヒップ
+                                        "",                    # J列: 系統
+                                        "",                    # K列: キャッチ
+                                        "",                    # L列: 女コメント
+                                        pr,                    # M列: PR文
+                                        "",                    # N列: 空
+                                        "",                    # O列: 空
+                                        shop_id,               # P列: 店舗ID
+                                        img_path               # Q列: メイン画像
                                     ])
                                     
-                                    st.success(f"✅ {i+1}番目のキャスト({name})のデータ取得完了")
+                                    st.success(f"✅ {i+1}番目のキャスト({formatted_name})のデータ取得完了")
 
                                 except Exception as e:
                                     st.warning(f"⚠️ {i+1}番目のキャスト情報取得に失敗: {e}")
@@ -1251,7 +1257,7 @@ with tab5:
                                 await asyncio.sleep(random.uniform(0.5, 1.5))
 
                             except Exception as e:
-                                st.error(f"❌ {i+1}��目のキャスト処理でエラー: {e}")
+                                st.error(f"❌ {i+1}番目のキャスト処理でエラー: {e}")
                                 logger.error(f"Cast {i} loop error: {e}")
                                 
                                 # エラー時もgo_back()を試す
@@ -1288,7 +1294,8 @@ with tab5:
                 with st.status("同期処理中...") as status:
                     st.write("⏳ スクレイピング処理を開始します...")
                     
-                    res = asyncio.run(run_fetch_derija_data(target_shop['ID'], target_shop['raw_pass']))
+                    # 【修正】shop_name を引数に追加
+                    res = asyncio.run(run_fetch_derija_data(target_shop['ID'], target_shop['raw_pass'], target_shop['店舗名']))
                     
                     if res["status"] == "success":
                         if res["data"]:
@@ -1306,7 +1313,8 @@ with tab5:
                             st.success(f"✅ {len(res['data'])} 名同期完了")
                             status.update(label="✅ 完了", state="complete")
                             
-                            # データテーブル表示
+                            # 【デバッグ表示】命名規則確認
+                            st.write("### 📋 書き込まれたデータプレビュー")
                             st.dataframe(
                                 pd.DataFrame(
                                     res["data"], 
