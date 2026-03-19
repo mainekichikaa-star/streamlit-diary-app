@@ -351,8 +351,17 @@ with tab1:
         
         # 店舗ごとの未登録数をカウント
         shop_status = []
+        # 除外したいキーワードのリスト
+        exclude_keywords = ["デリじゃ", "デリジャ", "でりじゃ"]
+        
         for shop in data_shops:
             s_name = str(shop.get('登録店舗')).strip()
+
+            # --- 追加: 除外キーワードが含まれているかチェック ---
+            if any(keyword in s_name for keyword in exclude_keywords):
+                continue  # キーワードが含まれていたら、この店舗の処理をスキップ
+            # ----------------------------------------------
+            
             s_id = str(shop.get('店舗ID')).strip()
             s_pass = str(shop.get('店舗PASSWORD')).strip()
             
