@@ -1260,7 +1260,7 @@ with tab5:
                             logger.error("ul#ul_sortable1 not found")
                             return {"status": "error", "message": "キャストリスト要素が見つかりません"}
                         
-                        st.success("✅ キャストリスト要素を検���")
+                        st.success("✅ キャストリスト要素を検索中")
 
                         # ul内の全てのli要素を取得
                         cast_items = page.locator('ul#ul_sortable1 > li.ui-state-default')
