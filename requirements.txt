@@ -8,3 +8,4 @@ google-auth
 pandas
 selenium
 webdriver-manager
+tenacity>=8.2.0
