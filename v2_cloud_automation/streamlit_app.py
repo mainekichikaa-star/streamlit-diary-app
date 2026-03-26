@@ -452,20 +452,37 @@ with tab2:
             for shop in selected_yoyaku_shops:
                 st.markdown(f"### 🏢 店舗: {shop['店舗名']} の同期処理を実行中...")
                 
-                async def run_yoyaku_automation(s_id, s_pass):
+                async def run_yoyaku_automation(s_id, s_pass, shop_name):
+                    """
+                    【修正版】メニュークリック・アコーディオン対応
+                    - 各種設定メニューの開閉状態を判定
+                    - 要素の表示・安定性を確認後にクリック
+                    - JavaScriptイベントを強制発火
+                    """
                     async with async_playwright() as p:
                         browser = await p.chromium.launch(headless=True, args=['--no-sandbox', '--lang=ja-JP'])
                         context = await browser.new_context(viewport={'width': 1280, 'height': 1200})
                         page = await context.new_page()
                         
                         try:
+                            # ==========================================
+                            # 【Step 1】ランキングデリにログイン
+                            # ==========================================
+                            st.write("🔐 ランキングデリにログイン中...")
                             await page.goto("https://ranking-deli.jp/admin/login")
                             await page.fill("#form_email", str(s_id).strip())
                             await page.fill("#form_password", str(s_pass).strip())
                             await page.click("#form_submit")
                             await page.wait_for_load_state("networkidle")
+                            logger.info(f"Logged in to ranking-deli for {shop_name}")
 
+                            # ==========================================
+                            # 【Step 2】料金設定ページから各データを取得
+                            # ==========================================
+                            st.write("📊 料金・オプション情報を取得中...")
+                            
                             await page.goto("https://ranking-deli.jp/admin/shopcharges/")
+                            await page.wait_for_load_state("networkidle")
                             
                             course_data = {"title": await page.locator("#form_course\\[0\\]\\[course_name\\]").get_attribute("value"), "prices": []}
                             for i in range(1, 6):
@@ -473,6 +490,7 @@ with tab2:
                                 p_val = await page.locator(f"#form_course\\[0\\]\\[charge{i}\\]").get_attribute("value")
                                 if t_val and p_val:
                                     course_data["prices"].append({"time": t_val, "price": p_val})
+                            logger.info(f"Course data extracted: {course_data['title']}")
 
                             extra_fees = {"admission": "", "nomination": "0", "repeat": "0"}
                             for i in range(1, 6):
@@ -489,8 +507,10 @@ with tab2:
 
                                 if any(x in label for x in ["本指名", "本指名料"]):
                                     extra_fees["repeat"] = "".join(filter(str.isdigit, val)) or "0"
+                            logger.info(f"Extra fees extracted: {extra_fees}")
 
                             await page.goto("https://ranking-deli.jp/admin/shopoptions/")
+                            await page.wait_for_load_state("networkidle")
                             option_data = []
                             for i in range(20):
                                 opt_name_el = page.locator(f"#form_option\\[{i}\\]\\[option_name\\]")
@@ -501,8 +521,10 @@ with tab2:
                                     if name and name.strip():
                                         option_data.append({"name": name.strip(), "fee": fee or "0"})
                                 else: break
+                            logger.info(f"Option data extracted: {len(option_data)} options")
 
                             await page.goto("https://ranking-deli.jp/admin/shop/transportation")
+                            await page.wait_for_load_state("networkidle")
                             transport_data = []
                             fee_divs = await page.locator(".carfare-fee-div").all()
                             for div in fee_divs:
@@ -513,88 +535,411 @@ with tab2:
                                     area_name = (await area_el.inner_text()).strip()
                                     if area_name:
                                         transport_data.append({"area": area_name, "fee": fee_val})
+                            logger.info(f"Transport data extracted: {len(transport_data)} areas")
 
+                            # ==========================================
+                            # 【Step 3】ネット予約管理画面へ遷移
+                            # ==========================================
+                            st.write("🔗 ネット予約管理画面へ遷移中...")
+                            
                             async with context.expect_page() as new_page_info:
                                 await page.locator("a.web_link").click()
                             yoyaku_page = await new_page_info.value
-                            await yoyaku_page.wait_for_load_state()
+                            await yoyaku_page.wait_for_load_state("networkidle")
+                            await asyncio.sleep(2)
+                            logger.info(f"Transitioned to yoyaku page: {yoyaku_page.url}")
 
-                            await yoyaku_page.locator(".listItem.setting .menuTxt").click()
-                            await asyncio.sleep(1)
+                            # ==========================================
+                            # 【Step 4】各種設定メニューをクリック（修正版）
+                            # ==========================================
+                            st.write("⚙️ 各種設定メニューを開いています...")
+                            
+                            try:
+                                # 【修正】メニューの開閉状態を確認
+                                menu_item = yoyaku_page.locator(".listItem.setting")
+                                
+                                # メニュー要素の存在確認
+                                if await menu_item.count() > 0:
+                                    st.write("✅ メニュー要素を検出")
+                                    
+                                    # 【重要】要素が表示されるまで待機
+                                    await menu_item.scroll_into_view_if_needed()
+                                    await asyncio.sleep(1)
+                                    
+                                    # acOpenクラスがあるか確認（開いているかチェック）
+                                    menu_class = await menu_item.get_attribute("class") or ""
+                                    is_open = "acOpen" in menu_class
+                                    logger.info(f"Menu class: {menu_class}, is_open: {is_open}")
+                                    
+                                    if not is_open:
+                                        # メニューが閉じている場合のみクリック
+                                        st.write("🔄 メニューを開いています...")
+                                        
+                                        # クリック対象の要素を再取得
+                                        toggle_btn = yoyaku_page.locator(".listItem.setting .menuTxt")
+                                        
+                                        # 要素が表示されるまで待機
+                                        await toggle_btn.wait_for(state="visible", timeout=10000)
+                                        await asyncio.sleep(0.5)
+                                        
+                                        # マウスホバー
+                                        await toggle_btn.hover()
+                                        await asyncio.sleep(0.5)
+                                        
+                                        # force=Trueでクリック（JavaScriptイベント発火）
+                                        await toggle_btn.click(force=True)
+                                        logger.info("Menu toggle button clicked (force=True)")
+                                        
+                                        # JavaScriptで確実にクリックイベントを発火
+                                        await yoyaku_page.evaluate("""() => {
+                                            const btn = document.querySelector('.listItem.setting .menuTxt');
+                                            if (btn) {
+                                                btn.dispatchEvent(new MouseEvent('click', { bubbles: true }));
+                                            }
+                                        }""")
+                                        logger.info("Manual click event dispatched")
+                                        
+                                        # メニュー展開待機
+                                        await asyncio.sleep(1.5)
+                                        
+                                        # アコーディオン開放待機
+                                        await yoyaku_page.wait_for_selector(".listItem.setting.acOpen", timeout=10000)
+                                        logger.info("Menu opened successfully")
+                                        st.success("✅ メニューを開きました")
+                                    else:
+                                        st.write("ℹ️ メニューはすでに開いています")
+                                        logger.info("Menu is already open")
+                                else:
+                                    st.warning("⚠️ メニュー要素が見つかりません")
+                                    logger.warning("Menu element not found")
+                                    
+                            except Exception as e:
+                                st.error(f"❌ メニュークリックでエラー: {e}")
+                                logger.error(f"Menu click error: {e}")
+                                raise
 
-                            await yoyaku_page.locator("a.acListTxt", has_text="予約設定").first.click()
-                            await yoyaku_page.locator("label[for='release']").click()
-                            await yoyaku_page.locator("label[for='freeReserveAccept']").click()
-                            await yoyaku_page.locator("input[name='admission_fee']").fill(extra_fees["admission"])
-                            await yoyaku_page.locator("button.saveBt", has_text="保存").click()
-                            await asyncio.sleep(1)
+                            # ==========================================
+                            # 【Step 5】予約設定
+                            # ==========================================
+                            st.write("📋 予約設定を変更中...")
+                            
+                            try:
+                                # 予約設定リンクを待機
+                                await yoyaku_page.wait_for_selector("a.acListTxt", timeout=10000)
+                                await asyncio.sleep(1)
+                                
+                                # 表示されているメニューリストをフィルタリング
+                                ac_list = yoyaku_page.locator(".mod-acList:not(.mod-acList-min)")
+                                if await ac_list.count() > 0:
+                                    # 開いているリストから予約設定を選択
+                                    reservation_link = ac_list.locator("a.acListTxt:has-text('予約設定')")
+                                else:
+                                    # フォールバック
+                                    reservation_link = yoyaku_page.locator("a.acListTxt:has-text('予約設定')")
+                                
+                                await reservation_link.first.scroll_into_view_if_needed()
+                                await asyncio.sleep(0.5)
+                                await reservation_link.first.click(force=True)
+                                await asyncio.sleep(1)
+                                logger.info("Clicked reservation settings")
+                                
+                                # 公開設定
+                                release_label = yoyaku_page.locator("label[for='release']")
+                                if await release_label.count() > 0:
+                                    await release_label.wait_for(state="visible", timeout=5000)
+                                    await release_label.click(force=True)
+                                    await asyncio.sleep(0.3)
+                                    logger.info("Toggled release checkbox")
+                                
+                                # 受付設定
+                                accept_label = yoyaku_page.locator("label[for='freeReserveAccept']")
+                                if await accept_label.count() > 0:
+                                    await accept_label.wait_for(state="visible", timeout=5000)
+                                    await accept_label.click(force=True)
+                                    await asyncio.sleep(0.3)
+                                    logger.info("Toggled accept checkbox")
+                                
+                                # 入会金設定
+                                admission_input = yoyaku_page.locator("input[name='admission_fee']")
+                                if await admission_input.count() > 0:
+                                    await admission_input.scroll_into_view_if_needed()
+                                    await asyncio.sleep(0.3)
+                                    await admission_input.clear()
+                                    await admission_input.fill(extra_fees["admission"])
+                                    logger.info(f"Set admission fee: {extra_fees['admission']}")
+                                
+                                # 保存
+                                save_btn = yoyaku_page.locator("button.saveBt:has-text('保存')")
+                                if await save_btn.count() > 0:
+                                    await save_btn.scroll_into_view_if_needed()
+                                    await asyncio.sleep(0.3)
+                                    await save_btn.click(force=True)
+                                    await asyncio.sleep(2)
+                                    logger.info("Reservation settings saved")
+                                    st.success("✅ 予約設定を保存しました")
+                            except Exception as e:
+                                st.warning(f"⚠️ 予約設定でエラー: {e}")
+                                logger.error(f"Reservation settings error: {e}")
 
-                            await yoyaku_page.locator("a.acListTxt", has_text="料金コース").first.click()
-                            if course_data["title"]:
-                                await yoyaku_page.locator("input[name='courses[0][name]']").fill(course_data["title"])
-                            for idx, item in enumerate(course_data["prices"]):
-                                time_sel = yoyaku_page.locator(f"select[name='courses[0][content][{idx}][time]']")
-                                price_in = yoyaku_page.locator(f"input[name='courses[0][content][{idx}][fee]']")
-                                if await time_sel.count() > 0:
-                                    await time_sel.select_option(value=str(item["time"]))
-                                    await price_in.fill(str(item["price"]))
-                            await yoyaku_page.locator("button.js-save-btn").click()
-                            await asyncio.sleep(1)
+                            # ==========================================
+                            # 【Step 6】料金コース設定
+                            # ==========================================
+                            st.write("💰 料金コース設定を変更中...")
+                            
+                            try:
+                                ac_list = yoyaku_page.locator(".mod-acList:not(.mod-acList-min)")
+                                course_link = ac_list.locator("a.acListTxt:has-text('料金コース')")
+                                if await course_link.count() == 0:
+                                    course_link = yoyaku_page.locator("a.acListTxt:has-text('料金コース')")
+                                
+                                await course_link.first.scroll_into_view_if_needed()
+                                await asyncio.sleep(0.5)
+                                await course_link.first.click(force=True)
+                                await asyncio.sleep(1)
+                                logger.info("Clicked course settings")
+                                
+                                if course_data["title"]:
+                                    course_name_input = yoyaku_page.locator("input[name='courses[0][name]']")
+                                    if await course_name_input.count() > 0:
+                                        await course_name_input.scroll_into_view_if_needed()
+                                        await asyncio.sleep(0.3)
+                                        await course_name_input.clear()
+                                        await course_name_input.fill(course_data["title"])
+                                        logger.info(f"Set course name: {course_data['title']}")
+                                
+                                for idx, item in enumerate(course_data["prices"]):
+                                    time_sel = yoyaku_page.locator(f"select[name='courses[0][content][{idx}][time]']")
+                                    price_in = yoyaku_page.locator(f"input[name='courses[0][content][{idx}][fee]']")
+                                    if await time_sel.count() > 0:
+                                        await time_sel.scroll_into_view_if_needed()
+                                        await asyncio.sleep(0.3)
+                                        await time_sel.select_option(value=str(item["time"]))
+                                        await price_in.fill(str(item["price"]))
+                                        logger.info(f"Set course price: {item['time']} = {item['price']}")
+                                
+                                course_save = yoyaku_page.locator("button.js-save-btn").first
+                                if await course_save.count() > 0:
+                                    await course_save.scroll_into_view_if_needed()
+                                    await asyncio.sleep(0.3)
+                                    await course_save.click(force=True)
+                                    await asyncio.sleep(2)
+                                    logger.info("Course settings saved")
+                                    st.success("✅ 料金コース設定を保存しました")
+                            except Exception as e:
+                                st.warning(f"⚠️ 料金コース設定でエラー: {e}")
+                                logger.error(f"Course settings error: {e}")
 
-                            await yoyaku_page.locator("a.acListTxt", has_text="オプション").first.click()
-                            for idx, opt in enumerate(option_data):
-                                n_in, f_in = yoyaku_page.locator(f"input[name='options[{idx}][name]']"), yoyaku_page.locator(f"input[name='options[{idx}][fee]']")
-                                if await n_in.count() > 0:
-                                    await n_in.fill(opt["name"]); await f_in.fill(str(opt["fee"]))
-                                else: break
-                            await yoyaku_page.locator("button.js-save-btn").click()
-                            await asyncio.sleep(1)
+                            # ==========================================
+                            # 【Step 7】オプション設定
+                            # ==========================================
+                            st.write("🎁 オプション設定を変更中...")
+                            
+                            try:
+                                ac_list = yoyaku_page.locator(".mod-acList:not(.mod-acList-min)")
+                                option_link = ac_list.locator("a.acListTxt:has-text('オプション')")
+                                if await option_link.count() == 0:
+                                    option_link = yoyaku_page.locator("a.acListTxt:has-text('オプション')")
+                                
+                                await option_link.first.scroll_into_view_if_needed()
+                                await asyncio.sleep(0.5)
+                                await option_link.first.click(force=True)
+                                await asyncio.sleep(1)
+                                logger.info("Clicked option settings")
+                                
+                                for idx, opt in enumerate(option_data):
+                                    n_in = yoyaku_page.locator(f"input[name='options[{idx}][name]']")
+                                    f_in = yoyaku_page.locator(f"input[name='options[{idx}][fee]']")
+                                    if await n_in.count() > 0:
+                                        await n_in.scroll_into_view_if_needed()
+                                        await asyncio.sleep(0.2)
+                                        await n_in.clear()
+                                        await n_in.fill(opt["name"])
+                                        await f_in.clear()
+                                        await f_in.fill(str(opt["fee"]))
+                                        logger.info(f"Set option: {opt['name']} = {opt['fee']}")
+                                    else:
+                                        break
+                                
+                                option_save = yoyaku_page.locator("button.js-save-btn").nth(1)
+                                if await option_save.count() > 0:
+                                    await option_save.scroll_into_view_if_needed()
+                                    await asyncio.sleep(0.3)
+                                    await option_save.click(force=True)
+                                    await asyncio.sleep(2)
+                                    logger.info("Option settings saved")
+                                    st.success("✅ オプション設定を保存しました")
+                            except Exception as e:
+                                st.warning(f"⚠️ オプション設定でエラー: {e}")
+                                logger.error(f"Option settings error: {e}")
 
-                            await yoyaku_page.locator("a.acListTxt", has_text="交通費").first.click()
-                            for idx, tf in enumerate(transport_data):
-                                a_in, f_in = yoyaku_page.locator(f"input[name='carfares[{idx}][area_name]']"), yoyaku_page.locator(f"input[name='carfares[{idx}][fee]']")
-                                if await a_in.count() > 0:
-                                    await a_in.fill(tf["area"]); await f_in.fill(str(tf["fee"]))
-                                else: break
-                            await yoyaku_page.locator("button.js-save-btn").click()
-                            await asyncio.sleep(1)
+                            # ==========================================
+                            # 【Step 8】交通費設定
+                            # ==========================================
+                            st.write("🚗 交通費設定を変更中...")
+                            
+                            try:
+                                ac_list = yoyaku_page.locator(".mod-acList:not(.mod-acList-min)")
+                                transport_link = ac_list.locator("a.acListTxt:has-text('交通費')")
+                                if await transport_link.count() == 0:
+                                    transport_link = yoyaku_page.locator("a.acListTxt:has-text('交通費')")
+                                
+                                await transport_link.first.scroll_into_view_if_needed()
+                                await asyncio.sleep(0.5)
+                                await transport_link.first.click(force=True)
+                                await asyncio.sleep(1)
+                                logger.info("Clicked transport settings")
+                                
+                                for idx, tf in enumerate(transport_data):
+                                    a_in = yoyaku_page.locator(f"input[name='carfares[{idx}][area_name]']")
+                                    f_in = yoyaku_page.locator(f"input[name='carfares[{idx}][fee]']")
+                                    if await a_in.count() > 0:
+                                        await a_in.scroll_into_view_if_needed()
+                                        await asyncio.sleep(0.2)
+                                        await a_in.clear()
+                                        await a_in.fill(tf["area"])
+                                        await f_in.clear()
+                                        await f_in.fill(str(tf["fee"]))
+                                        logger.info(f"Set transport: {tf['area']} = {tf['fee']}")
+                                    else:
+                                        break
+                                
+                                transport_save = yoyaku_page.locator("button.js-save-btn").nth(2)
+                                if await transport_save.count() > 0:
+                                    await transport_save.scroll_into_view_if_needed()
+                                    await asyncio.sleep(0.3)
+                                    await transport_save.click(force=True)
+                                    await asyncio.sleep(2)
+                                    logger.info("Transport settings saved")
+                                    st.success("✅ 交通費設定を保存しました")
+                            except Exception as e:
+                                st.warning(f"⚠️ 交通費設定でエラー: {e}")
+                                logger.error(f"Transport settings error: {e}")
 
+                            # ==========================================
+                            # 【Step 9】チャット設定 & 予約通知設定
+                            # ==========================================
+                            st.write("💬 チャット・通知設定を変更中...")
+                            
                             target_email = "isgroup0001@gmail.com"
                             for menu_name in ["チャット設定", "予約通知"]:
-                                await yoyaku_page.locator("a.acListTxt", has_text=menu_name).first.click()
-                                if menu_name == "チャット設定":
-                                    await yoyaku_page.locator("label[for='Release']").click()
-                                exs_emails = await yoyaku_page.locator("input[type='email']").all_attribute_values("value")
-                                if target_email not in [e.strip() for e in exs_emails if e]:
-                                    await yoyaku_page.locator("button.js-mail_user_add_button").click()
-                                    await yoyaku_page.locator("input[type='email']").last.fill(target_email)
-                                save_btn_sel = "button[name='sms-mail-add']" if menu_name == "予約通知" else "button.saveBt"
-                                await yoyaku_page.locator(save_btn_sel).click()
-                                await asyncio.sleep(1)
+                                try:
+                                    ac_list = yoyaku_page.locator(".mod-acList:not(.mod-acList-min)")
+                                    menu_link = ac_list.locator(f"a.acListTxt:has-text('{menu_name}')")
+                                    if await menu_link.count() == 0:
+                                        menu_link = yoyaku_page.locator(f"a.acListTxt:has-text('{menu_name}')")
+                                    
+                                    await menu_link.first.scroll_into_view_if_needed()
+                                    await asyncio.sleep(0.5)
+                                    await menu_link.first.click(force=True)
+                                    await asyncio.sleep(1)
+                                    logger.info(f"Clicked {menu_name}")
+                                    
+                                    if menu_name == "チャット設定":
+                                        release_label = yoyaku_page.locator("label[for='Release']")
+                                        if await release_label.count() > 0:
+                                            await release_label.wait_for(state="visible", timeout=5000)
+                                            await release_label.click(force=True)
+                                            await asyncio.sleep(0.3)
+                                            logger.info("Toggled release checkbox for chat")
+                                    
+                                    exs_emails = await yoyaku_page.locator("input[type='email']").all_attribute_values("value")
+                                    if target_email not in [e.strip() for e in exs_emails if e]:
+                                        add_btn = yoyaku_page.locator("button.js-mail_user_add_button")
+                                        if await add_btn.count() > 0:
+                                            await add_btn.scroll_into_view_if_needed()
+                                            await asyncio.sleep(0.3)
+                                            await add_btn.click(force=True)
+                                            await asyncio.sleep(0.5)
+                                            email_input = yoyaku_page.locator("input[type='email']").last
+                                            await email_input.wait_for(state="visible", timeout=5000)
+                                            await email_input.fill(target_email)
+                                            logger.info(f"Added email: {target_email}")
+                                    
+                                    save_btn_sel = "button[name='sms-mail-add']" if menu_name == "予約通知" else "button.saveBt"
+                                    save_btn = yoyaku_page.locator(save_btn_sel)
+                                    if await save_btn.count() > 0:
+                                        await save_btn.scroll_into_view_if_needed()
+                                        await asyncio.sleep(0.3)
+                                        await save_btn.click(force=True)
+                                        await asyncio.sleep(2)
+                                        logger.info(f"{menu_name} saved")
+                                        st.success(f"✅ {menu_name}を保存しました")
+                                except Exception as e:
+                                    st.warning(f"⚠️ {menu_name}でエラー: {e}")
+                                    logger.error(f"{menu_name} error: {e}")
 
-                            await yoyaku_page.locator("a.acListTxt", has_text="女の子").first.click()
-                            await yoyaku_page.wait_for_load_state()
-                            await yoyaku_page.locator("label[for='allGirls']").click()
-                            await yoyaku_page.locator("#nomination-input").fill(extra_fees["nomination"])
-                            await yoyaku_page.locator("#repeat-nomination-input").fill(extra_fees["repeat"])
-                            await yoyaku_page.locator("button.js-bulk-form-btn").click()
+                            # ==========================================
+                            # 【Step 10】女の子設定（指名料一括反映）
+                            # ==========================================
+                            st.write("👧 女の子設定を変更中...")
+                            
+                            try:
+                                ac_list = yoyaku_page.locator(".mod-acList:not(.mod-acList-min)")
+                                girl_link = ac_list.locator("a.acListTxt:has-text('女の子')")
+                                if await girl_link.count() == 0:
+                                    girl_link = yoyaku_page.locator("a.acListTxt:has-text('女の子')")
+                                
+                                await girl_link.first.scroll_into_view_if_needed()
+                                await asyncio.sleep(0.5)
+                                await girl_link.first.click(force=True)
+                                await yoyaku_page.wait_for_load_state("networkidle")
+                                await asyncio.sleep(1)
+                                logger.info("Clicked girl settings")
+                                
+                                all_girls_label = yoyaku_page.locator("label[for='allGirls']")
+                                if await all_girls_label.count() > 0:
+                                    await all_girls_label.wait_for(state="visible", timeout=5000)
+                                    await all_girls_label.click(force=True)
+                                    await asyncio.sleep(0.5)
+                                    logger.info("Toggled all girls checkbox")
+                                
+                                nomination_input = yoyaku_page.locator("#nomination-input")
+                                if await nomination_input.count() > 0:
+                                    await nomination_input.scroll_into_view_if_needed()
+                                    await asyncio.sleep(0.3)
+                                    await nomination_input.clear()
+                                    await nomination_input.fill(extra_fees["nomination"])
+                                    logger.info(f"Set nomination fee: {extra_fees['nomination']}")
+                                
+                                repeat_input = yoyaku_page.locator("#repeat-nomination-input")
+                                if await repeat_input.count() > 0:
+                                    await repeat_input.scroll_into_view_if_needed()
+                                    await asyncio.sleep(0.3)
+                                    await repeat_input.clear()
+                                    await repeat_input.fill(extra_fees["repeat"])
+                                    logger.info(f"Set repeat nomination fee: {extra_fees['repeat']}")
+                                
+                                bulk_save_btn = yoyaku_page.locator("button.js-bulk-form-btn")
+                                if await bulk_save_btn.count() > 0:
+                                    await bulk_save_btn.scroll_into_view_if_needed()
+                                    await asyncio.sleep(0.3)
+                                    await bulk_save_btn.click(force=True)
+                                    await asyncio.sleep(2)
+                                    logger.info("Girl settings saved")
+                                    st.success("✅ 女の子設定を保存しました")
+                            except Exception as e:
+                                st.warning(f"⚠️ 女の子設定でエラー: {e}")
+                                logger.error(f"Girl settings error: {e}")
                             
                             return {"status": "success", "fees": extra_fees, "url": yoyaku_page.url}
 
                         except Exception as e:
+                            logger.error(f"run_yoyaku_automation failed: {e}")
                             return {"status": "error", "message": str(e)}
                         finally:
                             await browser.close()
 
                 with st.status(f"🔄 {shop['店舗名']} の同期を実行中...") as status:
-                    res = asyncio.run(run_yoyaku_automation(shop['ID'], shop['raw_pass']))
+                    res = asyncio.run(run_yoyaku_automation(shop['ID'], shop['raw_pass'], shop['店舗名']))
                     if res["status"] == "success":
                         status.update(label=f"✅ {shop['店舗名']} 同期完了", state="complete")
                         st.success(f"同期成功: 入会金={res['fees']['admission'] or '無'}, 指名={res['fees']['nomination']}, 本指名={res['fees']['repeat']}")
+                        logger.info(f"Sync completed for {shop['店舗名']}")
                     else:
                         st.error(f"❌ {shop['店舗名']} エラー: {res['message']}")
                         status.update(label="❌ 同期失敗", state="error")
-
+                        logger.error(f"Sync failed for {shop['店舗名']}: {res['message']}")
+                        
 with tab3:
     st.subheader("📥 既存店キャスト情報の同期 (Web → シート)")
     st.info("選択した店舗の管理画面にログインし、登録されている全てのキャスト情報をスプレッドシートへ書き出します。")
