@@ -445,7 +445,7 @@ with tab2:
 
     st.divider()
 
-    if st.button("🌐 ネット予約管理画面へログイン・一括��定開始", type="primary"):
+    if st.button("🌐 ネット予約管理画面へログイン・一括設定開始", type="primary"):
         if not selected_yoyaku_shops:
             st.warning("店舗が選択されていません。")
         else:
@@ -454,11 +454,11 @@ with tab2:
                 
                 async def run_yoyaku_automation(s_id, s_pass, shop_name):
                     """
-                    【完全修正版】
-                    - メニュー展開の確実な実行
-                    - 料金・指名料取得ロジックの修正
-                    - 画面外要素の安全な操作
-                    - 詳細なデバッグログ
+                    【ホバーメニュー対応版】
+                    - onクラス確認で click() 判定
+                    - hover() で確実にメニュー表示
+                    - .mod-acList-min を無視
+                    - 短い待機でアニメーション対応
                     """
                     async with async_playwright() as p:
                         browser = await p.chromium.launch(headless=True, args=['--no-sandbox', '--lang=ja-JP'])
@@ -509,10 +509,8 @@ with tab2:
                             # ==========================================
                             extra_fees = {"admission": "", "nomination": "0", "repeat": "0"}
                             
-                            # course[1]内のすべてのフォーム要素を取得
                             try:
-                                # form_course[1][time*] と form_course[1][charge*] を取得
-                                for i in range(1, 10):  # より多くの行を検査
+                                for i in range(1, 10):
                                     time_val = ""
                                     charge_val = ""
                                     
@@ -535,7 +533,7 @@ with tab2:
                                     
                                     logger.info(f"📌 Extra fee row {i}: label='{time_val}', value='{charge_val}'")
                                     
-                                    # 入会金判定（より強力な部分一致）
+                                    # 入会金判定
                                     if "入会金" in time_val and "入会金" not in extra_fees.get("_already_matched_admission", ""):
                                         clean_val = "".join(filter(str.isdigit, charge_val))
                                         if clean_val and clean_val != "0":
@@ -638,9 +636,9 @@ with tab2:
                                 logger.warning(f"⚠️ Sidebar toggle failed (non-fatal): {e}")
 
                             # ==========================================
-                            # 【Step 5】メニュー展開（確実な実行）
+                            # 【Step 5】メニューホバー状態チェック（修正版）
                             # ==========================================
-                            st.write("⚙️ 各種設定メニューを開いています...")
+                            st.write("⚙️ 各種設定メニューを操作中...")
                             
                             try:
                                 menu_item = yoyaku_page.locator(".listItem.setting")
@@ -649,59 +647,45 @@ with tab2:
                                 
                                 if menu_count > 0:
                                     st.write("✅ メニュー要素を検出")
-                                    await asyncio.sleep(1)
+                                    await asyncio.sleep(0.5)
                                     
+                                    # 【修正】onクラスまたはacOpenクラスを確認
                                     menu_class = await menu_item.get_attribute("class") or ""
-                                    is_open = "acOpen" in menu_class
-                                    logger.info(f"📋 Menu class: {menu_class}, is_open: {is_open}")
+                                    has_on_class = "on" in menu_class
+                                    has_acopen_class = "acOpen" in menu_class
+                                    is_menu_open = has_on_class or has_acopen_class
                                     
-                                    if not is_open:
-                                        st.write("🔄 メニューをクリック中...")
+                                    logger.info(f"📋 Menu class: {menu_class}")
+                                    logger.info(f"📋 has 'on' class: {has_on_class}, has 'acOpen' class: {has_acopen_class}")
+                                    
+                                    if not is_menu_open:
+                                        # メニューが閉じている場合
+                                        st.write("🔄 メニューをホバー中...")
                                         
-                                        # 方法1: evaluate で直接 click() を呼び出し
-                                        await yoyaku_page.evaluate("""() => {
-                                            const menuTxt = document.querySelector('.listItem.setting .menuTxt');
-                                            if (menuTxt) {
-                                                console.log('Found menuTxt, clicking...');
-                                                menuTxt.click();
-                                            }
-                                        }""")
-                                        logger.info("✅ Executed evaluate click")
-                                        await asyncio.sleep(1)
+                                        # ホバー操作を実行
+                                        await menu_item.hover()
+                                        logger.info("✅ Hovered over menu")
                                         
-                                        # 方法2: dispatchEvent でクリックイベントを強制発火
-                                        await yoyaku_page.evaluate("""() => {
-                                            const menuTxt = document.querySelector('.listItem.setting .menuTxt');
-                                            if (menuTxt) {
-                                                const clickEvent = new MouseEvent('click', {
-                                                    bubbles: true,
-                                                    cancelable: true,
-                                                    view: window
-                                                });
-                                                menuTxt.dispatchEvent(clickEvent);
-                                            }
-                                        }""")
-                                        logger.info("✅ Dispatched click event")
-                                        await asyncio.sleep(1.5)
+                                        await asyncio.sleep(0.5)  # アニメーション待機
                                         
-                                        # ==========================================
-                                        # 【重要】アコーディオン展開を確実に待機
-                                        # ==========================================
-                                        st.write("⏳ メニュー展開を待機中...")
+                                        # クリック試行（念のため）
                                         try:
-                                            await yoyaku_page.wait_for_selector(
-                                                ".listItem.setting.acOpen .mod-acList",
-                                                timeout=10000
-                                            )
-                                            logger.info("✅ Menu acOpen and mod-acList confirmed")
-                                            st.success("✅ メニューを展開しました")
+                                            menu_txt = yoyaku_page.locator(".listItem.setting .menuTxt")
+                                            if await menu_txt.count() > 0:
+                                                await menu_txt.click(force=True)
+                                                logger.info("✅ Clicked menu text")
                                         except Exception as e:
-                                            logger.warning(f"⚠️ Menu open confirmation timeout: {e}")
-                                            # メニューが展開されていない可能性があるが続行
-                                            await asyncio.sleep(2)
+                                            logger.debug(f"Menu text click failed (non-fatal): {e}")
+                                        
+                                        await asyncio.sleep(0.5)
+                                        st.write("✅ メニューを表示しました")
                                     else:
-                                        st.write("ℹ️ メニューはすでに開いています")
-                                        logger.info("ℹ️ Menu is already open")
+                                        st.write("ℹ️ メニューはすでに表示状態です")
+                                        logger.info("ℹ️ Menu is already open/hovered")
+                                        
+                                        # ホバーは維持
+                                        await menu_item.hover()
+                                        await asyncio.sleep(0.5)
                                 else:
                                     st.warning("⚠️ メニュー要素が見つかりません")
                                     logger.warning("❌ Menu element not found")
@@ -711,7 +695,48 @@ with tab2:
                                 logger.error(f"❌ Menu operation error: {e}")
                                 raise
 
-                            await asyncio.sleep(2)
+                            await asyncio.sleep(1)
+
+                            # ==========================================
+                            # 【ヘルパー関数】メニューリンククリック
+                            # ==========================================
+                            async def click_menu_link(link_text: str) -> bool:
+                                """
+                                .mod-acList内のリンクをクリック（.mod-acList-minを無視）
+                                """
+                                try:
+                                    logger.info(f"🔍 Looking for link: {link_text}")
+                                    
+                                    # ホバーを再度実行（確実にメニュー表示）
+                                    menu_item = yoyaku_page.locator(".listItem.setting")
+                                    await menu_item.hover()
+                                    await asyncio.sleep(0.5)
+                                    
+                                    # .mod-acList内のリンク（非表示を無視）
+                                    link = yoyaku_page.locator(".mod-acList:not(.mod-acList-min) a.acListTxt:has-text('" + link_text + "')")
+                                    link_count = await link.count()
+                                    logger.info(f"🔍 Found {link_count} links for {link_text}")
+                                    
+                                    if link_count > 0:
+                                        await link.first.click(force=True)
+                                        logger.info(f"✅ Clicked link: {link_text}")
+                                        await asyncio.sleep(1.5)
+                                        return True
+                                    else:
+                                        # フォールバック
+                                        logger.warning(f"⚠️ Link not found in .mod-acList, trying fallback")
+                                        link_fallback = yoyaku_page.locator(f"a.acListTxt:has-text('{link_text}')")
+                                        if await link_fallback.count() > 0:
+                                            await link_fallback.first.click(force=True)
+                                            logger.info(f"✅ Clicked link (fallback): {link_text}")
+                                            await asyncio.sleep(1.5)
+                                            return True
+                                        else:
+                                            logger.error(f"❌ Link not found: {link_text}")
+                                            return False
+                                except Exception as e:
+                                    logger.error(f"❌ Click menu link failed: {e}")
+                                    return False
 
                             # ==========================================
                             # 【Step 6】予約設定
@@ -719,18 +744,7 @@ with tab2:
                             st.write("📋 予約設定を変更中...")
                             
                             try:
-                                await yoyaku_page.wait_for_selector(".mod-acList", timeout=3000)
-                                await asyncio.sleep(0.5)
-                                
-                                reservation_link = yoyaku_page.locator("a.acListTxt:has-text('予約設定')")
-                                
-                                if await reservation_link.count() > 0:
-                                    logger.info("🔍 Found reservation settings link")
-                                    await asyncio.sleep(0.3)
-                                    await reservation_link.first.click(force=True)
-                                    await asyncio.sleep(1.5)
-                                    logger.info("✅ Clicked reservation settings")
-                                    
+                                if await click_menu_link("予約設定"):
                                     # 公開設定
                                     try:
                                         release_label = yoyaku_page.locator("label[for='release']")
@@ -772,7 +786,7 @@ with tab2:
                                     except Exception as e:
                                         logger.warning(f"⚠️ Save button click failed: {e}")
                                 else:
-                                    logger.warning("⚠️ Reservation settings link not found")
+                                    logger.warning("⚠️ Could not navigate to reservation settings")
                             except Exception as e:
                                 st.warning(f"⚠️ 予約設定でエラー: {e}")
                                 logger.error(f"❌ Reservation settings error: {e}")
@@ -783,14 +797,7 @@ with tab2:
                             st.write("💰 料金コース設定を変更中...")
                             
                             try:
-                                course_link = yoyaku_page.locator("a.acListTxt:has-text('料金コース')")
-                                if await course_link.count() > 0:
-                                    logger.info("🔍 Found course link")
-                                    await asyncio.sleep(0.3)
-                                    await course_link.first.click(force=True)
-                                    await asyncio.sleep(1.5)
-                                    logger.info("✅ Clicked course settings")
-                                    
+                                if await click_menu_link("料金コース"):
                                     if course_data["title"]:
                                         try:
                                             course_name_input = yoyaku_page.locator("input[name='courses[0][name]']")
@@ -821,6 +828,8 @@ with tab2:
                                             st.success("✅ 料金コース設定を保存しました")
                                     except Exception as e:
                                         logger.warning(f"⚠️ Course save failed: {e}")
+                                else:
+                                    logger.warning("⚠️ Could not navigate to course settings")
                             except Exception as e:
                                 st.warning(f"⚠️ 料金コース設定でエラー: {e}")
                                 logger.error(f"❌ Course settings error: {e}")
@@ -831,14 +840,7 @@ with tab2:
                             st.write("🎁 オプション設定を変更中...")
                             
                             try:
-                                option_link = yoyaku_page.locator("a.acListTxt:has-text('オプション')")
-                                if await option_link.count() > 0:
-                                    logger.info("🔍 Found option link")
-                                    await asyncio.sleep(0.3)
-                                    await option_link.first.click(force=True)
-                                    await asyncio.sleep(1.5)
-                                    logger.info("✅ Clicked option settings")
-                                    
+                                if await click_menu_link("オプション"):
                                     for idx, opt in enumerate(option_data):
                                         try:
                                             n_in = yoyaku_page.locator(f"input[name='options[{idx}][name]']")
@@ -863,6 +865,8 @@ with tab2:
                                             st.success("✅ オプション設定を保存しました")
                                     except Exception as e:
                                         logger.warning(f"⚠️ Option save failed: {e}")
+                                else:
+                                    logger.warning("⚠️ Could not navigate to option settings")
                             except Exception as e:
                                 st.warning(f"⚠️ オプション設定でエラー: {e}")
                                 logger.error(f"❌ Option settings error: {e}")
@@ -873,14 +877,7 @@ with tab2:
                             st.write("🚗 交通費設定を変更中...")
                             
                             try:
-                                transport_link = yoyaku_page.locator("a.acListTxt:has-text('交通費')")
-                                if await transport_link.count() > 0:
-                                    logger.info("🔍 Found transport link")
-                                    await asyncio.sleep(0.3)
-                                    await transport_link.first.click(force=True)
-                                    await asyncio.sleep(1.5)
-                                    logger.info("✅ Clicked transport settings")
-                                    
+                                if await click_menu_link("交通費"):
                                     for idx, tf in enumerate(transport_data):
                                         try:
                                             a_in = yoyaku_page.locator(f"input[name='carfares[{idx}][area_name]']")
@@ -905,6 +902,8 @@ with tab2:
                                             st.success("✅ 交通費設定を保存しました")
                                     except Exception as e:
                                         logger.warning(f"⚠️ Transport save failed: {e}")
+                                else:
+                                    logger.warning("⚠️ Could not navigate to transport settings")
                             except Exception as e:
                                 st.warning(f"⚠️ 交通費設定でエラー: {e}")
                                 logger.error(f"❌ Transport settings error: {e}")
@@ -917,14 +916,7 @@ with tab2:
                             target_email = "isgroup0001@gmail.com"
                             for menu_name in ["チャット設定", "予約通知"]:
                                 try:
-                                    menu_link = yoyaku_page.locator(f"a.acListTxt:has-text('{menu_name}')")
-                                    if await menu_link.count() > 0:
-                                        logger.info(f"🔍 Found {menu_name} link")
-                                        await asyncio.sleep(0.3)
-                                        await menu_link.first.click(force=True)
-                                        await asyncio.sleep(1.5)
-                                        logger.info(f"✅ Clicked {menu_name}")
-                                        
+                                    if await click_menu_link(menu_name):
                                         if menu_name == "チャット設定":
                                             try:
                                                 release_label = yoyaku_page.locator("label[for='Release']")
@@ -960,6 +952,8 @@ with tab2:
                                                 st.success(f"✅ {menu_name}を保存しました")
                                         except Exception as e:
                                             logger.warning(f"⚠️ {menu_name} save failed: {e}")
+                                    else:
+                                        logger.warning(f"⚠️ Could not navigate to {menu_name}")
                                 except Exception as e:
                                     st.warning(f"⚠️ {menu_name}でエラー: {e}")
                                     logger.error(f"❌ {menu_name} error: {e}")
@@ -970,14 +964,9 @@ with tab2:
                             st.write("👧 女の子設定を変更中...")
                             
                             try:
-                                girl_link = yoyaku_page.locator("a.acListTxt:has-text('女の子')")
-                                if await girl_link.count() > 0:
-                                    logger.info("🔍 Found girl link")
-                                    await asyncio.sleep(0.3)
-                                    await girl_link.first.click(force=True)
+                                if await click_menu_link("女の子"):
                                     await yoyaku_page.wait_for_load_state("networkidle")
-                                    await asyncio.sleep(1.5)
-                                    logger.info("✅ Clicked girl settings")
+                                    await asyncio.sleep(1)
                                     
                                     try:
                                         all_girls_label = yoyaku_page.locator("label[for='allGirls']")
@@ -1015,6 +1004,8 @@ with tab2:
                                             st.success("✅ 女の子設定を保存しました")
                                     except Exception as e:
                                         logger.warning(f"⚠️ Girl save failed: {e}")
+                                else:
+                                    logger.warning("⚠️ Could not navigate to girl settings")
                             except Exception as e:
                                 st.warning(f"⚠️ 女の子設定でエラー: {e}")
                                 logger.error(f"❌ Girl settings error: {e}")
