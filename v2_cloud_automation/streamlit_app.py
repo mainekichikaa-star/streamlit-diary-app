@@ -715,56 +715,42 @@ if st.button("🌐 ネット予約管理画面へログイン・一括設定開�
                         # ==========================================
                         # 【Step 3】ネット予約管理画面へ遷移
                         # ==========================================
-                        st.write("🔗 ネット予約管理画面へ遷移中...")
+                        st.write("🔗 ネット予約管理画面へ遷移中 (403回避モード)...")
                         try:
-                            # 1. 現在の全ページ（タブ）の数を確認
-                            initial_pages = context.pages
-                            st.write(f"  → 現在のタブ数: {len(initial_pages)}")
-
-                            # 2. 予約管理ボタンを待機
-                            yoyaku_btn = page.locator('a.web_link', has_text='予約管理')
-                            await yoyaku_btn.wait_for(state="visible", timeout=10000)
-
-                            # 3. 【重要】新しいタブが開くのを待ち受けてからクリック
-                            async with context.expect_page() as new_page_info:
-                                # 人間がクリックしたように少し遅延を入れる
-                                await yoyaku_btn.click(delay=100, force=True)
+                            # 1. 現在のランキングデリのログインCookieを取得
+                            current_cookies = await context.cookies()
                             
-                            # 4. 新しく開いたタブを取得
-                            yoyaku_page = await new_page_info.value
+                            # 2. 新しいページを直接作成（クリックを介さない）
+                            yoyaku_page = await context.new_page()
                             
-                            # 5. ページが安定するまで待機
-                            await yoyaku_page.wait_for_load_state("networkidle")
-                            await asyncio.sleep(3.0) 
+                            # 3. 取得したCookieを新しいページ（context全体）に再度適用
+                            await context.add_cookies(current_cookies)
+                            
+                            # 4. 人間がURLを打ち込んで移動する挙動をシミュレート
+                            # 直接 https://e-yoyaku.jp/admin/ にアクセス
+                            response = await yoyaku_page.goto(
+                                "https://e-yoyaku.jp/admin/", 
+                                wait_until="domcontentloaded",
+                                timeout=60000
+                            )
+                            
+                            # 5. ステータスコードの確認
+                            if response.status == 403:
+                                st.error("❌ 直接遷移でも403が発生しました。リロードを試みます...")
+                                await asyncio.sleep(3.0)
+                                response = await yoyaku_page.reload(wait_until="networkidle")
 
-                            # 6. 【確認】タブが2つあるかログに出す
-                            all_pages = context.pages
-                            st.write(f"  → 遷移後の総タブ数: {len(all_pages)}")
-                            for idx, p in enumerate(all_pages):
-                                st.write(f"    - タブ{idx}: {p.url[:50]}...")
-
-                            # 7. もしログイン画面に戻されていたら、Cookieを強制再適用してリロード
+                            # 6. 成功判定
                             if "login" in yoyaku_page.url:
-                                st.warning("⚠️ ログインが外れたため、セッションの強制修復を試みます...")
-                                # 親ページ(page)のCookieをコンテキスト全体に再度馴染ませる（念押し）
-                                cookies = await context.cookies()
-                                await context.add_cookies(cookies)
-                                
-                                # 予約トップへ直接再突入
-                                await yoyaku_page.goto("https://e-yoyaku.jp/admin/", wait_until="networkidle")
-                                await asyncio.sleep(2.0)
-
-                            # 最終判定
-                            if "login" in yoyaku_page.url:
-                                st.error("❌ セッション同期に失敗しました。")
-                                st.image(await yoyaku_page.screenshot(), caption="失敗：やはりログイン画面")
-                                return {"status": "error", "message": "Login failed on second tab"}
+                                st.warning("⚠️ ログインが外れています。セッションの引き継ぎに失敗しました。")
+                            elif response.status == 403:
+                                st.error("❌ 依然として403エラーです。Bot対策が非常に強力です。")
                             else:
-                                st.success("✅ ネット予約ページへのログイン維持に成功しました！")
-                                st.image(await yoyaku_page.screenshot(), caption="成功：ネット予約管理の中身")
+                                st.success("✅ 403を回避して管理画面への進入に成功しました！")
+                                st.image(await yoyaku_page.screenshot(), caption="【最新】遷移後の画面")
 
                         except Exception as e:
-                            st.error(f"⚠️ 遷移プロセスでエラー: {e}")
+                            st.error(f"⚠️ 遷移エラー: {e}")
                             return {"status": "error", "message": str(e)}
                             
                         # ==========================================
