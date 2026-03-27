@@ -454,15 +454,47 @@ with tab2:
                 
                 async def run_yoyaku_automation(s_id, s_pass, shop_name):
                     """
-                    【修正版】保存処理の確実化版
-                    - dispatch_event("change") で入力確定
-                    - wait_for_load_state("networkidle") で通信完了待機
-                    - scroll_into_view_if_needed() で画面内表示確認
-                    - asyncio.sleep(1) でDB書き込み完了待機
-                    - 詳細ログ出力で診断容易化
+                    【修正版】Streamlit Cloud対応版
+                    - --disable-gpu, --disable-dev-shm-usage, --single-process を追加
+                    - executable_path の例外処理を強化
+                    - メモリリソースの効率化
                     """
                     async with async_playwright() as p:
-                        browser = await p.chromium.launch(headless=True, args=['--no-sandbox', '--lang=ja-JP'])
+                        try:
+                            st.write("🔧 ブラウザを起動中（Streamlit Cloud環境対応）...")
+                            
+                            # ==========================================
+                            # 【修正】ブラウザ起動引数の最適化
+                            # ==========================================
+                            browser_args = [
+                                '--no-sandbox',              # サンドボックス無効（Streamlit Cloud必須）
+                                '--disable-gpu',             # GPU無効化
+                                '--disable-dev-shm-usage',   # /dev/shm リソース不足回避
+                                '--single-process',          # 単一プロセス（リソース制限対策）
+                                '--disable-extensions',      # 拡張機能無効化
+                                '--disable-sync',            # 同期無効化
+                                '--metrics-recording-only',  # メトリクス記録のみ
+                                '--mute-audio',              # 音声ミュート
+                                '--lang=ja-JP'              # 言語設定
+                            ]
+                            
+                            logger.info(f"🔧 Launching browser with args: {browser_args}")
+                            
+                            # タイムアウト値を延長（Cloud環境は起動に時間がかかる）
+                            browser = await p.chromium.launch(
+                                headless=True,
+                                args=browser_args,
+                                timeout=60000  # 60秒のタイムアウト
+                            )
+                            
+                            logger.info("✅ Browser launched successfully")
+                            st.success("✅ ブラウザ起動成功")
+                            
+                        except Exception as e:
+                            logger.error(f"❌ Browser launch failed: {e}")
+                            st.error(f"❌ ブラウザ起動エラー: {e}")
+                            return {"status": "error", "message": f"ブラウザ起動失敗: {str(e)}"}
+                        
                         context = await browser.new_context(viewport={'width': 1920, 'height': 1080})
                         page = await context.new_page()
                         
@@ -471,11 +503,11 @@ with tab2:
                             # 【Step 1】ランキングデリにログイン
                             # ==========================================
                             st.write("🔐 ランキングデリにログイン中...")
-                            await page.goto("https://ranking-deli.jp/admin/login")
+                            await page.goto("https://ranking-deli.jp/admin/login", timeout=60000)
                             await page.fill("#form_email", str(s_id).strip())
                             await page.fill("#form_password", str(s_pass).strip())
                             await page.click("#form_submit")
-                            await page.wait_for_load_state("networkidle")
+                            await page.wait_for_load_state("networkidle", timeout=60000)
                             logger.info(f"✅ Logged in to ranking-deli for {shop_name}")
 
                             # ==========================================
@@ -483,8 +515,8 @@ with tab2:
                             # ==========================================
                             st.write("📊 料金・オプション情報を取得中...")
                             
-                            await page.goto("https://ranking-deli.jp/admin/shopcharges/")
-                            await page.wait_for_load_state("networkidle")
+                            await page.goto("https://ranking-deli.jp/admin/shopcharges/", timeout=60000)
+                            await page.wait_for_load_state("networkidle", timeout=60000)
                             await asyncio.sleep(2)
                             
                             # コース名取得
@@ -560,8 +592,8 @@ with tab2:
                             logger.info(f"📊 Final extra_fees: {extra_fees}")
 
                             # オプション情報取得
-                            await page.goto("https://ranking-deli.jp/admin/shopoptions/")
-                            await page.wait_for_load_state("networkidle")
+                            await page.goto("https://ranking-deli.jp/admin/shopoptions/", timeout=60000)
+                            await page.wait_for_load_state("networkidle", timeout=60000)
                             await asyncio.sleep(2)
                             
                             option_data = []
@@ -582,8 +614,8 @@ with tab2:
                             logger.info(f"📦 Options extracted: {len(option_data)} items")
 
                             # 交通費情報取得
-                            await page.goto("https://ranking-deli.jp/admin/shop/transportation")
-                            await page.wait_for_load_state("networkidle")
+                            await page.goto("https://ranking-deli.jp/admin/shop/transportation", timeout=60000)
+                            await page.wait_for_load_state("networkidle", timeout=60000)
                             await asyncio.sleep(2)
                             
                             transport_data = []
@@ -614,7 +646,7 @@ with tab2:
                             async with context.expect_page() as new_page_info:
                                 await page.locator("a.web_link").click()
                             yoyaku_page = await new_page_info.value
-                            await yoyaku_page.wait_for_load_state("networkidle")
+                            await yoyaku_page.wait_for_load_state("networkidle", timeout=60000)
                             await asyncio.sleep(3)
                             logger.info(f"✅ Transitioned to yoyaku page: {yoyaku_page.url}")
 
@@ -644,7 +676,7 @@ with tab2:
                                         await link.first.click(force=True)
                                         logger.info(f"✅ Clicked link: {link_text}")
                                         await asyncio.sleep(2)
-                                        await yoyaku_page.wait_for_load_state("networkidle")
+                                        await yoyaku_page.wait_for_load_state("networkidle", timeout=60000)
                                         return True
                                     else:
                                         logger.warning(f"⚠️ Link not found: {link_text}")
@@ -713,7 +745,7 @@ with tab2:
                                             logger.info("⏳ Waiting for save to complete...")
                                             
                                             # 【重要】保存完了を待機
-                                            await yoyaku_page.wait_for_load_state("networkidle")
+                                            await yoyaku_page.wait_for_load_state("networkidle", timeout=60000)
                                             await asyncio.sleep(1.5)
                                             
                                             logger.info("✅ Reservation settings saved")
@@ -786,7 +818,7 @@ with tab2:
                                             logger.info("⏳ Waiting for course save to complete...")
                                             
                                             # 【重要】保存完了を待機
-                                            await yoyaku_page.wait_for_load_state("networkidle")
+                                            await yoyaku_page.wait_for_load_state("networkidle", timeout=60000)
                                             await asyncio.sleep(1.5)
                                             
                                             logger.info("✅ Course settings saved")
@@ -849,7 +881,7 @@ with tab2:
                                             logger.info("⏳ Waiting for option save to complete...")
                                             
                                             # 【重要】保存完了を待機
-                                            await yoyaku_page.wait_for_load_state("networkidle")
+                                            await yoyaku_page.wait_for_load_state("networkidle", timeout=60000)
                                             await asyncio.sleep(1.5)
                                             
                                             logger.info("✅ Option settings saved")
@@ -912,7 +944,7 @@ with tab2:
                                             logger.info("⏳ Waiting for transport save to complete...")
                                             
                                             # 【重要】保存完了を待機
-                                            await yoyaku_page.wait_for_load_state("networkidle")
+                                            await yoyaku_page.wait_for_load_state("networkidle", timeout=60000)
                                             await asyncio.sleep(1.5)
                                             
                                             logger.info("✅ Transport settings saved")
@@ -976,7 +1008,7 @@ with tab2:
                                                 logger.info(f"⏳ Waiting for {menu_name} save to complete...")
                                                 
                                                 # 【重要】保存完了を待機
-                                                await yoyaku_page.wait_for_load_state("networkidle")
+                                                await yoyaku_page.wait_for_load_state("networkidle", timeout=60000)
                                                 await asyncio.sleep(1.5)
                                                 
                                                 logger.info(f"✅ {menu_name} saved")
@@ -996,7 +1028,7 @@ with tab2:
                             
                             try:
                                 if await click_menu_link_safe("女の子"):
-                                    await yoyaku_page.wait_for_load_state("networkidle")
+                                    await yoyaku_page.wait_for_load_state("networkidle", timeout=60000)
                                     await asyncio.sleep(1)
                                     
                                     try:
@@ -1053,7 +1085,7 @@ with tab2:
                                             logger.info("⏳ Waiting for girl settings save to complete...")
                                             
                                             # 【重要】保存完了を待機
-                                            await yoyaku_page.wait_for_load_state("networkidle")
+                                            await yoyaku_page.wait_for_load_state("networkidle", timeout=60000)
                                             await asyncio.sleep(1.5)
                                             
                                             logger.info("✅ Girl settings saved")
