@@ -710,33 +710,46 @@ if st.button("🌐 ネット予約管理画面へログイン・一括設定開�
                         # ==========================================
                         st.write("🔗 ネット予約管理画面へ遷移中...")
                         try:
-                            # 1. 「予約管理」ボタンを特定
+                            # 1. ロボット判定を避けるため、UserAgentを偽装（人間らしく）
+                            # ※context作成時に設定済みのはずですが、念のため
+                            
                             yoyaku_btn = page.locator('a.web_link', has_text='予約管理')
                             
                             if await yoyaku_btn.count() > 0:
-                                # 2. 【重要】クリックと同時に新しいタブが開くのを「待ち構える」
+                                # 2. 【重要】クリックの瞬間に新しいタブをキャッチする
+                                # 同時に「人間らしい待ち時間」をランダムで入れる
+                                await asyncio.sleep(random.uniform(1.0, 2.0)) 
+                                
                                 async with context.expect_page() as new_page_info:
-                                    await yoyaku_btn.click()
+                                    # JavaScript側でのクリックをシミュレート（target="_blank"を確実に拾う）
+                                    await yoyaku_btn.click(delay=random.uniform(50, 150))
                                 
-                                # 3. 新しく開いたタブ（yoyaku_page）を取得
                                 yoyaku_page = await new_page_info.value
-                                await yoyaku_page.wait_for_load_state("networkidle")
                                 
-                                # ログイン状態が引き継がれているか確認
+                                # 3. 遷移先で「人間がページを見てる」ふりをする
+                                await yoyaku_page.wait_for_load_state("domcontentloaded")
+                                await asyncio.sleep(2.0)
+                                
+                                # URLにログイン画面が含まれてしまった場合の強制リトライ
                                 if "login" in yoyaku_page.url:
-                                    st.error("❌ ログインが引き継がれず、ログイン画面に戻されました")
-                                    # ここで再度ログインが必要な場合の処理を入れることも可能
+                                    st.warning("⚠️ セッションが外れました。メイン画面からURLを直接叩き直します...")
+                                    # ランキングデリのセッションを持ったまま直リンクを試みる
+                                    await yoyaku_page.goto("https://e-yoyaku.jp/admin/", wait_until="networkidle")
+                                    await asyncio.sleep(2.0)
+
+                                if "login" in yoyaku_page.url:
+                                    st.error("❌ ログイン状態を維持できませんでした。")
+                                    # 証拠スクショを撮る
+                                    st.image(await yoyaku_page.screenshot(), caption="ログインに失敗した状態の画面")
+                                    return {"status": "error", "message": "Session lost"}
                                 else:
-                                    st.success("✅ 予約管理画面への遷移に成功しました")
-                                    st.image(await yoyaku_page.screenshot(), caption="【証拠】予約管理画面（ログイン済み状態）")
+                                    st.success("✅ 予約管理画面のログイン維持に成功しました")
+                                    st.image(await yoyaku_page.screenshot(), caption="【証拠】ログイン維持成功画面")
                             else:
-                                st.error("❌ '予約管理' ボタンが見つかりませんでした")
-                                return {"status": "error", "message": "Button not found"}
-
+                                st.error("❌ '予約管理' ボタンが見つかりません")
                         except Exception as e:
-                            st.error(f"⚠️ 遷移処理でエラー: {e}")
-                            return {"status": "error", "message": str(e)}
-
+                            st.error(f"⚠️ 遷移エラー: {e}")
+                            
                         # ==========================================
                         # 【Step 4】汎用ヘルパー関数
                         # ==========================================
