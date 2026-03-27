@@ -810,48 +810,52 @@ if st.button("🌐 ネット予約管理画面へログイン・一括設定開�
                                 return False
 
                         # ==========================================
-                        # 【Step 5】予約設定
+                        # 【Step 5】予約設定 (証拠ログ強化版)
                         # ==========================================
                         st.write("📋 予約設定を変更中...")
                         try:
                             if await click_menu_and_navigate("予約設定"):
                                 await yoyaku_page.wait_for_load_state("networkidle")
                                 
-                                # 入会金設定の可視化
+                                # 1. 入力前の状態を確認
                                 admission_input = yoyaku_page.locator("input[name='admission_fee']")
                                 if await admission_input.count() > 0:
-                                    old_val = await admission_input.get_attribute("value")
-                                    st.write(f"  → 入会金入力前: '{old_val}'")
-                                    
                                     await admission_input.fill(str(extra_fees["admission"]))
                                     await admission_input.dispatch_event("input")
                                     await admission_input.dispatch_event("change")
                                     
-                                    new_val = await admission_input.get_attribute("value")
-                                    st.write(f"  → 入会金入力後: '{new_val}'")
-
-                                # 保存ボタンの実行
+                                    # 【証拠1】入力直後のスクショ
+                                    shot = await yoyaku_page.screenshot()
+                                    st.image(shot, caption=f"【証拠】入会金 {extra_fees['admission']} 円を入力した直後の画面")
+                                
+                                # 2. 保存実行
                                 save_btn = yoyaku_page.locator("button.saveBt", has_text="保存")
                                 await save_btn.scroll_into_view_if_needed()
-                                st.write("  → 保存ボタンをクリックします...")
                                 await save_btn.click(force=True)
                                 
-                                # 保存メッセージの検出
+                                # 3. 保存メッセージの有無を画像で確認
                                 try:
-                                    # メッセージが出るまで待機
+                                    # メッセージが出るまで少し待つ
+                                    await asyncio.sleep(2.0)
+                                    shot_res = await yoyaku_page.screenshot()
+                                    
                                     flash = yoyaku_page.locator(".js-flash-message")
-                                    await flash.wait_for(state="visible", timeout=10000)
-                                    msg_text = await flash.inner_text()
-                                    st.success(f"  ✅ サーバー回答: {msg_text.strip()}")
-                                except:
-                                    st.error("  ❌ 保存メッセージが表示されませんでした（保存失敗の可能性が高いです）")
+                                    if await flash.is_visible():
+                                        msg = await flash.inner_text()
+                                        st.success(f"✅ サーバー回答を確認: {msg.strip()}")
+                                    else:
+                                        st.error("❌ 保存完了メッセージが画面に出ていません")
+                                    
+                                    st.image(shot_res, caption="【証拠】保存ボタンを押した2秒後の画面")
+                                except Exception as e:
+                                    st.warning(f"結果のキャプチャに失敗: {e}")
                                 
-                                await asyncio.sleep(1.5)
+                                await asyncio.sleep(1.0)
                         except Exception as e:
-                            st.error(f"⚠️ 予約設定で致命的エラー: {e}")
+                            st.error(f"⚠️ 予約設定でエラー: {e}")
 
                         # ==========================================
-                        # 【Step 6】料金コース設定
+                        # 【Step 6】料金コース設定 (証拠ログ強化版)
                         # ==========================================
                         st.write("💰 料金コース設定を変更中...")
                         try:
@@ -863,21 +867,22 @@ if st.button("🌐 ネット予約管理画面へログイン・一括設定開�
                                     if await price_in.count() > 0:
                                         await price_in.fill(str(item["price"]))
                                         await price_in.dispatch_event("change")
-                                        st.write(f"  → コース{idx+1}に {item['price']}円 を入力しました")
+                                
+                                # 入力後の確認スクショ
+                                st.image(await yoyaku_page.screenshot(), caption="料金入力後の画面")
 
-                                save_btn = yoyaku_page.locator("button.js-save-btn").first
-                                st.write("  → 料金保存ボタンをクリック...")
-                                await save_btn.click(force=True)
+                                await yoyaku_page.locator("button.js-save-btn").first.click(force=True)
+                                await asyncio.sleep(2.0)
                                 
-                                try:
-                                    await yoyaku_page.wait_for_selector(".js-flash-message", state="visible", timeout=8000)
-                                    st.success("  ✅ 料金コースの保存完了を確認")
-                                except:
-                                    st.error("  ❌ 料金コースの保存確認ができませんでした")
-                                
-                                await asyncio.sleep(1.5)
+                                # 保存後の確認スクショ
+                                shot_final = await yoyaku_page.screenshot()
+                                if await yoyaku_page.locator(".js-flash-message").is_visible():
+                                    st.success("✅ 料金コース：保存完了メッセージを確認")
+                                else:
+                                    st.error("❌ 料金コース：保存メッセージが出ていません")
+                                st.image(shot_final, caption="料金保存実行後の画面")
                         except Exception as e:
-                            st.error(f"⚠️ 料金コース設定エラー: {e}")
+                            st.error(f"⚠️ 料金コースエラー: {e}")
 
                         # ==========================================
                         # 【Step 7】オプション設定
