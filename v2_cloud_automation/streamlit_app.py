@@ -710,45 +710,55 @@ if st.button("🌐 ネット予約管理画面へログイン・一括設定開�
                         # ==========================================
                         st.write("🔗 ネット予約管理画面へ遷移中...")
                         try:
-                            # 1. ロボット判定を避けるため、UserAgentを偽装（人間らしく）
-                            # ※context作成時に設定済みのはずですが、念のため
-                            
-                            yoyaku_btn = page.locator('a.web_link', has_text='予約管理')
-                            
-                            if await yoyaku_btn.count() > 0:
-                                # 2. 【重要】クリックの瞬間に新しいタブをキャッチする
-                                # 同時に「人間らしい待ち時間」をランダムで入れる
-                                await asyncio.sleep(random.uniform(1.0, 2.0)) 
-                                
-                                async with context.expect_page() as new_page_info:
-                                    # JavaScript側でのクリックをシミュレート（target="_blank"を確実に拾う）
-                                    await yoyaku_btn.click(delay=random.uniform(50, 150))
-                                
-                                yoyaku_page = await new_page_info.value
-                                
-                                # 3. 遷移先で「人間がページを見てる」ふりをする
-                                await yoyaku_page.wait_for_load_state("domcontentloaded")
-                                await asyncio.sleep(2.0)
-                                
-                                # URLにログイン画面が含まれてしまった場合の強制リトライ
-                                if "login" in yoyaku_page.url:
-                                    st.warning("⚠️ セッションが外れました。メイン画面からURLを直接叩き直します...")
-                                    # ランキングデリのセッションを持ったまま直リンクを試みる
-                                    await yoyaku_page.goto("https://e-yoyaku.jp/admin/", wait_until="networkidle")
-                                    await asyncio.sleep(2.0)
+                            # 1. 現在の全ページ（タブ）の数を確認
+                            initial_pages = context.pages
+                            st.write(f"  → 現在のタブ数: {len(initial_pages)}")
 
-                                if "login" in yoyaku_page.url:
-                                    st.error("❌ ログイン状態を維持できませんでした。")
-                                    # 証拠スクショを撮る
-                                    st.image(await yoyaku_page.screenshot(), caption="ログインに失敗した状態の画面")
-                                    return {"status": "error", "message": "Session lost"}
-                                else:
-                                    st.success("✅ 予約管理画面のログイン維持に成功しました")
-                                    st.image(await yoyaku_page.screenshot(), caption="【証拠】ログイン維持成功画面")
+                            # 2. 予約管理ボタンを待機
+                            yoyaku_btn = page.locator('a.web_link', has_text='予約管理')
+                            await yoyaku_btn.wait_for(state="visible", timeout=10000)
+
+                            # 3. 【重要】新しいタブが開くのを待ち受けてからクリック
+                            async with context.expect_page() as new_page_info:
+                                # 人間がクリックしたように少し遅延を入れる
+                                await yoyaku_btn.click(delay=100, force=True)
+                            
+                            # 4. 新しく開いたタブを取得
+                            yoyaku_page = await new_page_info.value
+                            
+                            # 5. ページが安定するまで待機
+                            await yoyaku_page.wait_for_load_state("networkidle")
+                            await asyncio.sleep(3.0) 
+
+                            # 6. 【確認】タブが2つあるかログに出す
+                            all_pages = context.pages
+                            st.write(f"  → 遷移後の総タブ数: {len(all_pages)}")
+                            for idx, p in enumerate(all_pages):
+                                st.write(f"    - タブ{idx}: {p.url[:50]}...")
+
+                            # 7. もしログイン画面に戻されていたら、Cookieを強制再適用してリロード
+                            if "login" in yoyaku_page.url:
+                                st.warning("⚠️ ログインが外れたため、セッションの強制修復を試みます...")
+                                # 親ページ(page)のCookieをコンテキスト全体に再度馴染ませる（念押し）
+                                cookies = await context.cookies()
+                                await context.add_cookies(cookies)
+                                
+                                # 予約トップへ直接再突入
+                                await yoyaku_page.goto("https://e-yoyaku.jp/admin/", wait_until="networkidle")
+                                await asyncio.sleep(2.0)
+
+                            # 最終判定
+                            if "login" in yoyaku_page.url:
+                                st.error("❌ セッション同期に失敗しました。")
+                                st.image(await yoyaku_page.screenshot(), caption="失敗：やはりログイン画面")
+                                return {"status": "error", "message": "Login failed on second tab"}
                             else:
-                                st.error("❌ '予約管理' ボタンが見つかりません")
+                                st.success("✅ ネット予約ページへのログイン維持に成功しました！")
+                                st.image(await yoyaku_page.screenshot(), caption="成功：ネット予約管理の中身")
+
                         except Exception as e:
-                            st.error(f"⚠️ 遷移エラー: {e}")
+                            st.error(f"⚠️ 遷移プロセスでエラー: {e}")
+                            return {"status": "error", "message": str(e)}
                             
                         # ==========================================
                         # 【Step 4】汎用ヘルパー関数
