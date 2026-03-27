@@ -528,19 +528,16 @@ if st.button("🌐 ネット予約管理画面へログイン・一括設定開�
                         st.write("🔧 ブラウザを起動中...")
                         logger.info("Launching browser...")
                         
+                        # ==========================================
+                        # 【修正】ロボット判定を回避するためのステルス設定
+                        # ==========================================
                         browser_args = [
                             '--no-sandbox',
                             '--disable-gpu',
                             '--disable-dev-shm-usage',
-                            '--single-process',
-                            '--disable-extensions',
-                            '--disable-sync',
-                            '--metrics-recording-only',
-                            '--mute-audio',
+                            '--disable-blink-features=AutomationControlled', # 自動操作フラグを隠す
                             '--lang=ja-JP'
                         ]
-                        
-                        logger.info(f"Browser launch args: {browser_args}")
                         
                         browser = await p.chromium.launch(
                             headless=True,
@@ -548,8 +545,18 @@ if st.button("🌐 ネット予約管理画面へログイン・一括設定開�
                             timeout=120000
                         )
                         
-                        logger.info("✅ Browser launched successfully")
-                        st.success("✅ ブラウザ起動成功")
+                        # コンテキスト作成時に人間らしいUserAgentを設定
+                        context = await browser.new_context(
+                            viewport={'width': 1920, 'height': 1080},
+                            user_agent="Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36"
+                        )
+                        
+                        # navigator.webdriver を undefined に書き換えて自動操作を隠蔽
+                        await context.add_init_script("Object.defineProperty(navigator, 'webdriver', {get: () => undefined})")
+                        
+                        page = await context.new_page()
+                        logger.info("✅ Browser launched with stealth settings")
+                        st.success("✅ ブラウザ起動成功（ステルスモード）")
                         
                     except Exception as e:
                         logger.error(f"❌ Browser launch failed: {e}")
