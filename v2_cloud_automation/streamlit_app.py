@@ -813,58 +813,30 @@ if st.button("🌐 ネット予約管理画面へログイン・一括設定開�
                         # 【Step 5】予約設定
                         # ==========================================
                         st.write("📋 予約設定を変更中...")
-                        
                         try:
                             if await click_menu_and_navigate("予約設定"):
                                 await yoyaku_page.wait_for_load_state("networkidle")
-                                await asyncio.sleep(1.0)
-                                
-                                # 公開設定
-                                try:
-                                    is_released = await yoyaku_page.is_checked("input[id='release']")
-                                    if not is_released:
-                                        await yoyaku_page.locator("label[for='release']").scroll_into_view_if_needed()
-                                        await yoyaku_page.locator("label[for='release']").click(force=True)
-                                        await yoyaku_page.locator("input[id='release']").dispatch_event("change")
-                                except Exception as e:
-                                    logger.warning(f"⚠️ Release toggle failed: {e}")
-                                
-                                # 受付設定
-                                try:
-                                    is_accepted = await yoyaku_page.is_checked("input[id='freeReserveAccept']")
-                                    if not is_accepted:
-                                        await yoyaku_page.locator("label[for='freeReserveAccept']").scroll_into_view_if_needed()
-                                        await yoyaku_page.locator("label[for='freeReserveAccept']").click(force=True)
-                                        await yoyaku_page.locator("input[id='freeReserveAccept']").dispatch_event("change")
-                                except Exception as e:
-                                    logger.warning(f"⚠️ Accept toggle failed: {e}")
                                 
                                 # 入会金設定
-                                try:
-                                    admission_input = yoyaku_page.locator("input[name='admission_fee']")
-                                    if await admission_input.count() > 0:
-                                        await admission_input.scroll_into_view_if_needed()
-                                        await admission_input.fill(str(extra_fees["admission"]))
-                                        await admission_input.dispatch_event("input")
-                                        await admission_input.dispatch_event("change")
-                                        logger.info(f"🔍 Admission value set: {extra_fees['admission']}")
-                                except Exception as e:
-                                    logger.warning(f"⚠️ Admission input failed: {e}")
-                                
-                                # --- 確実な保存処理 ---
+                                admission_input = yoyaku_page.locator("input[name='admission_fee']")
+                                if await admission_input.count() > 0:
+                                    await admission_input.fill(str(extra_fees["admission"]))
+                                    await admission_input.dispatch_event("input")
+                                    await admission_input.dispatch_event("change")
+
+                                # --- 保存処理 ---
                                 save_btn = yoyaku_page.locator("button.saveBt", has_text="保存")
-                                if await save_btn.count() > 0:
-                                    await save_btn.scroll_into_view_if_needed()
-                                    await save_btn.click(force=True)
-                                    # 通信完了を待機
-                                    await yoyaku_page.wait_for_load_state("networkidle")
-                                    await asyncio.sleep(2.5) # サーバー側の反映待ち
-                                    logger.info("✅ 予約設定を保存しました")
-                                else:
-                                    logger.warning("⚠️ 予約設定の保存ボタンが見つかりません")
-                                    
-                            else:
-                                logger.warning("⚠️ Could not navigate to reservation settings")
+                                await save_btn.scroll_into_view_if_needed()
+                                await save_btn.click(force=True)
+                                
+                                # ✨ 追加：保存完了メッセージが出るまで最大10秒待機
+                                try:
+                                    await yoyaku_page.wait_for_selector(".js-flash-message", state="visible", timeout=10000)
+                                    logger.info("✅ 予約設定：保存メッセージを確認しました")
+                                except:
+                                    logger.warning("⚠️ 予約設定：保存メッセージが確認できませんでした")
+                                
+                                await asyncio.sleep(1.5)
                         except Exception as e:
                             st.warning(f"⚠️ 予約設定でエラー: {e}")
 
@@ -872,29 +844,28 @@ if st.button("🌐 ネット予約管理画面へログイン・一括設定開�
                         # 【Step 6】料金コース設定
                         # ==========================================
                         st.write("💰 料金コース設定を変更中...")
-                        
                         try:
                             if await click_menu_and_navigate("料金コース"):
                                 await yoyaku_page.wait_for_load_state("networkidle")
-                                await asyncio.sleep(1.0)
                                 
-                                # 料金入力（元のロジックを維持し、確定イベントを追加）
+                                # 料金入力
                                 for idx, item in enumerate(course_data["prices"]):
-                                    try:
-                                        price_in = yoyaku_page.locator(f"input[name='courses[0][content][{idx}][fee]']")
-                                        if await price_in.count() > 0:
-                                            await price_in.fill(str(item["price"]))
-                                            await price_in.dispatch_event("input")
-                                            await price_in.dispatch_event("change")
-                                    except: break
+                                    price_in = yoyaku_page.locator(f"input[name='courses[0][content][{idx}][fee]']")
+                                    if await price_in.count() > 0:
+                                        await price_in.fill(str(item["price"]))
+                                        await price_in.dispatch_event("change")
 
-                                # 保存と待機
-                                save_btn = yoyaku_page.locator("button.js-save-btn")
-                                await save_btn.first.scroll_into_view_if_needed()
-                                await save_btn.first.click(force=True)
-                                await yoyaku_page.wait_for_load_state("networkidle")
-                                await asyncio.sleep(2.5) 
-                                logger.info("✅ 料金コースを保存しました")
+                                # 保存ボタン
+                                save_btn = yoyaku_page.locator("button.js-save-btn").first
+                                await save_btn.click(force=True)
+                                
+                                # ✨ 追加：保存メッセージ待機
+                                try:
+                                    await yoyaku_page.wait_for_selector(".js-flash-message", state="visible", timeout=10000)
+                                    logger.info("✅ 料金コース：保存メッセージを確認しました")
+                                except: pass
+                                
+                                await asyncio.sleep(1.5)
                         except Exception as e:
                             st.warning(f"⚠️ 料金コース設定でエラー: {e}")
 
@@ -902,27 +873,21 @@ if st.button("🌐 ネット予約管理画面へログイン・一括設定開�
                         # 【Step 7】オプション設定
                         # ==========================================
                         st.write("🎁 オプション設定を変更中...")
-                        
                         try:
                             if await click_menu_and_navigate("オプション"):
-                                await yoyaku_page.wait_for_load_state("networkidle")
-                                await asyncio.sleep(1.0)
-                                
                                 for idx, opt in enumerate(option_data):
-                                    try:
-                                        n_in = yoyaku_page.locator(f"input[name='options[{idx}][name]']")
-                                        f_in = yoyaku_page.locator(f"input[name='options[{idx}][fee]']")
-                                        if await n_in.count() > 0:
-                                            await n_in.fill(opt["name"])
-                                            await n_in.dispatch_event("change")
-                                            await f_in.fill(str(opt["fee"]))
-                                            await f_in.dispatch_event("change")
-                                    except: break
+                                    n_in = yoyaku_page.locator(f"input[name='options[{idx}][name]']")
+                                    f_in = yoyaku_page.locator(f"input[name='options[{idx}][fee]']")
+                                    if await n_in.count() > 0:
+                                        await n_in.fill(opt["name"])
+                                        await f_in.fill(str(opt["fee"]))
+                                        await n_in.dispatch_event("change")
+                                        await f_in.dispatch_event("change")
 
-                                save_btn = yoyaku_page.locator("button.js-save-btn")
-                                await save_btn.first.click(force=True)
-                                await yoyaku_page.wait_for_load_state("networkidle")
-                                await asyncio.sleep(2.5)
+                                await yoyaku_page.locator("button.js-save-btn").first.click(force=True)
+                                # ✨ 追加：保存メッセージ待機
+                                await yoyaku_page.wait_for_selector(".js-flash-message", state="visible", timeout=10000)
+                                await asyncio.sleep(1.5)
                         except Exception as e:
                             st.warning(f"⚠️ オプション設定でエラー: {e}")
 
@@ -930,27 +895,21 @@ if st.button("🌐 ネット予約管理画面へログイン・一括設定開�
                         # 【Step 8】交通費設定
                         # ==========================================
                         st.write("🚗 交通費設定を変更中...")
-                        
                         try:
                             if await click_menu_and_navigate("交通費"):
-                                await yoyaku_page.wait_for_load_state("networkidle")
-                                await asyncio.sleep(1.0)
-                                
                                 for idx, tf in enumerate(transport_data):
-                                    try:
-                                        a_in = yoyaku_page.locator(f"input[name='carfares[{idx}][area_name]']")
-                                        f_in = yoyaku_page.locator(f"input[name='carfares[{idx}][fee]']")
-                                        if await a_in.count() > 0:
-                                            await a_in.fill(tf["area"])
-                                            await a_in.dispatch_event("change")
-                                            await f_in.fill(str(tf["fee"]))
-                                            await f_in.dispatch_event("change")
-                                    except: break
+                                    a_in = yoyaku_page.locator(f"input[name='carfares[{idx}][area_name]']")
+                                    f_in = yoyaku_page.locator(f"input[name='carfares[{idx}][fee]']")
+                                    if await a_in.count() > 0:
+                                        await a_in.fill(tf["area"])
+                                        await f_in.fill(str(tf["fee"]))
+                                        await a_in.dispatch_event("change")
+                                        await f_in.dispatch_event("change")
 
-                                save_btn = yoyaku_page.locator("button.js-save-btn")
-                                await save_btn.first.click(force=True)
-                                await yoyaku_page.wait_for_load_state("networkidle")
-                                await asyncio.sleep(2.5)
+                                await yoyaku_page.locator("button.js-save-btn").first.click(force=True)
+                                # ✨ 追加：保存メッセージ待機
+                                await yoyaku_page.wait_for_selector(".js-flash-message", state="visible", timeout=10000)
+                                await asyncio.sleep(1.5)
                         except Exception as e:
                             st.warning(f"⚠️ 交通費設定でエラー: {e}")
                             
