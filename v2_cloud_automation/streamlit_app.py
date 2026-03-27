@@ -709,13 +709,33 @@ if st.button("🌐 ネット予約管理画面へログイン・一括設定開�
                         # 【Step 3】ネット予約管理画面へ遷移
                         # ==========================================
                         st.write("🔗 ネット予約管理画面へ遷移中...")
-                        
-                        async with context.expect_page() as new_page_info:
-                            await page.locator("a.web_link").click()
-                        yoyaku_page = await new_page_info.value
-                        await yoyaku_page.wait_for_load_state("networkidle", timeout=60000)
-                        await asyncio.sleep(3)
-                        logger.info(f"✅ Transitioned to yoyaku page: {yoyaku_page.url}")
+                        try:
+                            # 1. 「予約管理」ボタンを特定
+                            yoyaku_btn = page.locator('a.web_link', has_text='予約管理')
+                            
+                            if await yoyaku_btn.count() > 0:
+                                # 2. 【重要】クリックと同時に新しいタブが開くのを「待ち構える」
+                                async with context.expect_page() as new_page_info:
+                                    await yoyaku_btn.click()
+                                
+                                # 3. 新しく開いたタブ（yoyaku_page）を取得
+                                yoyaku_page = await new_page_info.value
+                                await yoyaku_page.wait_for_load_state("networkidle")
+                                
+                                # ログイン状態が引き継がれているか確認
+                                if "login" in yoyaku_page.url:
+                                    st.error("❌ ログインが引き継がれず、ログイン画面に戻されました")
+                                    # ここで再度ログインが必要な場合の処理を入れることも可能
+                                else:
+                                    st.success("✅ 予約管理画面への遷移に成功しました")
+                                    st.image(await yoyaku_page.screenshot(), caption="【証拠】予約管理画面（ログイン済み状態）")
+                            else:
+                                st.error("❌ '予約管理' ボタンが見つかりませんでした")
+                                return {"status": "error", "message": "Button not found"}
+
+                        except Exception as e:
+                            st.error(f"⚠️ 遷移処理でエラー: {e}")
+                            return {"status": "error", "message": str(e)}
 
                         # ==========================================
                         # 【Step 4】汎用ヘルパー関数
