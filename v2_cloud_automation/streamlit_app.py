@@ -1086,6 +1086,7 @@ with tab2:
                         status.update(label="❌ 同期失敗", state="error")
                         logger.error(f"❌ Sync failed for {shop['店舗名']}: {res['message']}")
                         
+                        
 with tab3:
     st.subheader("📥 既存店キャスト情報の同期 (Web → シート)")
     st.info("選択した店舗の管理画面にログインし、登録されている全てのキャスト情報をスプレッドシートへ書き出します。")
