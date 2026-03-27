@@ -817,28 +817,38 @@ if st.button("🌐 ネット予約管理画面へログイン・一括設定開�
                             if await click_menu_and_navigate("予約設定"):
                                 await yoyaku_page.wait_for_load_state("networkidle")
                                 
-                                # 入会金設定
+                                # 入会金設定の可視化
                                 admission_input = yoyaku_page.locator("input[name='admission_fee']")
                                 if await admission_input.count() > 0:
+                                    old_val = await admission_input.get_attribute("value")
+                                    st.write(f"  → 入会金入力前: '{old_val}'")
+                                    
                                     await admission_input.fill(str(extra_fees["admission"]))
                                     await admission_input.dispatch_event("input")
                                     await admission_input.dispatch_event("change")
+                                    
+                                    new_val = await admission_input.get_attribute("value")
+                                    st.write(f"  → 入会金入力後: '{new_val}'")
 
-                                # --- 保存処理 ---
+                                # 保存ボタンの実行
                                 save_btn = yoyaku_page.locator("button.saveBt", has_text="保存")
                                 await save_btn.scroll_into_view_if_needed()
+                                st.write("  → 保存ボタンをクリックします...")
                                 await save_btn.click(force=True)
                                 
-                                # ✨ 追加：保存完了メッセージが出るまで最大10秒待機
+                                # 保存メッセージの検出
                                 try:
-                                    await yoyaku_page.wait_for_selector(".js-flash-message", state="visible", timeout=10000)
-                                    logger.info("✅ 予約設定：保存メッセージを確認しました")
+                                    # メッセージが出るまで待機
+                                    flash = yoyaku_page.locator(".js-flash-message")
+                                    await flash.wait_for(state="visible", timeout=10000)
+                                    msg_text = await flash.inner_text()
+                                    st.success(f"  ✅ サーバー回答: {msg_text.strip()}")
                                 except:
-                                    logger.warning("⚠️ 予約設定：保存メッセージが確認できませんでした")
+                                    st.error("  ❌ 保存メッセージが表示されませんでした（保存失敗の可能性が高いです）")
                                 
                                 await asyncio.sleep(1.5)
                         except Exception as e:
-                            st.warning(f"⚠️ 予約設定でエラー: {e}")
+                            st.error(f"⚠️ 予約設定で致命的エラー: {e}")
 
                         # ==========================================
                         # 【Step 6】料金コース設定
@@ -848,26 +858,26 @@ if st.button("🌐 ネット予約管理画面へログイン・一括設定開�
                             if await click_menu_and_navigate("料金コース"):
                                 await yoyaku_page.wait_for_load_state("networkidle")
                                 
-                                # 料金入力
                                 for idx, item in enumerate(course_data["prices"]):
                                     price_in = yoyaku_page.locator(f"input[name='courses[0][content][{idx}][fee]']")
                                     if await price_in.count() > 0:
                                         await price_in.fill(str(item["price"]))
                                         await price_in.dispatch_event("change")
+                                        st.write(f"  → コース{idx+1}に {item['price']}円 を入力しました")
 
-                                # 保存ボタン
                                 save_btn = yoyaku_page.locator("button.js-save-btn").first
+                                st.write("  → 料金保存ボタンをクリック...")
                                 await save_btn.click(force=True)
                                 
-                                # ✨ 追加：保存メッセージ待機
                                 try:
-                                    await yoyaku_page.wait_for_selector(".js-flash-message", state="visible", timeout=10000)
-                                    logger.info("✅ 料金コース：保存メッセージを確認しました")
-                                except: pass
+                                    await yoyaku_page.wait_for_selector(".js-flash-message", state="visible", timeout=8000)
+                                    st.success("  ✅ 料金コースの保存完了を確認")
+                                except:
+                                    st.error("  ❌ 料金コースの保存確認ができませんでした")
                                 
                                 await asyncio.sleep(1.5)
                         except Exception as e:
-                            st.warning(f"⚠️ 料金コース設定でエラー: {e}")
+                            st.error(f"⚠️ 料金コース設定エラー: {e}")
 
                         # ==========================================
                         # 【Step 7】オプション設定
@@ -883,13 +893,14 @@ if st.button("🌐 ネット予約管理画面へログイン・一括設定開�
                                         await f_in.fill(str(opt["fee"]))
                                         await n_in.dispatch_event("change")
                                         await f_in.dispatch_event("change")
+                                        st.write(f"  → オプション '{opt['name']}' を入力")
 
                                 await yoyaku_page.locator("button.js-save-btn").first.click(force=True)
-                                # ✨ 追加：保存メッセージ待機
-                                await yoyaku_page.wait_for_selector(".js-flash-message", state="visible", timeout=10000)
+                                await yoyaku_page.wait_for_selector(".js-flash-message", state="visible", timeout=8000)
+                                st.success("  ✅ オプション保存完了")
                                 await asyncio.sleep(1.5)
                         except Exception as e:
-                            st.warning(f"⚠️ オプション設定でエラー: {e}")
+                            st.error(f"⚠️ オプション設定エラー: {e}")
 
                         # ==========================================
                         # 【Step 8】交通費設定
@@ -905,13 +916,14 @@ if st.button("🌐 ネット予約管理画面へログイン・一括設定開�
                                         await f_in.fill(str(tf["fee"]))
                                         await a_in.dispatch_event("change")
                                         await f_in.dispatch_event("change")
+                                        st.write(f"  → 交通費 '{tf['area']}' を入力")
 
                                 await yoyaku_page.locator("button.js-save-btn").first.click(force=True)
-                                # ✨ 追加：保存メッセージ待機
-                                await yoyaku_page.wait_for_selector(".js-flash-message", state="visible", timeout=10000)
+                                await yoyaku_page.wait_for_selector(".js-flash-message", state="visible", timeout=8000)
+                                st.success("  ✅ 交通費保存完了")
                                 await asyncio.sleep(1.5)
                         except Exception as e:
-                            st.warning(f"⚠️ 交通費設定でエラー: {e}")
+                            st.error(f"⚠️ 交通費設定エラー: {e}")
                             
                         # ==========================================
                         # 【Step 9】チャット設定 & 予約通知設定
