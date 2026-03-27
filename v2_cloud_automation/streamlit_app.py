@@ -715,43 +715,64 @@ if st.button("🌐 ネット予約管理画面へログイン・一括設定開�
                         # ==========================================
                         # 【Step 3】ネット予約管理画面へ遷移
                         # ==========================================
-                        st.write("🔗 ネット予約管理画面へ遷移中 (403回避モード)...")
+                        st.write("🔗 ネット予約管理画面へ遷移中 (セキュリティ回避モード)...")
                         try:
-                            # 1. 現在のランキングデリのログインCookieを取得
-                            current_cookies = await context.cookies()
-                            
-                            # 2. 新しいページを直接作成（クリックを介さない）
+                            # 1. 新しいタブを作成
                             yoyaku_page = await context.new_page()
+
+                            # 2. 人間がブラウザで直接開いた時に送信される「リクエストヘッダー」を完全再現
+                            # これがないと「プログラムからの直接アクセス」と即バレします
+                            await yoyaku_page.set_extra_http_headers({
+                                "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,image/apng,*/*;q=0.8,application/signed-exchange;v=b3;q=0.7",
+                                "Accept-Language": "ja,en-US;q=0.9,en;q=0.8",
+                                "Cache-Control": "max-age=0",
+                                "Sec-Ch-Ua": '"Chromium";v="122", "Not(A:Brand";v="24", "Google Chrome";v="122"',
+                                "Sec-Ch-Ua-Mobile": "?0",
+                                "Sec-Ch-Ua-Platform": '"Windows"',
+                                "Sec-Fetch-Dest": "document",
+                                "Sec-Fetch-Mode": "navigate",
+                                "Sec-Fetch-Site": "same-site", # ranking-deliから来たように見せる
+                                "Sec-Fetch-User": "?1",
+                                "Upgrade-Insecure-Requests": "1",
+                                "Referer": "https://ranking-deli.jp/" # 参照元を偽装
+                            })
+
+                            # 3. Cookieを同期
+                            cookies = await context.cookies()
+                            await context.add_cookies(cookies)
+
+                            # 4. 遷移（タイムアウトを長めに設定）
+                            # 403を避けるため、一気に飛ばず、一度ランキングデリのドメインに留まってから移動
+                            await asyncio.sleep(random.uniform(2.0, 4.0))
                             
-                            # 3. 取得したCookieを新しいページ（context全体）に再度適用
-                            await context.add_cookies(current_cookies)
-                            
-                            # 4. 人間がURLを打ち込んで移動する挙動をシミュレート
-                            # 直接 https://e-yoyaku.jp/admin/ にアクセス
                             response = await yoyaku_page.goto(
                                 "https://e-yoyaku.jp/admin/", 
-                                wait_until="domcontentloaded",
-                                timeout=60000
+                                wait_until="commit", # 完全に読み込む前に判定を開始
+                                timeout=90000
                             )
-                            
-                            # 5. ステータスコードの確認
-                            if response.status == 403:
-                                st.error("❌ 直接遷移でも403が発生しました。リロードを試みます...")
-                                await asyncio.sleep(3.0)
-                                response = await yoyaku_page.reload(wait_until="networkidle")
 
-                            # 6. 成功判定
-                            if "login" in yoyaku_page.url:
-                                st.warning("⚠️ ログインが外れています。セッションの引き継ぎに失敗しました。")
-                            elif response.status == 403:
-                                st.error("❌ 依然として403エラーです。Bot対策が非常に強力です。")
+                            # 5. もし403なら、JavaScript側から移動を試みる（最終奥義）
+                            if response and response.status == 403:
+                                st.warning("⚠️ サーバーが警戒しています。内部スクリプトで再侵入します...")
+                                await asyncio.sleep(5.0)
+                                await yoyaku_page.evaluate("location.href = 'https://e-yoyaku.jp/admin/'")
+                                await yoyaku_page.wait_for_load_state("networkidle")
+
+                            # 判定とスクショ
+                            await asyncio.sleep(3.0)
+                            final_url = yoyaku_page.url
+                            st.write(f"  → 最終到達URL: {final_url}")
+                            
+                            st.image(await yoyaku_page.screenshot(), caption="【最終検証】画面の状態")
+
+                            if "403" in await yoyaku_page.content():
+                                st.error("❌ サーバーのIPブロックを突破できませんでした。")
+                                return {"status": "error", "message": "IP Blocked by Server"}
                             else:
-                                st.success("✅ 403を回避して管理画面への進入に成功しました！")
-                                st.image(await yoyaku_page.screenshot(), caption="【最新】遷移後の画面")
+                                st.success("✅ 管理画面の突破に成功しました！")
 
                         except Exception as e:
                             st.error(f"⚠️ 遷移エラー: {e}")
-                            return {"status": "error", "message": str(e)}
                             
                         # ==========================================
                         # 【Step 4】汎用ヘルパー関数
