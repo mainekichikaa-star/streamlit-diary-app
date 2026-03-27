@@ -810,102 +810,103 @@ if st.button("🌐 ネット予約管理画面へログイン・一括設定開�
                                 return False
 
                         # ==========================================
+                        # 【重要】操作対象を「予約管理画面のタブ」に固定する ★ここに追加
+                        # ==========================================
+                        yoyaku_page = None
+                        for p in browser_context.pages:
+                            if "e-yoyaku.jp" in p.url:
+                                yoyaku_page = p
+                                break
+                        
+                        if not yoyaku_page:
+                            yoyaku_page = page
+                            st.warning("⚠️ 予約管理タブが見つかりませんでした。メインページで続行します")
+                        else:
+                            st.success("✅ 予約管理専用タブを捕捉しました")
+
+                        # ==========================================
                         # 【Step 5】予約設定 (スクショ証拠付き)
                         # ==========================================
                         st.write("📋 予約設定を変更中...")
                         try:
-                            if await click_menu_and_navigate("予約設定"):
+                            # 予約管理画面のサイドメニューから「予約設定」を探す
+                            menu_link = yoyaku_page.locator(".mod-acList:not(.min) a.acListTxt", has_text="予約設定")
+                            if await menu_link.count() > 0:
+                                await menu_link.first.click()
                                 await yoyaku_page.wait_for_load_state("networkidle")
-                                await asyncio.sleep(1.0)
                                 
                                 # 入会金入力
                                 admission_input = yoyaku_page.locator("input[name='admission_fee']")
                                 if await admission_input.count() > 0:
-                                    # 入力前の証拠
-                                    st.write(f"  → 入会金 {extra_fees['admission']} 円を入力します")
                                     await admission_input.fill(str(extra_fees["admission"]))
                                     await admission_input.dispatch_event("input")
                                     await admission_input.dispatch_event("change")
-                                    
-                                    # 【証拠1】入力直後のスクショを撮って表示
-                                    shot1 = await yoyaku_page.screenshot(full_page=False)
-                                    st.image(shot1, caption="【証拠】予約設定：入力直後の画面")
+                                    # 【証拠】入力後のスクショ
+                                    st.image(await yoyaku_page.screenshot(), caption="【証拠】予約設定：入力完了時")
 
-                                # 保存
+                                # 保存ボタン
                                 save_btn = yoyaku_page.locator("button.saveBt", has_text="保存")
-                                await save_btn.scroll_into_view_if_needed()
                                 await save_btn.click(force=True)
                                 
-                                # 保存完了メッセージが出るまで待機
+                                # 保存メッセージを待つ
                                 try:
-                                    flash = yoyaku_page.locator(".js-flash-message")
-                                    await flash.wait_for(state="visible", timeout=10000)
-                                    st.success(f"✅ サーバー回答: {await flash.inner_text()}")
+                                    await yoyaku_page.wait_for_selector(".js-flash-message", state="visible", timeout=8000)
+                                    st.success("✅ 予約設定：保存成功メッセージを確認")
                                 except:
-                                    st.error("❌ 保存メッセージ（ピンク色）が出ませんでした")
+                                    st.error("❌ 予約設定：保存メッセージが出ませんでした")
                                 
-                                # 【証拠2】保存ボタン押下後のスクショ
-                                shot2 = await yoyaku_page.screenshot(full_page=False)
-                                st.image(shot2, caption="【証拠】予約設定：保存ボタン押下後の最終画面")
-                                await asyncio.sleep(1.0)
+                                st.image(await yoyaku_page.screenshot(), caption="【証拠】予約設定：保存ボタン押下後")
                         except Exception as e:
                             st.error(f"⚠️ 予約設定エラー: {e}")
 
                         # ==========================================
-                        # 【Step 6】料金コース設定 (スクショ証拠付き)
+                        # 【Step 6】料金コース設定
                         # ==========================================
                         st.write("💰 料金コース設定を変更中...")
                         try:
-                            if await click_menu_and_navigate("料金コース"):
+                            menu_link = yoyaku_page.locator(".mod-acList:not(.min) a.acListTxt", has_text="料金コース")
+                            if await menu_link.count() > 0:
+                                await menu_link.first.click()
                                 await yoyaku_page.wait_for_load_state("networkidle")
                                 
+                                # 料金入力（代表して最初のコース）
                                 for idx, item in enumerate(course_data["prices"]):
                                     price_in = yoyaku_page.locator(f"input[name='courses[0][content][{idx}][fee]']")
                                     if await price_in.count() > 0:
                                         await price_in.fill(str(item["price"]))
                                         await price_in.dispatch_event("change")
                                 
+                                st.image(await yoyaku_page.screenshot(), caption="【証拠】料金コース：入力完了時")
+
                                 # 保存
-                                save_btn = yoyaku_page.locator("button.js-save-btn").first
-                                await save_btn.click(force=True)
-                                
-                                # メッセージ待機とスクショ
+                                await yoyaku_page.locator("button.js-save-btn").first.click(force=True)
                                 await asyncio.sleep(2.0)
-                                shot3 = await yoyaku_page.screenshot(full_page=False)
-                                st.image(shot3, caption="【証拠】料金コース：保存後の画面")
-                                
-                                if await yoyaku_page.locator(".js-flash-message").is_visible():
-                                    st.success("✅ 料金コース保存完了を確認")
-                                else:
-                                    st.error("❌ 料金保存メッセージが確認できません")
+                                st.image(await yoyaku_page.screenshot(), caption="【証拠】料金コース：保存完了時")
                         except Exception as e:
                             st.error(f"⚠️ 料金コースエラー: {e}")
 
                         # ==========================================
-                        # 【Step 7】オプション設定 (スクショ証拠付き)
+                        # 【Step 7】オプション設定
                         # ==========================================
                         st.write("🎁 オプション設定を変更中...")
                         try:
-                            if await click_menu_and_navigate("オプション"):
+                            menu_link = yoyaku_page.locator(".mod-acList:not(.min) a.acListTxt", has_text="オプション")
+                            if await menu_link.count() > 0:
+                                await menu_link.first.click()
+                                await yoyaku_page.wait_for_load_state("networkidle")
+                                
                                 for idx, opt in enumerate(option_data):
-                                    n_in = yoyaku_page.locator(f"input[name='options[{idx}][name]']")
                                     f_in = yoyaku_page.locator(f"input[name='options[{idx}][fee]']")
-                                    if await n_in.count() > 0:
-                                        await n_in.fill(opt["name"])
+                                    if await f_in.count() > 0:
                                         await f_in.fill(str(opt["fee"]))
-                                        await n_in.dispatch_event("change")
                                         await f_in.dispatch_event("change")
 
                                 await yoyaku_page.locator("button.js-save-btn").first.click(force=True)
                                 await asyncio.sleep(2.0)
-                                
-                                # スクショ表示
-                                shot4 = await yoyaku_page.screenshot(full_page=False)
-                                st.image(shot4, caption="【証拠】オプション：保存後の画面")
-                                st.success("✅ オプション処理終了")
+                                st.image(await yoyaku_page.screenshot(), caption="【証拠】オプション：保存完了時")
                         except Exception as e:
                             st.error(f"⚠️ オプションエラー: {e}")
-
+                            
                         # ==========================================
                         # 【Step 8】交通費設定
                         # ==========================================
