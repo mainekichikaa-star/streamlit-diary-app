@@ -810,10 +810,13 @@ if st.button("🌐 ネット予約管理画面へログイン・一括設定開�
                                 return False
 
                         # ==========================================
-                        # 【重要】操作対象を「予約管理画面のタブ」に固定する ★ここに追加
+                        # 【重要】操作対象を「予約管理画面のタブ」に固定する
                         # ==========================================
+                        await asyncio.sleep(5.0) # タブが開くのを十分に待つ
                         yoyaku_page = None
-                        for p in browser_context.pages:
+                        
+                        # 元のコードの変数名 'context' を使用して全タブをチェック
+                        for p in context.pages: 
                             if "e-yoyaku.jp" in p.url:
                                 yoyaku_page = p
                                 break
@@ -823,16 +826,18 @@ if st.button("🌐 ネット予約管理画面へログイン・一括設定開�
                             st.warning("⚠️ 予約管理タブが見つかりませんでした。メインページで続行します")
                         else:
                             st.success("✅ 予約管理専用タブを捕捉しました")
+                            # 捕捉したタブの初期画面をスクショ（証拠1）
+                            st.image(await yoyaku_page.screenshot(), caption="【証拠】予約管理画面に切り替わった直後の画面")
 
                         # ==========================================
-                        # 【Step 5】予約設定 (スクショ証拠付き)
+                        # 【Step 5】予約設定
                         # ==========================================
                         st.write("📋 予約設定を変更中...")
                         try:
-                            # 予約管理画面のサイドメニューから「予約設定」を探す
-                            menu_link = yoyaku_page.locator(".mod-acList:not(.min) a.acListTxt", has_text="予約設定")
-                            if await menu_link.count() > 0:
-                                await menu_link.first.click()
+                            # 予約管理画面の左メニューから「予約設定」を探す
+                            menu_res = yoyaku_page.locator(".mod-acList:not(.min) a.acListTxt", has_text="予約設定")
+                            if await menu_res.count() > 0:
+                                await menu_res.first.click()
                                 await yoyaku_page.wait_for_load_state("networkidle")
                                 
                                 # 入会金入力
@@ -841,21 +846,21 @@ if st.button("🌐 ネット予約管理画面へログイン・一括設定開�
                                     await admission_input.fill(str(extra_fees["admission"]))
                                     await admission_input.dispatch_event("input")
                                     await admission_input.dispatch_event("change")
-                                    # 【証拠】入力後のスクショ
-                                    st.image(await yoyaku_page.screenshot(), caption="【証拠】予約設定：入力完了時")
+                                    # 入力後の証拠
+                                    st.image(await yoyaku_page.screenshot(), caption=f"【証拠】入会金 {extra_fees['admission']} 円を入力中")
 
-                                # 保存ボタン
+                                # 保存
                                 save_btn = yoyaku_page.locator("button.saveBt", has_text="保存")
                                 await save_btn.click(force=True)
                                 
                                 # 保存メッセージを待つ
                                 try:
                                     await yoyaku_page.wait_for_selector(".js-flash-message", state="visible", timeout=8000)
-                                    st.success("✅ 予約設定：保存成功メッセージを確認")
+                                    st.success("✅ 予約設定：保存完了（ピンク色のメッセージを確認）")
                                 except:
                                     st.error("❌ 予約設定：保存メッセージが出ませんでした")
                                 
-                                st.image(await yoyaku_page.screenshot(), caption="【証拠】予約設定：保存ボタン押下後")
+                                st.image(await yoyaku_page.screenshot(), caption="【証拠】予約設定：保存ボタン押下後の結果画面")
                         except Exception as e:
                             st.error(f"⚠️ 予約設定エラー: {e}")
 
@@ -864,24 +869,24 @@ if st.button("🌐 ネット予約管理画面へログイン・一括設定開�
                         # ==========================================
                         st.write("💰 料金コース設定を変更中...")
                         try:
-                            menu_link = yoyaku_page.locator(".mod-acList:not(.min) a.acListTxt", has_text="料金コース")
-                            if await menu_link.count() > 0:
-                                await menu_link.first.click()
+                            menu_course = yoyaku_page.locator(".mod-acList:not(.min) a.acListTxt", has_text="料金コース")
+                            if await menu_course.count() > 0:
+                                await menu_course.first.click()
                                 await yoyaku_page.wait_for_load_state("networkidle")
                                 
-                                # 料金入力（代表して最初のコース）
+                                # 料金入力
                                 for idx, item in enumerate(course_data["prices"]):
                                     price_in = yoyaku_page.locator(f"input[name='courses[0][content][{idx}][fee]']")
                                     if await price_in.count() > 0:
                                         await price_in.fill(str(item["price"]))
                                         await price_in.dispatch_event("change")
                                 
-                                st.image(await yoyaku_page.screenshot(), caption="【証拠】料金コース：入力完了時")
+                                st.image(await yoyaku_page.screenshot(), caption="【証拠】料金コース：入力完了")
 
                                 # 保存
                                 await yoyaku_page.locator("button.js-save-btn").first.click(force=True)
                                 await asyncio.sleep(2.0)
-                                st.image(await yoyaku_page.screenshot(), caption="【証拠】料金コース：保存完了時")
+                                st.image(await yoyaku_page.screenshot(), caption="【証拠】料金コース：保存実行後")
                         except Exception as e:
                             st.error(f"⚠️ 料金コースエラー: {e}")
 
@@ -890,9 +895,9 @@ if st.button("🌐 ネット予約管理画面へログイン・一括設定開�
                         # ==========================================
                         st.write("🎁 オプション設定を変更中...")
                         try:
-                            menu_link = yoyaku_page.locator(".mod-acList:not(.min) a.acListTxt", has_text="オプション")
-                            if await menu_link.count() > 0:
-                                await menu_link.first.click()
+                            menu_opt = yoyaku_page.locator(".mod-acList:not(.min) a.acListTxt", has_text="オプション")
+                            if await menu_opt.count() > 0:
+                                await menu_opt.first.click()
                                 await yoyaku_page.wait_for_load_state("networkidle")
                                 
                                 for idx, opt in enumerate(option_data):
@@ -903,7 +908,7 @@ if st.button("🌐 ネット予約管理画面へログイン・一括設定開�
 
                                 await yoyaku_page.locator("button.js-save-btn").first.click(force=True)
                                 await asyncio.sleep(2.0)
-                                st.image(await yoyaku_page.screenshot(), caption="【証拠】オプション：保存完了時")
+                                st.image(await yoyaku_page.screenshot(), caption="【証拠】オプション：保存完了")
                         except Exception as e:
                             st.error(f"⚠️ オプションエラー: {e}")
                             
