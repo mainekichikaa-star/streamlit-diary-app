@@ -454,17 +454,89 @@ with tab2:
                 
                 async def run_yoyaku_automation(s_id, s_pass, shop_name):
                     """
-                    【修正版】Streamlit Cloud対応版
-                    - --disable-gpu, --disable-dev-shm-usage, --single-process を追加
-                    - executable_path の例外処理を強化
-                    - メモリリソースの効率化
+                    【修正版】Playwright ブラウザインストール自動対応版
+                    - Streamlit Cloud環境でのブラウザ不在問題を自動解決
+                    - subprocess.run で playwright install chromium を実行
+                    - OS環境に応じた適切なコマンド実行
                     """
-                    async with async_playwright() as p:
+                    
+                    # ==========================================
+                    # 【Step 0】Playwrightブラウザの自動インストール
+                    # ==========================================
+                    st.write("🔍 Playwrightブラウザの状態を確認中...")
+                    logger.info("Checking Playwright browser installation...")
+                    
+                    pw_browser_path = os.path.join(os.getcwd(), "pw-browsers")
+                    browser_executable_patterns = [
+                        os.path.join(pw_browser_path, "**/chromium**/chrome-headless-shell"),
+                        os.path.join(pw_browser_path, "**/chromium**/chrome"),
+                        os.path.join(pw_browser_path, "**/chromium**/chromium"),
+                    ]
+                    
+                    # ブラウザが存在するかチェック
+                    browser_found = False
+                    try:
+                        import glob
+                        for pattern in browser_executable_patterns:
+                            found_paths = glob.glob(pattern, recursive=True)
+                            if found_paths:
+                                browser_found = True
+                                logger.info(f"✅ Browser found at: {found_paths[0]}")
+                                break
+                    except Exception as e:
+                        logger.debug(f"Pattern search failed: {e}")
+                    
+                    # ブラウザがない場合はインストール
+                    if not browser_found:
+                        st.warning("⚠️ Playwrightブラウザが見つかりません。自動インストール中...")
+                        logger.warning("Browser not found. Attempting installation...")
+                        
                         try:
-                            st.write("🔧 ブラウザを起動中（Streamlit Cloud環境対応）...")
+                            st.write("🔧 『playwright install chromium』 を実行中...")
                             
                             # ==========================================
-                            # 【修正】ブラウザ起動引数の最適化
+                            # 【重要】subprocess.run で playwright install を実行
+                            # ==========================================
+                            result = subprocess.run(
+                                [sys.executable, "-m", "playwright", "install", "chromium"],
+                                capture_output=True,
+                                text=True,
+                                timeout=300,  # 5分のタイムアウト
+                                cwd=os.getcwd()
+                            )
+                            
+                            if result.returncode == 0:
+                                st.success("✅ Playwrightブラウザのインストール完了")
+                                logger.info("✅ Playwright browser installed successfully")
+                                logger.info(f"Install stdout: {result.stdout}")
+                            else:
+                                st.error(f"❌ インストール失敗: {result.stderr}")
+                                logger.error(f"Install failed with code {result.returncode}: {result.stderr}")
+                                return {"status": "error", "message": f"Playwright install failed: {result.stderr}"}
+                        
+                        except subprocess.TimeoutExpired:
+                            st.error("❌ インストールがタイムアウトしました（5分以上経過）")
+                            logger.error("Playwright install timed out")
+                            return {"status": "error", "message": "Playwright install timeout"}
+                        
+                        except Exception as e:
+                            st.error(f"❌ インストール中にエラー: {e}")
+                            logger.error(f"Playwright install error: {e}")
+                            return {"status": "error", "message": f"Playwright install error: {str(e)}"}
+                    else:
+                        st.info("✅ Playwrightブラウザは既にインストール済みです")
+                        logger.info("Browser already installed")
+                    
+                    # ==========================================
+                    # 【Step 1】async_playwright を初期化
+                    # ==========================================
+                    async with async_playwright() as p:
+                        try:
+                            st.write("🔧 ブラウザを起動中...")
+                            logger.info("Launching browser...")
+                            
+                            # ==========================================
+                            # 【修正】executable_path を指定せず、デフォルト参照に変更
                             # ==========================================
                             browser_args = [
                                 '--no-sandbox',              # サンドボックス無効（Streamlit Cloud必須）
@@ -475,16 +547,16 @@ with tab2:
                                 '--disable-sync',            # 同期無効化
                                 '--metrics-recording-only',  # メトリクス記録のみ
                                 '--mute-audio',              # 音声ミュート
-                                '--lang=ja-JP'              # 言語設定
+                                '--lang=ja-JP'               # 言語設定
                             ]
                             
-                            logger.info(f"🔧 Launching browser with args: {browser_args}")
+                            logger.info(f"Browser launch args: {browser_args}")
                             
-                            # タイムアウト値を延長（Cloud環境は起動に時間がかかる）
+                            # 【修正】executable_path は指定しない（Playwrightデフォルトパス使用）
                             browser = await p.chromium.launch(
                                 headless=True,
                                 args=browser_args,
-                                timeout=60000  # 60秒のタイムアウト
+                                timeout=120000  # 120秒のタイムアウト
                             )
                             
                             logger.info("✅ Browser launched successfully")
@@ -500,7 +572,7 @@ with tab2:
                         
                         try:
                             # ==========================================
-                            # 【Step 1】ランキングデリにログイン
+                            # 【Step 2】ランキングデリにログイン
                             # ==========================================
                             st.write("🔐 ランキングデリにログイン中...")
                             await page.goto("https://ranking-deli.jp/admin/login", timeout=60000)
@@ -511,7 +583,7 @@ with tab2:
                             logger.info(f"✅ Logged in to ranking-deli for {shop_name}")
 
                             # ==========================================
-                            # 【Step 2】料金設定ページから各データを取得
+                            # 【Step 3】料金設定ページから各データを取得
                             # ==========================================
                             st.write("📊 料金・オプション情報を取得中...")
                             
@@ -639,7 +711,7 @@ with tab2:
                             logger.info(f"🚗 Transport data extracted: {len(transport_data)} areas")
 
                             # ==========================================
-                            # 【Step 3】ネット予約管理画面へ遷移
+                            # 【Step 4】ネット予約管理画面へ遷移
                             # ==========================================
                             st.write("🔗 ネット予約管理画面へ遷移中...")
                             
@@ -651,7 +723,7 @@ with tab2:
                             logger.info(f"✅ Transitioned to yoyaku page: {yoyaku_page.url}")
 
                             # ==========================================
-                            # 【Step 4】メニュー操作ヘルパー関数
+                            # 【Step 5】メニュー操作ヘルパー関数
                             # ==========================================
                             async def click_menu_link_safe(link_text: str) -> bool:
                                 """
@@ -686,7 +758,7 @@ with tab2:
                                     return False
 
                             # ==========================================
-                            # 【Step 5】予約設定
+                            # 【Step 6】予約設定
                             # ==========================================
                             st.write("📋 予約設定を変更中...")
                             
@@ -759,7 +831,7 @@ with tab2:
                                 logger.error(f"❌ Reservation settings error: {e}")
 
                             # ==========================================
-                            # 【Step 6】料金コース設定
+                            # 【Step 7】料金コース設定
                             # ==========================================
                             st.write("💰 料金コース設定を変更中...")
                             
@@ -832,7 +904,7 @@ with tab2:
                                 logger.error(f"❌ Course settings error: {e}")
 
                             # ==========================================
-                            # 【Step 7】オプション設定
+                            # 【Step 8】オプション設定
                             # ==========================================
                             st.write("🎁 オプション設定を変更中...")
                             
@@ -891,11 +963,11 @@ with tab2:
                                 else:
                                     logger.warning("⚠️ Could not navigate to option settings")
                             except Exception as e:
-                                st.warning(f"⚠️ オプション設定でエラー: {e}")
+                                st.warning(f"⚠️ オプシ���ン設定でエラー: {e}")
                                 logger.error(f"❌ Option settings error: {e}")
 
                             # ==========================================
-                            # 【Step 8】交通費設定
+                            # 【Step 9】交通費設定
                             # ==========================================
                             st.write("🚗 交通費設定を変更中...")
                             
@@ -958,7 +1030,7 @@ with tab2:
                                 logger.error(f"❌ Transport settings error: {e}")
 
                             # ==========================================
-                            # 【Step 9】チャット設定 & 予約通知設定
+                            # 【Step 10】チャット設定 & 予約通知設定
                             # ==========================================
                             st.write("💬 チャット・通知設定を変更中...")
                             
@@ -1022,7 +1094,7 @@ with tab2:
                                     logger.error(f"❌ {menu_name} error: {e}")
 
                             # ==========================================
-                            # 【Step 10】女の子設定（指名料一括反映）
+                            # 【Step 11】女の子設定（指名料一括反映）
                             # ==========================================
                             st.write("👧 女の子設定を変更中...")
                             
