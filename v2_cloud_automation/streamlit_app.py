@@ -561,7 +561,7 @@ if st.button("🌐 ネット予約管理画面へログイン・一括設定開�
                     
                     try:
                         # ==========================================
-                        # 【Step 1】ラ���キングデリにログイン
+                        # 【Step 1】ランキングデリにログイン
                         # ==========================================
                         st.write("🔐 ランキングデリにログイン中...")
                         await page.goto("https://ranking-deli.jp/admin/login", timeout=60000)
@@ -816,29 +816,29 @@ if st.button("🌐 ネット予約管理画面へログイン・一括設定開�
                         
                         try:
                             if await click_menu_and_navigate("予約設定"):
-                                await asyncio.sleep(0.5)
+                                # ページ読み込みを確実に待つ
+                                await yoyaku_page.wait_for_load_state("networkidle")
+                                await asyncio.sleep(1.0)
                                 
-                                # 公開設定
+                                # 公開設定 (input[id='release'] の状態を見て、チェックされていなければクリック)
                                 try:
-                                    release_label = yoyaku_page.locator("label[for='release']")
-                                    if await release_label.count() > 0:
-                                        await release_label.scroll_into_view_if_needed()
-                                        await asyncio.sleep(0.3)
-                                        await release_label.click(force=True)
-                                        await asyncio.sleep(0.5)
-                                        logger.info("✅ Toggled release setting")
+                                    is_released = await yoyaku_page.is_checked("input[id='release']")
+                                    if not is_released:
+                                        await yoyaku_page.locator("label[for='release']").scroll_into_view_if_needed()
+                                        await yoyaku_page.locator("label[for='release']").click(force=True)
+                                        await yoyaku_page.locator("input[id='release']").dispatch_event("change")
+                                        logger.info("✅ Set release to ON")
                                 except Exception as e:
                                     logger.warning(f"⚠️ Release toggle failed: {e}")
                                 
-                                # 受付設定
+                                # 受付設定 (input[id='freeReserveAccept'] の状態を見て、チェックされていなければクリック)
                                 try:
-                                    accept_label = yoyaku_page.locator("label[for='freeReserveAccept']")
-                                    if await accept_label.count() > 0:
-                                        await accept_label.scroll_into_view_if_needed()
-                                        await asyncio.sleep(0.3)
-                                        await accept_label.click(force=True)
-                                        await asyncio.sleep(0.5)
-                                        logger.info("✅ Toggled accept setting")
+                                    is_accepted = await yoyaku_page.is_checked("input[id='freeReserveAccept']")
+                                    if not is_accepted:
+                                        await yoyaku_page.locator("label[for='freeReserveAccept']").scroll_into_view_if_needed()
+                                        await yoyaku_page.locator("label[for='freeReserveAccept']").click(force=True)
+                                        await yoyaku_page.locator("input[id='freeReserveAccept']").dispatch_event("change")
+                                        logger.info("✅ Set accept to ON")
                                 except Exception as e:
                                     logger.warning(f"⚠️ Accept toggle failed: {e}")
                                 
@@ -846,26 +846,34 @@ if st.button("🌐 ネット予約管理画面へログイン・一括設定開�
                                 try:
                                     admission_input = yoyaku_page.locator("input[name='admission_fee']")
                                     if await admission_input.count() > 0:
-                                        # クリア
                                         await admission_input.scroll_into_view_if_needed()
-                                        await asyncio.sleep(0.2)
-                                        await admission_input.triple_click()
-                                        await asyncio.sleep(0.1)
-                                        
-                                        # 入力
-                                        await admission_input.fill(extra_fees["admission"])
+                                        # 既存の値を消して入力
+                                        await admission_input.fill("") 
+                                        await admission_input.fill(str(extra_fees["admission"]))
+                                        # 確実にブラウザへ通知
                                         await admission_input.dispatch_event("input")
                                         await admission_input.dispatch_event("change")
-                                        await asyncio.sleep(0.3)
+                                        await admission_input.blur() # 入力確定のためにフォーカスを外す
                                         
-                                        # 値確認
                                         confirmed_val = await admission_input.get_attribute("value")
-                                        logger.info(f"🔍 Admission value before save: expected={extra_fees['admission']}, actual={confirmed_val}")
+                                        logger.info(f"🔍 Admission value set: {confirmed_val}")
                                 except Exception as e:
                                     logger.warning(f"⚠️ Admission input failed: {e}")
                                 
-                                # 保存
-                                await save_section("予約設定", "button.saveBt")
+                                # --- 保存処理 ---
+                                save_btn = yoyaku_page.locator("button.saveBt", has_text="保存")
+                                if await save_btn.count() > 0:
+                                    await save_btn.scroll_into_view_if_needed()
+                                    await asyncio.sleep(0.5)
+                                    await save_btn.click(force=True)
+                                    
+                                    # 重要：保存後のリロード（通信）が完全に終わるまで待つ
+                                    await yoyaku_page.wait_for_load_state("networkidle")
+                                    await asyncio.sleep(2.0) # 念のためのサーバー書き込み待ち
+                                    logger.info("✅ 予約設定の保存ボタンをクリックしました")
+                                else:
+                                    logger.warning("⚠️ 保存ボタンが見つかりません")
+                                    
                             else:
                                 logger.warning("⚠️ Could not navigate to reservation settings")
                         except Exception as e:
