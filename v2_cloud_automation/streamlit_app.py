@@ -889,7 +889,8 @@ with tab4:
                     if main_img_name:
                         try:
                             # 一時ファイル名を生成
-                            tmp_main_path = os.path.abspath(f"tmp_main_{sid}_{random.randint(10000,99999)}.jpg")
+                            ext = os.path.splitext(main_img_name)[1]
+                            tmp_main_path = os.path.abspath(f"tmp_main_{sid}_{random.randint(10000,99999)}{ext}")
                             logger.info(f"Downloading main image: {main_img_name} to {tmp_main_path}")
                             
                             # Google DriveからダウンロードしてTmp_main_pathに保存
@@ -976,8 +977,8 @@ with tab4:
                             logger.info(f"Sub image {sub_idx}: Downloading {filename}")
                             
                             # 一時ファイルパスを生成
-                            tmp_sub_path = os.path.abspath(f"tmp_sub_{sid}_{slot_number}_{random.randint(10000,99999)}.jpg")
-                            
+                            ext = os.path.splitext(filename)[1]
+　　　　　　　　　　　　      tmp_sub_path = os.path.abspath(f"tmp_sub_{sid}_{slot_number}_{random.randint(10000,99999)}{ext}")
                             # Google DriveからダウンロードしてTmp_sub_pathに保存
                             if download_by_filename(filename, tmp_sub_path):
                                 # ファイル存在確認
