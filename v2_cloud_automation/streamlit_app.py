@@ -905,6 +905,7 @@ with tab4:
                                         abs_main_path = os.path.abspath(tmp_main_path)
                                         st.write(f"🔄 メイン画像をセット中: {abs_main_path}")
                                         await main_input.set_input_files(abs_main_path)
+                                        await main_input.evaluate("el => el.dispatchEvent(new Event('change', { bubbles: true }))")
                                         tmp_img_paths.append(tmp_main_path)
                                         
                                         # 反映待機
@@ -992,6 +993,7 @@ with tab4:
                                         abs_sub_path = os.path.abspath(tmp_sub_path)
                                         st.write(f"🔄 スロット{slot_number}にセット中: {abs_sub_path}")
                                         await sub_input.set_input_files(abs_sub_path)
+                                        await sub_input.evaluate("el => el.dispatchEvent(new Event('change', { bubbles: true }))")
                                         tmp_img_paths.append(tmp_sub_path)
                                         
                                         # 反映待機
