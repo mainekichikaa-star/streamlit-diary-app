@@ -1526,6 +1526,8 @@ with tab4:
                                         abs_sub_path = os.path.abspath(tmp_sub_path)
                                         st.write(f"🔄 スロット{slot_number}にセット中: {abs_sub_path}")
                                         await sub_input.set_input_files(abs_sub_path)
+                                        await main_input.evaluate("el => el.dispatchEvent(new Event('change', { bubbles: true }))")
+                                        await asyncio.sleep(2) # プレビュー生成を待つ
                                         tmp_img_paths.append(tmp_sub_path)
                                         
                                         # 反映待機
@@ -1664,7 +1666,7 @@ with tab5:
                 async with async_playwright() as p:
                     browser = await p.chromium.launch(
                         headless=True, 
-                        args=['--no-sandbox', '--disable-setuid-sandbox', '--disable-dev-shm-usage']
+                        args=['--no-sandbox', '--disable-setuid-sandbox', '--disable-dev-shm-usage''--disable-gpu','--disable-software-rasterizer']
                     )
                     context = await browser.new_context(
                         user_agent="Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36",
