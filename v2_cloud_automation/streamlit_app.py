@@ -978,7 +978,7 @@ with tab4:
                             
                             # 一時ファイルパスを生成
                             ext = os.path.splitext(filename)[1]
-　　　　　　　　　　　　      tmp_sub_path = os.path.abspath(f"tmp_sub_{sid}_{slot_number}_{random.randint(10000,99999)}{ext}")
+                            tmp_sub_path = os.path.abspath(f"tmp_sub_{sid}_{slot_number}_{random.randint(10000,99999)}{ext}")
                             # Google DriveからダウンロードしてTmp_sub_pathに保存
                             if download_by_filename(filename, tmp_sub_path):
                                 # ファイル存在確認
