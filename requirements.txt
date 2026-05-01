@@ -9,3 +9,8 @@ pandas
 selenium
 webdriver-manager
 tenacity>=8.2.0
+streamlit==1.57.0
+playwright
+tenacity
+pandas
+requests
